@@ -1,0 +1,20 @@
+# Deployment compose for the shared VPS where host nginx already owns 80/443
+# and terminates TLS via certbot. The app is published on a loopback port that
+# an nginx `server` block proxies to (see deploy/gamedash.nginx.conf).
+#
+#   docker compose -f docker-compose.vps.yml up -d --build
+services:
+  web:
+    build: .
+    container_name: gamedash-web
+    # Loopback-only: reachable by host nginx, never exposed to the internet.
+    ports:
+      - '127.0.0.1:3002:80'
+    restart: unless-stopped
+    healthcheck:
+      # busybox wget ships in nginx:alpine.
+      test: ['CMD', 'wget', '-qO-', 'http://localhost/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

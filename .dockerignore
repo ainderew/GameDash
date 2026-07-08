@@ -1,0 +1,14 @@
+# Keep the build context small and reproducible.
+**/node_modules
+**/dist
+**/dist-ssr
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+.git
+.env
+.env.*
+!.env.example
+.playwright-mcp
+# Local dev/progress screenshots (root-level PNGs)
+/*.png
