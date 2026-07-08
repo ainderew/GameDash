@@ -1,0 +1,27 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Build/cache
+.turbo
+*.tsbuildinfo
+coverage
+
+# Large raw asset sources (keep optimized GLBs in public/, keep ledger)
+assets/raw/*.fbx
+
+# Local dev/progress screenshots
+/*.png
+.playwright-mcp/

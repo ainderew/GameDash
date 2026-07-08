@@ -1,0 +1,156 @@
+{
+  "$schema-note": "One entry per generated/imported asset. commercial_ok gates the Phase 8 launch audit.",
+  "assets": [
+    {
+      "id": "test-monster",
+      "file": "assets/models/test-monster.glb",
+      "raw_file": "assets/raw/test-monster.fbx",
+      "preview": "assets/preview/test-monster.webp",
+      "source": "tripo-starter",
+      "license": "Tripo Starter (paid) — verify commercial ownership terms before shipping",
+      "commercial_ok": false,
+      "generation": {
+        "tool": "tripo-ai MCP",
+        "model_version": "v3.1-20260211",
+        "text_to_3d_task_id": "fe5efa0e-eb8e-4e12-8425-f5d9dd736ea6",
+        "convert_task_id": "c4934463-63a5-4454-ba05-9a85e943aed3",
+        "prompt": "A low-poly stylized game monster: a small quadruped goblin-slime creature with stubby legs, big glowing eyes, spiky back, and clawed feet. Clean game-ready topology, T-pose, neutral stance, cartoon fantasy art style, vibrant colors.",
+        "negative_prompt": "high poly, realistic, cluttered, multiple creatures, base, pedestal, weapons, text",
+        "quad": true,
+        "face_limit": 12000,
+        "consumed_credit": 25
+      },
+      "optimized_file": "apps/web/public/models/test-monster.glb",
+      "maps_to": null,
+      "created_at": "2026-07-08",
+      "optimized": true,
+      "optimization": {
+        "tool": "gltf-transform optimize",
+        "geometry_compress": "draco",
+        "texture_compress": "webp",
+        "texture_size": 1024,
+        "size_before": "5.95 MB",
+        "size_after": "168.8 KB",
+        "ktx2": false,
+        "ktx2_note": "toktx not installed on this machine; textures are WebP, not GPU-compressed KTX2. Re-run with KTX-Software installed for the Phase 6 KTX2 target."
+      },
+      "notes": "Static base mesh. Raw FBX + PBR from Tripo, optimized to a game-ready GLB. Superseded as the player avatar by the rigged/animated variant below."
+    },
+    {
+      "id": "test-monster-animated",
+      "files": {
+        "idle": "apps/web/public/models/test-monster-idle.glb",
+        "run": "apps/web/public/models/test-monster-run.glb",
+        "slash": "apps/web/public/models/test-monster-slash.glb",
+        "hurt": "apps/web/public/models/test-monster-hurt.glb"
+      },
+      "raw_files": {
+        "idle": "assets/raw/test-monster-idle.glb",
+        "run": "assets/raw/test-monster-run.glb",
+        "slash": "assets/raw/test-monster-slash.glb",
+        "hurt": "assets/raw/test-monster-hurt.glb"
+      },
+      "source": "tripo-starter",
+      "license": "Tripo Starter (paid) — verify commercial ownership terms before shipping",
+      "commercial_ok": false,
+      "derived_from": "test-monster",
+      "rig": {
+        "prerig_check_task_id": "11b54484-4aff-43cf-b742-238625079c4a",
+        "rig_task_id": "dde9e03b-de15-42e5-95af-5e0cf21fa47c",
+        "rig_type": "biped",
+        "riggable": true
+      },
+      "animations": {
+        "idle": { "preset": "preset:idle", "retarget_task_id": "c1280985-4a8f-4584-b0d3-b7708486bb94" },
+        "run": { "preset": "preset:run", "retarget_task_id": "8657ec53-cfac-428b-91ba-3f0d84be6d64" },
+        "slash": { "preset": "preset:slash", "retarget_task_id": "37152809-a71a-45e6-a5ab-a2ca680e1ae3" },
+        "hurt": { "preset": "preset:hurt", "retarget_task_id": "408f8c5d-f37c-436d-8a34-c5e783779cb1" }
+      },
+      "optimization": {
+        "tool": "gltf-transform optimize",
+        "geometry_compress": "meshopt",
+        "texture_compress": "webp",
+        "texture_size": 1024,
+        "simplify": false,
+        "size_idle": "2.68 MB -> 384 KB",
+        "size_run": "2.46 MB -> 352 KB",
+        "note": "meshopt (not draco) used because the meshes are skinned/animated. simplify disabled to preserve rig weights."
+      },
+      "maps_to": "player (temporary)",
+      "created_at": "2026-07-08",
+      "optimized": true,
+      "forward_axis": "+X",
+      "forward_axis_note": "This asset's forward is +X (Tripo rig convention), not -Z. Player.tsx corrects with faceOffset=-PI/2 so facing + stride align with movement. Any future clip/rig for this asset shares this offset.",
+      "notes": "Rigged biped + baked idle/run clips. Currently stands in as the player avatar (see AnimatedCharacter.tsx). Each clip is a separate GLB sharing one rig; the run clip retargets onto the idle mesh by bone name. Tripo's clip names both come through as 'NlaTrack' and are renamed idle/run in-app. Add slash/hurt/jump + a real state machine in Phase 2."
+    },
+    {
+      "id": "monster-chaser",
+      "file": "apps/web/public/models/monster-chaser.glb",
+      "raw_file": "assets/raw/monster-chaser.glb",
+      "preview": "assets/preview/monster-chaser.webp",
+      "source": "tripo-starter",
+      "license": "Tripo Starter (paid) — verify commercial ownership terms before shipping",
+      "commercial_ok": false,
+      "generation": {
+        "tool": "tripo-ai MCP",
+        "model_version": "v3.1-20260211",
+        "text_to_3d_task_id": "b0ad6304-65ce-4e0a-b437-15cbcd73e6f9",
+        "convert_task_id": "4819ec8e-f58e-4d12-87e7-eac373212620",
+        "face_limit": 8000
+      },
+      "optimization": { "geometry_compress": "draco", "texture_compress": "webp", "size": "3.35 MB -> 182 KB" },
+      "maps_to": "monster_def chaser",
+      "created_at": "2026-07-09",
+      "optimized": true,
+      "rigged": false,
+      "forward_axis": "+X",
+      "notes": "Static (unrigged) low-poly imp. Instanced per archetype in MonsterModels.tsx with faceOffset=-PI/2, displayHeight 1.4. No walk animation yet (monsters glide) — rig+animate later like the goblin."
+    },
+    {
+      "id": "monster-spitter",
+      "file": "apps/web/public/models/monster-spitter.glb",
+      "raw_file": "assets/raw/monster-spitter.glb",
+      "preview": "assets/preview/monster-spitter.webp",
+      "source": "tripo-starter",
+      "license": "Tripo Starter (paid) — verify commercial ownership terms before shipping",
+      "commercial_ok": false,
+      "generation": {
+        "tool": "tripo-ai MCP",
+        "model_version": "v3.1-20260211",
+        "text_to_3d_task_id": "8d37e234-8677-4f1a-a0f1-ff28b7147361",
+        "convert_task_id": "032f6adc-fa78-4050-aeb8-79a53262edaa",
+        "face_limit": 8000
+      },
+      "optimization": { "geometry_compress": "draco", "texture_compress": "webp", "size": "2.95 MB -> 165 KB" },
+      "maps_to": "monster_def spitter",
+      "created_at": "2026-07-09",
+      "optimized": true,
+      "rigged": false,
+      "forward_axis": "+X",
+      "notes": "Static (unrigged) low-poly toad. Instanced, faceOffset=-PI/2, displayHeight 1.3."
+    },
+    {
+      "id": "monster-brute",
+      "file": "apps/web/public/models/monster-brute.glb",
+      "raw_file": "assets/raw/monster-brute.glb",
+      "preview": "assets/preview/monster-brute.webp",
+      "source": "tripo-starter",
+      "license": "Tripo Starter (paid) — verify commercial ownership terms before shipping",
+      "commercial_ok": false,
+      "generation": {
+        "tool": "tripo-ai MCP",
+        "model_version": "v3.1-20260211",
+        "text_to_3d_task_id": "33e28df0-6a4d-48a7-bd61-0b5782be0d34",
+        "convert_task_id": "87e9e83d-e9ef-49d9-9192-9871cff33d2d",
+        "face_limit": 9000
+      },
+      "optimization": { "geometry_compress": "draco", "texture_compress": "webp", "size": "3.63 MB -> 189 KB" },
+      "maps_to": "monster_def brute",
+      "created_at": "2026-07-09",
+      "optimized": true,
+      "rigged": false,
+      "forward_axis": "+X",
+      "notes": "Static (unrigged) low-poly stone-golem. Instanced, faceOffset=-PI/2, displayHeight 2.7."
+    }
+  ]
+}

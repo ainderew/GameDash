@@ -1,0 +1,71 @@
+import type { MonsterDef } from './types';
+
+export type MonsterArchetype = 'chaser' | 'spitter' | 'brute';
+
+export interface MonsterArchetypeDef extends MonsterDef {
+  archetype: MonsterArchetype;
+  /** Movement speed, world units/sec. */
+  speed: number;
+  /** Contact/attack damage dealt to the player. */
+  attackDamage: number;
+  /** Range at which the monster attacks the player, world units. */
+  attackRange: number;
+  /** Cooldown between the monster's attacks, ms. */
+  attackCooldownMs: number;
+  /** True if the monster attacks by firing a projectile instead of melee. */
+  ranged: boolean;
+  /** Loot table id granted on death. */
+  lootTableId: string;
+  /** Render color for the grey-box primitive. */
+  color: string;
+  /** Approximate body radius, world units (collision + rendering). */
+  radius: number;
+}
+
+/** The three Phase 2 archetypes. Balance lives here; systems read it. */
+export const MONSTER_ARCHETYPES: Record<MonsterArchetype, MonsterArchetypeDef> = {
+  chaser: {
+    id: 'chaser',
+    name: 'Chaser',
+    archetype: 'chaser',
+    maxHealth: 60,
+    speed: 4.6,
+    attackDamage: 7,
+    attackRange: 1.8,
+    attackCooldownMs: 1000,
+    ranged: false,
+    lootTableId: 'common',
+    color: '#ef4444',
+    radius: 0.5,
+  },
+  spitter: {
+    id: 'spitter',
+    name: 'Spitter',
+    archetype: 'spitter',
+    maxHealth: 40,
+    speed: 2.8,
+    attackDamage: 8,
+    attackRange: 12,
+    attackCooldownMs: 1500,
+    ranged: true,
+    lootTableId: 'common',
+    color: '#a855f7',
+    radius: 0.45,
+  },
+  brute: {
+    id: 'brute',
+    name: 'Brute',
+    archetype: 'brute',
+    maxHealth: 160,
+    speed: 2.2,
+    attackDamage: 22,
+    attackRange: 2.4,
+    attackCooldownMs: 1600,
+    ranged: false,
+    lootTableId: 'rare',
+    color: '#f59e0b',
+    radius: 0.85,
+  },
+};
+
+export const MONSTER_LIST = Object.values(MONSTER_ARCHETYPES);

@@ -1,0 +1,27 @@
+/**
+ * Pure terrain height field — no three/react imports so the sim (movementSystem)
+ * and the mesh builder (Terrain.tsx) can share one source of truth, and it stays
+ * unit-testable headless.
+ */
+
+/** Play area stays flat within this radius so spawns/combat never sit on a slope. */
+const FLAT_RADIUS = 24;
+const HILL_START = 30;
+
+/** Cheap layered value-ish noise from sines — deterministic, no textures. */
+const noise = (x: number, z: number): number =>
+  Math.sin(x * 0.08) * Math.cos(z * 0.1) * 0.6 +
+  Math.sin(x * 0.041 + 1.7) * Math.cos(z * 0.037 - 0.4) * 1.1 +
+  Math.sin(x * 0.021 - 0.6) * Math.cos(z * 0.026 + 2.1) * 1.9;
+
+/** Radius within which the ground is flat (spawn-safe). Exported for scatter placement. */
+export const PLAY_RADIUS = FLAT_RADIUS;
+
+/** Height field: flat valley floor, rolling hills rising toward the perimeter. */
+export const heightAt = (x: number, z: number): number => {
+  const r = Math.hypot(x, z);
+  const hill = r > HILL_START ? Math.pow((r - HILL_START) / 22, 1.9) * 6 : 0;
+  // Undulation masked to ~0 in the flat play area, growing outward.
+  const mask = Math.min(1, Math.max(0, (r - FLAT_RADIUS) / 18));
+  return hill + noise(x, z) * mask;
+};
