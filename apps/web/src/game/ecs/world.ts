@@ -4,6 +4,12 @@ import type { Entity } from '@/game/ecs/components';
 /** The single ECS world for the running game session. */
 export const world = new World<Entity>();
 
+// Dev-only console handle (same pattern as window.__scene / __cameraRig) so tooling
+// can poke entities — e.g. deal damage from the console to exercise combat visuals.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __world?: typeof world }).__world = world;
+}
+
 /** Query archetype: everything that moves. */
 export const movable = world.with('transform', 'velocity');
 

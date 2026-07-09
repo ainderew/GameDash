@@ -127,10 +127,10 @@ export interface FeelConfig {
  * NEVER destructure at module load — that captures a stale snapshot.
  */
 export const feel: FeelConfig = {
-  hitstopMs: { light: 75, heavy: 160 },
+  hitstopMs: { light: 110, heavy: 240 },
 
   knockback: {
-    speed: { light: 15, heavy: 16 },
+    speed: { light: 20, heavy: 16 },
     launch: { light: 0.5, heavy: 4.5 },
     friction: 9,
     playerScale: 0.6,
@@ -139,7 +139,7 @@ export const feel: FeelConfig = {
 
   screenShake: {
     enabled: true,
-    traumaPerHit: { light: 0.28, heavy: 0.6 },
+    traumaPerHit: { light: 0.4, heavy: 0.8 },
     maxOffset: 0.55,
     maxRoll: 0.06,
     decayPerSec: 1.6,

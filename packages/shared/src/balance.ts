@@ -59,6 +59,16 @@ export const PROJECTILE_LIFETIME_MS = 1600;
 /** Cooldown between ranged shots, ms. */
 export const RANGED_COOLDOWN_MS = 300;
 
+// ── UI: enemy health bars ─────────────────────────────────────────────────
+/** How long a monster's HP bar stays fully visible after its last hit, ms. */
+export const HP_BAR_LINGER_MS = 3000;
+/** Fade-out duration once the linger window expires, ms. */
+export const HP_BAR_FADE_MS = 400;
+/** Hold before the white "chip" segment starts draining toward current HP, ms. */
+export const HP_BAR_GHOST_HOLD_MS = 350;
+/** Exponential drain rate of the chip segment once the hold expires (higher = faster). */
+export const HP_BAR_GHOST_DRAIN = 9;
+
 // ── Combat: spawning / pickups ────────────────────────────────────────────
 /** Hard cap on simultaneously-alive monsters (perf guard). */
 export const MAX_MONSTERS = 60;

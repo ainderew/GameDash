@@ -70,6 +70,7 @@ export const applyDamage = (target: Entity, amount: number, now: number): boolea
   if (isInIFrames(target, now)) return false;
   target.health.current = Math.max(0, target.health.current - amount);
   target.hitFlashUntil = now + HIT_FLASH_MS;
+  target.lastDamagedAt = now;
   return true;
 };
 

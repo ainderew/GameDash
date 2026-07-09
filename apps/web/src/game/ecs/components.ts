@@ -92,6 +92,8 @@ export interface Entity {
   radius?: number;
   /** Timestamp (gameNow ms) until which the entity renders a hit flash. */
   hitFlashUntil?: number;
+  /** gameNow() when the entity last took damage — drives HP bar visibility/fade. */
+  lastDamagedAt?: number;
   /** Flash tint as linear RGB (white for light hits, red for heavy), read by renderers. */
   hitFlashColor?: Vector3Tuple;
   /** gameNow() when the monster last began an attack, driving its lunge animation. */
