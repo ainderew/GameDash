@@ -1,11 +1,17 @@
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useRef } from 'react';
-import type { Group, Object3D } from 'three';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { world } from '@/game/ecs/world';
 import type { Entity } from '@/game/ecs/components';
 import { AnimatedCharacter } from '@/game/entities/AnimatedCharacter';
 import type { CharState } from '@/game/entities/AnimatedCharacter';
-import { comboAt } from '@/game/combat/combo';
+import { WeaponMount } from '@/game/entities/Weapon';
+import { comboAt, type ComboClip } from '@/game/combat/combo';
+import { getWeapon } from '@/game/combat/weapons';
+import { useWeaponStore } from '@/game/combat/weaponStore';
+import { gameNow } from '@/game/feel/time';
+import { feel } from '@/game/feel/config';
+import { DODGE_DURATION_MS } from '@shared/balance';
 
 interface Props {
   /** GameCanvas passes this so the camera can follow the player group. */
@@ -13,7 +19,6 @@ interface Props {
 }
 
 const makePlayerEntity = (): Entity => ({
-  // Model's front is +Z; forward movement is -Z, so face away from camera at spawn.
   transform: { position: [0, 0, 0], rotationY: Math.PI },
   velocity: { linear: [0, 0, 0] },
   health: { current: 100, max: 100 },
@@ -22,92 +27,80 @@ const makePlayerEntity = (): Entity => ({
   playerControlled: true,
 });
 
-const RUN_SPEED_THRESHOLD = 0.5;
-const HURT_ANIM_MS = 360;
-
-const smooth = (t: number): number => t * t * (3 - 2 * t);
-
-interface Pose {
-  /** Extra body twist about Y, radians. */
-  yaw: number;
-  /** Forward step along facing, world units. */
-  lunge: number;
-  /** Forward/back lean about X, radians. */
-  pitch: number;
-  /** Vertical hop, world units. */
-  hop: number;
-}
-
-/** Horizontal sword swing; `dir` flips it (right→left vs left→right). */
-const horizontalSwing = (p: number, dir: number): Pose => {
-  if (p < 0.2) {
-    const k = smooth(p / 0.2); // wind up to the far side
-    return { yaw: -0.5 * dir * k, lunge: -0.08 * k, pitch: -0.05 * k, hop: 0 };
-  }
-  if (p < 0.45) {
-    const k = smooth((p - 0.2) / 0.25); // whip across + step in
-    return { yaw: dir * (-0.5 + 1.4 * k), lunge: -0.08 + 0.5 * k, pitch: -0.05 + 0.32 * k, hop: 0 };
-  }
-  const k = smooth((p - 0.45) / 0.55);
-  return { yaw: dir * 0.9 * (1 - k), lunge: 0.42 * (1 - k), pitch: 0.27 * (1 - k), hop: 0 };
+/** Moving at all → at least walk. */
+const WALK_SPEED_THRESHOLD = 0.5;
+/** Between walk (2.8) and sprint (6) speeds — above this the run clip plays. */
+const RUN_SPEED_THRESHOLD = 4.4;
+/** Airborne threshold, world units — above this the jump clip plays. */
+const AIRBORNE_Y = 0.06;
+/** How long the hurt clip plays after a hit lands ("Hit To Body" is a self-contained ~0.83s
+ * recoil; 700ms shows the full reaction and covers the knockback shove, fading out the tail). */
+const HURT_ANIM_MS = 700;
+/** The dash is over in DODGE_DURATION_MS; hold the roll clip longer so it visually completes. */
+const DODGE_ANIM_MS = 450;
+/** Standing still this long switches the idle to the bored/fidget clip. */
+const BORED_IDLE_AFTER_MS = 3000;
+/**
+ * Between the sim (SystemRunner, -100) and the default-0 renderers. AnimatedCharacter's
+ * useFrame registers BEFORE Player's (child effects first), so at equal priority it would
+ * crossfade from LAST frame's charState — one extra frame of input→animation lag.
+ */
+const PLAYER_PRIORITY = -50;
+/** Which animation state each combo move's clip plays. */
+const ATTACK_STATE: Record<ComboClip, CharState> = {
+  light1: 'attack-light1',
+  light2: 'attack-light2',
+  spin: 'attack-spin',
+  finisher: 'attack-finisher',
 };
-
-/** A full 360° spin attack with a step-through. */
-const spinSwing = (p: number): Pose => ({
-  yaw: smooth(p) * Math.PI * 2,
-  lunge: Math.sin(p * Math.PI) * 0.5,
-  pitch: Math.sin(p * Math.PI) * 0.12,
-  hop: 0,
-});
-
-/** A rising uppercut: crouch, then spring up and lean back with a hop. */
-const uppercutSwing = (p: number): Pose => {
-  if (p < 0.22) {
-    const k = smooth(p / 0.22); // crouch + dip
-    return { yaw: 0.2 * k, lunge: -0.05 * k, pitch: 0.18 * k, hop: -0.05 * k };
-  }
-  if (p < 0.5) {
-    const k = smooth((p - 0.22) / 0.28); // spring up + lean back + hop
-    return { yaw: 0.2 - 0.2 * k, lunge: -0.05 + 0.35 * k, pitch: 0.18 - 0.7 * k, hop: -0.05 + 0.55 * k };
-  }
-  const k = smooth((p - 0.5) / 0.5);
-  return { yaw: 0, lunge: 0.3 * (1 - k), pitch: -0.52 * (1 - k), hop: 0.5 * (1 - k) };
-};
-
-const REST: Pose = { yaw: 0, lunge: 0, pitch: 0, hop: 0 };
-
-/** Pick the procedural motion for the given combo move at progress `p` (0..1). */
-const comboPose = (index: number, p: number): Pose => {
-  if (p < 0 || p > 1) return REST;
-  switch (comboAt(index).key) {
-    case 'altSlash':
-      return horizontalSwing(p, -1);
-    case 'spin':
-      return spinSwing(p);
-    case 'uppercut':
-      return uppercutSwing(p);
-    default:
-      return horizontalSwing(p, 1);
-  }
-};
+/**
+ * Mixamo right-hand bone the weapon mounts onto. GLTFLoader strips reserved chars (`:`)
+ * from node names, so `mixamorig:RightHand` in the file loads as `mixamorigRightHand` —
+ * match by suffix instead of exact name.
+ */
+const HAND_BONE_RE = /RightHand$/;
 
 /**
- * The player: owns the ECS entity + the animated avatar. Movement is authored by
- * the ECS; this component mirrors the transform onto the scene graph and resolves
- * the animation state machine (hurt > slash > run > idle) from ECS state.
+ * The player: owns the ECS entity + the animated avatar. Movement is authored by the ECS;
+ * this component mirrors the transform onto the scene graph and resolves the animation state
+ * (death > dodge > attack > jump > run > idle) from ECS state. Swings are real Mixamo mocap —
+ * no procedural pose layering — and the weapon is mounted on the hand bone so it's held.
  */
 export const Player = ({ playerRef }: Props) => {
   const group = useRef<Group>(null);
   const entityRef = useRef<Entity | null>(null);
   const charState = useRef<CharState>('idle');
 
-  // Latches + change-detection for one-shot animations.
-  const slashUntil = useRef(0);
-  const slashStartAt = useRef(0);
-  const slashMove = useRef(0);
-  const hurtUntil = useRef(0);
-  const lastAttackStart = useRef(0);
-  const lastHealth = useRef(100);
+  // Weapon: find the hand bone once the rig loads, then mount the current weapon onto it.
+  const [handBone, setHandBone] = useState<Object3D | null>(null);
+  const weaponId = useWeaponStore((s) => s.currentId);
+  // Hero materials + their rest emissive, for the hit flash (monsters do this per-instance).
+  const flashMats = useRef<{ mat: MeshStandardMaterial; base: [number, number, number] }[]>([]);
+  const wasFlashing = useRef(false);
+
+  const onRigReady = useCallback((root: Object3D) => {
+    let hand: Object3D | null = null;
+    const mats: { mat: MeshStandardMaterial; base: [number, number, number] }[] = [];
+    root.traverse((o) => {
+      if (!hand && HAND_BONE_RE.test(o.name)) hand = o;
+      const mesh = o as Mesh;
+      if (mesh.isMesh) {
+        for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+          const sm = m as MeshStandardMaterial;
+          if (sm.isMeshStandardMaterial) mats.push({ mat: sm, base: [sm.emissive.r, sm.emissive.g, sm.emissive.b] });
+        }
+      }
+    });
+    flashMats.current = mats;
+    setHandBone(hand);
+  }, []);
+
+  // Latch each dodge so its roll clip outlives the (much shorter) dash itself.
+  const dodgeAnimUntil = useRef(0);
+  const lastDodgeStamp = useRef(0);
+
+  /** gameNow() when the current uninterrupted idle began (null while doing anything). */
+  const idleSince = useRef<number | null>(null);
 
   useEffect(() => {
     const entity = world.add(makePlayerEntity());
@@ -122,65 +115,80 @@ export const Player = ({ playerRef }: Props) => {
     const g = group.current;
     const e = entityRef.current;
     if (!g || !e?.transform || !e.velocity) return;
-    const now = performance.now();
+    const now = gameNow();
 
     const [x, y, z] = e.transform.position;
     g.position.set(x, y, z);
     g.rotation.y = e.transform.rotationY;
     playerRef.current = g;
 
-    // Latch the combo move when a new swing starts.
-    const atkStart = e.attackState?.startedAt ?? 0;
-    if (atkStart > lastAttackStart.current) {
-      lastAttackStart.current = atkStart;
-      slashStartAt.current = atkStart;
-      slashMove.current = e.attackState?.combo ?? 0;
-      slashUntil.current = atkStart + comboAt(slashMove.current).animMs;
-    }
-    // Latch hurt when HP drops.
-    const hp = e.health?.current ?? lastHealth.current;
-    if (hp < lastHealth.current) hurtUntil.current = now + HURT_ANIM_MS;
-    lastHealth.current = hp;
-
-    // Resolve state by priority.
+    // Resolve the animation state by priority.
     const [vx, , vz] = e.velocity.linear;
     const speed = Math.hypot(vx, vz);
+    const dead = (e.health?.current ?? 1) <= 0;
+    const du = e.dodgingUntil ?? 0;
+    if (du > lastDodgeStamp.current) {
+      lastDodgeStamp.current = du;
+      dodgeAnimUntil.current = du - DODGE_DURATION_MS + DODGE_ANIM_MS;
+    }
+    const dodging = now < dodgeAnimUntil.current;
+    // The swing window is authored by the ECS (attackAnimUntil = the clip's real length,
+    // zeroed by a dodge-cancel) — so the attack anim always finishes unless canceled.
+    const attacking = now < (e.attackAnimUntil ?? 0);
+
+    const hurting = e.hitReactionAt != null && now < e.hitReactionAt + HURT_ANIM_MS;
+
     let next: CharState;
-    if (now < hurtUntil.current) next = 'hurt';
-    else if (now < slashUntil.current) next = 'slash';
+    if (dead) next = 'death';
+    else if (dodging) next = 'dodge';
+    else if (attacking) next = ATTACK_STATE[comboAt(e.meleeCombo ?? 0).clip];
+    else if (hurting) next = 'hurt';
+    else if (y > AIRBORNE_Y) next = 'jump';
     else if (speed > RUN_SPEED_THRESHOLD) next = 'run';
-    else next = 'idle';
+    else if (speed > WALK_SPEED_THRESHOLD) next = 'walk';
+    else {
+      // Standing idle first; after a stretch with no action, drift into the bored fidget.
+      if (idleSince.current === null) idleSince.current = now;
+      next = now - idleSince.current >= BORED_IDLE_AFTER_MS ? 'idle-bored' : 'idle';
+    }
+    if (next !== 'idle' && next !== 'idle-bored') idleSince.current = null;
     charState.current = next;
 
-    // Layer the combo move's procedural motion over the clip so each hit reads.
-    if (now < slashUntil.current) {
-      const move = comboAt(slashMove.current);
-      const pose = comboPose(slashMove.current, (now - slashStartAt.current) / move.animMs);
-      g.rotation.y = e.transform.rotationY + pose.yaw;
-      g.rotation.x = pose.pitch;
-      g.position.set(
-        x + Math.sin(e.transform.rotationY) * pose.lunge,
-        y + pose.hop,
-        z + Math.cos(e.transform.rotationY) * pose.lunge,
-      );
-    } else if (g.rotation.x !== 0) {
-      g.rotation.x = 0;
+    // Hit flash: additive red emissive on the hero's materials, fading over the flash window.
+    const flashUntil = e.hitFlashUntil ?? 0;
+    const flashing = flashUntil > now && !!e.hitFlashColor;
+    if (flashing || wasFlashing.current) {
+      const dur = feel.flash.durationMs[e.hitReactionStrength ?? 'light'];
+      const k = flashing ? feel.flash.intensity * Math.max(0, Math.min(1, (flashUntil - now) / dur)) : 0;
+      const [fr, fg, fb] = e.hitFlashColor ?? [0, 0, 0];
+      for (const { mat, base } of flashMats.current) {
+        mat.emissive.setRGB(base[0] + fr * k, base[1] + fg * k, base[2] + fb * k);
+      }
+      wasFlashing.current = flashing;
     }
-  });
+  }, PLAYER_PRIORITY);
 
   return (
     <group ref={group}>
-      {/* Temporary: the generated (rigged) test-monster as the player avatar.
-          Forward axis is +X (Tripo rig convention) vs game -Z, hence faceOffset. */}
       <AnimatedCharacter
-        idlePath="/models/test-monster-idle.glb"
-        runPath="/models/test-monster-run.glb"
-        slashPath="/models/test-monster-slash.glb"
-        hurtPath="/models/test-monster-hurt.glb"
+        characterPath="/models/hero/hero.glb"
+        idlePath="/models/hero/anim-idle.glb"
+        boredPath="/models/hero/anim-idle-bored.glb"
+        walkPath="/models/hero/anim-walk.glb"
+        runPath="/models/hero/anim-run.glb"
+        jumpPath="/models/hero/anim-jump.glb"
+        dodgePath="/models/hero/anim-roll.glb"
+        hurtPath="/models/hero/anim-hurt.glb"
+        deathPath="/models/hero/anim-death.glb"
+        spinPath="/models/hero/anim-spin.glb"
+        light1Path="/models/hero/anim-attack-l1.glb"
+        light2Path="/models/hero/anim-attack-l2.glb"
+        finisherPath="/models/hero/anim-finisher.glb"
         targetHeight={1.8}
-        faceOffset={-Math.PI / 2}
         stateRef={charState}
+        onRigReady={onRigReady}
       />
+      {handBone && <WeaponMount bone={handBone} def={getWeapon(weaponId)} />}
     </group>
   );
 };

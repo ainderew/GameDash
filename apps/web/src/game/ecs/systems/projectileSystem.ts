@@ -37,7 +37,14 @@ export const projectileSystem = (world: World<Entity>, dt: number, now: number):
       const dz = target.transform.position[2] - pos[2];
       const reach = PROJECTILE_RADIUS + (target.radius ?? 0.5);
       if (dx * dx + dz * dz > reach * reach) continue;
-      dealDamage(world, target, p.damage ?? 0, now);
+      // Knockback follows the projectile's travel direction; spark spawns where it struck.
+      const vlen = Math.hypot(p.velocity.linear[0], p.velocity.linear[2]) || 1;
+      dealDamage(world, target, p.damage ?? 0, now, false, {
+        attacker: p,
+        strength: 'light',
+        dir: [p.velocity.linear[0] / vlen, p.velocity.linear[2] / vlen],
+        point: [pos[0], pos[1], pos[2]],
+      });
       hit = true;
       break;
     }

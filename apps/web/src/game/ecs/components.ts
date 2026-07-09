@@ -1,6 +1,7 @@
 import type { Vector3Tuple } from '@shared/types';
 import type { Faction } from '@shared/combat';
 import type { MonsterArchetype } from '@shared/monsters';
+import type { HitStrength } from '@/game/feel/config';
 
 /**
  * ECS component definitions. Entities are plain objects holding a subset of these.
@@ -60,6 +61,14 @@ export interface Entity {
   faction?: Faction;
   /** Present while a melee swing is active. */
   attackState?: AttackState;
+  /** gameNow() when the current melee swing began (outlives attackState, for FX/indicator). */
+  meleeStartedAt?: number;
+  /**
+   * gameNow() until which the current swing's animation runs. While set in the future the
+   * player is ROOTED (no walk/turn/jump) and the attack clip plays; a dodge zeroes it — the
+   * animation cancel.
+   */
+  attackAnimUntil?: number;
   /** Timestamp (ms) after which the player may melee again. */
   meleeReadyAt?: number;
   /** Index of the last melee combo move performed. */
@@ -81,10 +90,24 @@ export interface Entity {
   ranged?: boolean;
   /** Body radius for hit tests + rendering. */
   radius?: number;
-  /** Timestamp (ms) until which the monster renders a hit flash. */
+  /** Timestamp (gameNow ms) until which the entity renders a hit flash. */
   hitFlashUntil?: number;
-  /** performance.now() when the monster last began an attack, driving its lunge animation. */
+  /** Flash tint as linear RGB (white for light hits, red for heavy), read by renderers. */
+  hitFlashColor?: Vector3Tuple;
+  /** gameNow() when the monster last began an attack, driving its lunge animation. */
   attackStartedAt?: number;
+
+  // ── Combat feel: reaction + knockback ─────────────────────────────────────
+  /** Decaying knockback velocity (world units/sec, mostly XZ) applied by knockbackSystem. */
+  knockback?: Vector3Tuple;
+  /** gameNow() until which the entity is staggered — can't act while knockback plays. */
+  staggerUntil?: number;
+  /** gameNow() when the current hit-reaction (squash & stretch) began. */
+  hitReactionAt?: number;
+  /** Strength of the current hit reaction, selecting squash amount + flash look. */
+  hitReactionStrength?: HitStrength;
+  /** gameNow() until which the player's parry/block window is open (parry seam). */
+  blockingUntil?: number;
 
   // ── Projectile ──────────────────────────────────────────────────────────
   projectile?: true;
@@ -99,4 +122,20 @@ export interface Entity {
   // ── FX ──────────────────────────────────────────────────────────────────
   /** Floating damage number: transient, aged out by floatingNumberSystem. */
   floatingNumber?: { amount: number; spawnedAt: number; crit: boolean };
+  /**
+   * Impact VFX marker (spark burst / shockwave ring) spawned at a contact point.
+   * Aged on REAL time (`spawnedAtReal`) so it bursts while the sim is frozen for hitstop.
+   */
+  impactFx?: {
+    kind: 'spark' | 'ring';
+    strength: HitStrength;
+    /** performance.now() at spawn — real-time so it animates during hitstop. */
+    spawnedAtReal: number;
+    lifetimeMs: number;
+    color: Vector3Tuple;
+    /** Spark shard count (spark only). */
+    count: number;
+    /** Final radius the effect expands to. */
+    radius: number;
+  };
 }

@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { World } from 'miniplex';
 import type { Entity } from '@/game/ecs/components';
 import { startMelee, weaponSystem } from '@/game/ecs/systems/weaponSystem';
+import { comboAt, moveAnimMs } from '@/game/combat/combo';
 import { aiSystem } from '@/game/ecs/systems/aiSystem';
+import { knockbackSystem } from '@/game/ecs/systems/knockbackSystem';
 import { healthSystem } from '@/game/ecs/systems/healthSystem';
 import { applyDamage } from '@/game/ecs/systems/combatHelpers';
 import { createMonster } from '@/game/ecs/systems/spawnSystem';
@@ -27,11 +29,59 @@ describe('weaponSystem melee', () => {
     const monster = world.add(createMonster('chaser', [0, 0, 1.5])); // directly in front (+Z)
     const hpStart = monster.health!.current;
 
-    startMelee(player, 1000);
-    weaponSystem(world, 1000); // active frame 1
-    weaponSystem(world, 1050); // active frame 2 (same swing)
+    // Prime the archetype query BEFORE any attack exists — in the real game weaponSystem
+    // runs every frame from boot, so a stale query must still see a later addComponent.
+    weaponSystem(world, 999);
+
+    // The hitbox is live only during the active window (after the ~80ms light windup).
+    startMelee(world, player, 1000);
+    weaponSystem(world, 1030); // still winding up — no hit yet
+    expect(monster.health!.current).toBe(hpStart);
+
+    weaponSystem(world, 1100); // active frame 1
+    weaponSystem(world, 1130); // active frame 2 (same swing → no double hit)
 
     expect(monster.health!.current).toBe(hpStart - MELEE_DAMAGE);
+  });
+
+  it('stamps a swing window equal to the animation length', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    startMelee(world, player, 1000);
+    expect(player.meleeStartedAt).toBe(1000);
+    expect(player.attackAnimUntil).toBeCloseTo(1000 + moveAnimMs(comboAt(0)));
+  });
+
+  it('snaps facing toward the cursor aim point when the swing starts', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world); // at origin, facing +Z
+    startMelee(world, player, 1000, [5, 0]); // cursor ground point at +X
+    expect(player.transform!.rotationY).toBeCloseTo(Math.PI / 2);
+  });
+
+  it('a dodge mid-swing kills the hitbox before it can land', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    const monster = world.add(createMonster('chaser', [0, 0, 1.5]));
+    const hpStart = monster.health!.current;
+    weaponSystem(world, 999);
+
+    startMelee(world, player, 1000);
+    // The dodge starts during the windup (applyPlayerIntent stamps these on cancel).
+    player.dodgingUntil = 1230;
+    player.attackAnimUntil = 0;
+
+    weaponSystem(world, 1100); // would have been the active window
+    expect(monster.health!.current).toBe(hpStart);
+    expect(player.attackState).toBeUndefined();
+  });
+
+  it('refuses to start a swing mid-dodge (press stays buffered by the caller)', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    player.dodgingUntil = 1200;
+    expect(startMelee(world, player, 1000)).toBe(false);
+    expect(startMelee(world, player, 1250)).toBe(true);
   });
 
   it('misses a monster behind the player', () => {
@@ -40,8 +90,8 @@ describe('weaponSystem melee', () => {
     const monster = world.add(createMonster('chaser', [0, 0, -1.5])); // behind (-Z)
     const hpStart = monster.health!.current;
 
-    startMelee(player, 1000);
-    weaponSystem(world, 1000);
+    startMelee(world, player, 1000);
+    weaponSystem(world, 1100); // during the active window
 
     expect(monster.health!.current).toBe(hpStart);
   });
@@ -77,6 +127,22 @@ describe('aiSystem FSM', () => {
     // chaser is melee → player took damage, monster went on cooldown.
     expect(player.health!.current).toBeLessThan(100);
     expect(m.aiBrain!.state).toBe('cooldown');
+  });
+
+  it('a landed monster hit shoves the player away (scaled knockback + stagger)', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    world.add(createMonster('chaser', [0, 0, 1])); // attacker at +Z
+    aiSystem(world, 0.016, 5000);
+
+    // Shove points away from the attacker (−Z), scaled by playerScale.
+    expect(player.knockback).toBeDefined();
+    expect(player.knockback![2]).toBeLessThan(0);
+    expect(player.staggerUntil).toBeGreaterThan(5000);
+
+    // The knockback system then owns the player's horizontal velocity for the shove.
+    knockbackSystem(world, 0.016, 5001);
+    expect(player.velocity!.linear[2]).toBeLessThan(0);
   });
 });
 

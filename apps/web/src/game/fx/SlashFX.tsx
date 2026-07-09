@@ -11,6 +11,7 @@ import {
 import type { Mesh } from 'three';
 import { world } from '@/game/ecs/world';
 import { comboAt } from '@/game/combat/combo';
+import { gameNow } from '@/game/feel/time';
 import { MELEE_RANGE } from '@shared/balance';
 
 const players = world.with('playerControlled', 'transform');
@@ -82,7 +83,7 @@ export const SlashFX = () => {
       mesh.visible = false;
       return;
     }
-    const now = performance.now();
+    const now = gameNow();
 
     const start = p.attackState?.startedAt ?? 0;
     if (start > lastStart.current) {

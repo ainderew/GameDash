@@ -1,7 +1,16 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { AttackState, Entity } from '@/game/ecs/components';
 import { dealDamage } from '@/game/ecs/systems/combatHelpers';
-import { COMBO_CONTINUE_MS, COMBO_MOVES, comboAt } from '@/game/combat/combo';
+import {
+  chainReadyMs,
+  COMBO_CONTINUE_MS,
+  COMBO_MOVES,
+  comboAt,
+  moveActiveWindow,
+  moveAnimMs,
+} from '@/game/combat/combo';
+import { playWhoosh } from '@/game/feel/audio';
+import { currentWeapon } from '@/game/combat/weaponStore';
 import { computeDamage } from '@shared/combat';
 import {
   MELEE_DAMAGE,
@@ -18,29 +27,71 @@ export interface AttackIntent {
   ranged: boolean;
 }
 
-const MELEE_RANGE_SQ = MELEE_RANGE * MELEE_RANGE;
+/** How long a melee press made during the swing lockout stays buffered, ms. */
+export const MELEE_BUFFER_MS = 250;
+
+/** Snap an entity's facing toward a world-space XZ point (cursor aim). */
+const faceToward = (e: Entity, aimAt: [number, number]): void => {
+  const t = e.transform;
+  if (!t) return;
+  const dx = aimAt[0] - t.position[0];
+  const dz = aimAt[1] - t.position[2];
+  if (dx * dx + dz * dz > 1e-6) t.rotationY = Math.atan2(dx, dz);
+};
 
 /**
  * Start the next melee swing if off the (short) per-move lockout. Pressing within the
  * combo window advances the chain (slash → alt → spin → uppercut → loop); otherwise it
  * restarts at the first move. The chosen move rides on the attackState for the renderer.
+ * `aimAt` (ground point under the cursor, XZ) snaps the facing AT swing start, so the
+ * arc, lunge, and animation all fire toward the mouse; facing then stays locked (rooted).
+ * Returns whether a swing actually started (false while locked out — caller may buffer).
  */
-export const startMelee = (player: Entity, now: number): void => {
-  if (now < (player.meleeReadyAt ?? 0)) return;
+export const startMelee = (
+  world: World<Entity>,
+  player: Entity,
+  now: number,
+  aimAt?: [number, number],
+): boolean => {
+  if (now < (player.meleeReadyAt ?? 0)) return false;
+  // No swings mid-dash — a buffered press fires the moment the dodge ends instead.
+  if (now < (player.dodgingUntil ?? 0)) return false;
+  if (aimAt) faceToward(player, aimAt);
   const chaining = now <= (player.meleeComboExpiresAt ?? 0);
   const index = chaining ? ((player.meleeCombo ?? -1) + 1) % COMBO_MOVES.length : 0;
   const move = comboAt(index);
   player.meleeCombo = index;
-  player.attackState = { kind: 'melee', startedAt: now, hitSet: new Set(), combo: index };
-  player.meleeReadyAt = now + move.recoveryMs;
-  player.meleeComboExpiresAt = now + move.animMs + COMBO_CONTINUE_MS;
+  const atk: AttackState = { kind: 'melee', startedAt: now, hitSet: new Set(), combo: index };
+  // MUST go through addComponent (not a plain property write) so miniplex indexes the
+  // entity into the 'attackState' archetype that weaponSystem queries. A chain press while
+  // the previous swing is still indexed just swaps the value in place.
+  if (player.attackState) player.attackState = atk;
+  else world.addComponent(player, 'attackState', atk);
+  // The swing's window IS the animation's length — the player is rooted (see
+  // applyPlayerIntent) and the clip plays to completion unless a dodge cancels it.
+  player.meleeStartedAt = now;
+  player.attackAnimUntil = now + moveAnimMs(move);
+  // The tail of the swing is cancelable into the next chain press; a fresh press earlier
+  // than that is buffered by the caller, so mashing still never drops an input.
+  player.meleeReadyAt = now + chainReadyMs(move);
+  player.meleeComboExpiresAt = now + moveAnimMs(move) + COMBO_CONTINUE_MS;
+
+  // Whoosh on the swing itself so even a whiff feels like effort.
+  playWhoosh(move.weight);
+  return true;
 };
 
-/** Spawn a projectile in the player's facing direction if off cooldown. */
-export const fireRanged = (world: World<Entity>, player: Entity, now: number): void => {
+/** Spawn a projectile in the player's facing direction (snapped to `aimAt`) if off cooldown. */
+export const fireRanged = (
+  world: World<Entity>,
+  player: Entity,
+  now: number,
+  aimAt?: [number, number],
+): void => {
   if (now < (player.rangedReadyAt ?? 0)) return;
   const t = player.transform;
   if (!t) return;
+  if (aimAt) faceToward(player, aimAt);
   player.rangedReadyAt = now + RANGED_COOLDOWN_MS;
 
   const dirX = Math.sin(t.rotationY);
@@ -68,16 +119,28 @@ export const weaponSystem = (world: World<Entity>, now: number): void => {
   for (const player of world.with('attackState', 'transform', 'playerControlled')) {
     const atk = player.attackState;
     if (atk.kind !== 'melee') continue;
-    const move = comboAt(atk.combo ?? 0);
-    if (now - atk.startedAt > move.activeMs) {
+    // A dodge cancels the swing — kill the hitbox immediately (rooting/anim were already
+    // cleared by applyPlayerIntent when the dash started).
+    if (now < (player.dodgingUntil ?? 0)) {
       expired.push(player);
       continue;
     }
+    const move = comboAt(atk.combo ?? 0);
+    const { start, end } = moveActiveWindow(move);
+    const age = now - atk.startedAt;
+    if (age > end) {
+      expired.push(player);
+      continue;
+    }
+    if (age < start) continue; // still winding up — the hitbox isn't live yet
 
     const t = player.transform;
     const fx = Math.sin(t.rotationY);
     const fz = Math.cos(t.rotationY);
     const cosHalfArc = Math.cos(move.halfArc);
+    // The wielded weapon scales reach (greatsword > katana > dagger).
+    const range = MELEE_RANGE * currentWeapon().reachMul;
+    const rangeSq = range * range;
 
     for (const m of world.with('transform', 'health', 'faction')) {
       if (m.faction !== 'monster') continue;
@@ -85,14 +148,27 @@ export const weaponSystem = (world: World<Entity>, now: number): void => {
       const dx = m.transform.position[0] - t.position[0];
       const dz = m.transform.position[2] - t.position[2];
       const distSq = dx * dx + dz * dz;
-      const reach = MELEE_RANGE + (m.radius ?? 0);
-      if (distSq > reach * reach && distSq > MELEE_RANGE_SQ) continue;
+      const reach = range + (m.radius ?? 0);
+      if (distSq > reach * reach && distSq > rangeSq) continue;
 
       const len = Math.hypot(dx, dz) || 1;
-      const dot = (dx / len) * fx + (dz / len) * fz;
+      const ux = dx / len;
+      const uz = dz / len;
+      const dot = ux * fx + uz * fz;
       if (dot < cosHalfArc) continue; // outside the swing arc
 
-      dealDamage(world, m, computeDamage(MELEE_DAMAGE * move.damageMul), now);
+      // Contact point on the near edge of the target, chest height — where sparks land.
+      const mr = m.radius ?? 0.5;
+      dealDamage(world, m, computeDamage(MELEE_DAMAGE * move.damageMul), now, false, {
+        attacker: player,
+        strength: move.weight,
+        dir: [ux, uz],
+        point: [
+          m.transform.position[0] - ux * mr,
+          m.transform.position[1] + 1.0,
+          m.transform.position[2] - uz * mr,
+        ],
+      });
       atk.hitSet.add(m);
     }
   }

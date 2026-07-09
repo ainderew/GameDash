@@ -3,8 +3,11 @@
  * ANTI-PATTERN: never hardcode these numbers in components — import from here.
  */
 
-/** Horizontal move speed, world units per second. */
+/** Horizontal move speed while sprinting (Shift held), world units per second. */
 export const PLAYER_SPEED = 6;
+
+/** Default horizontal move speed (plain WASD = walk), world units per second. */
+export const PLAYER_WALK_SPEED = 2.8;
 
 /** Distance covered by a single dodge dash, world units. */
 export const DODGE_DISTANCE = 4;
@@ -25,10 +28,10 @@ export const JUMP_IMPULSE = 7;
 export const GRAVITY = -22;
 
 /** Camera follow distance behind the player, world units. */
-export const CAMERA_DISTANCE = 10.5;
+export const CAMERA_DISTANCE = 8.5;
 
-/** Camera height offset above the player, world units. */
-export const CAMERA_HEIGHT = 4.5;
+/** Camera height offset above the player, world units (with DISTANCE ⇒ ~48° look-down). */
+export const CAMERA_HEIGHT = 10.5;
 
 /** Camera smoothing factor (higher = snappier). */
 export const CAMERA_DAMPING = 6;

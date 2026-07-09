@@ -17,17 +17,18 @@ export const SkyAndLight = () => {
         mieCoefficient={0.006}
         mieDirectionalG={0.85}
       />
-      <fogExp2 attach="fog" args={['#bfe0ef', 0.011]} />
+      {/* Warm hazy distance — the sun-drenched pack-preview look, not a cold blue haze. */}
+      <fogExp2 attach="fog" args={['#d6e6c8', 0.0095]} />
 
-      {/* Sky-blue key from above, warm earthy bounce from below. */}
-      <hemisphereLight args={['#bfe3ff', '#6b7a3a', 0.9]} />
+      {/* Bright sky key from above, lush bounce from the grass below. */}
+      <hemisphereLight args={['#cdeaff', '#8a9a4a', 1.15]} />
 
       {/* Warm sun. */}
       <directionalLight
         castShadow
         position={SUN_POSITION}
-        intensity={2.6}
-        color="#fff2d0"
+        intensity={3.1}
+        color="#ffedbc"
         shadow-mapSize={[1024, 1024]}
         shadow-camera-left={-38}
         shadow-camera-right={38}
@@ -40,7 +41,7 @@ export const SkyAndLight = () => {
       />
 
       {/* Subtle cool fill from the opposite side to open up shadows. */}
-      <directionalLight position={[-20, 12, -16]} intensity={0.35} color="#cfe0ff" />
+      <directionalLight position={[-20, 12, -16]} intensity={0.42} color="#cfe0ff" />
     </>
   );
 };

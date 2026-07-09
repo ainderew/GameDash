@@ -1,5 +1,7 @@
 import type { World } from 'miniplex';
 import type { Entity } from '@/game/ecs/components';
+import { comboAt, lungeSpeed } from '@/game/combat/combo';
+import { currentWeapon } from '@/game/combat/weaponStore';
 import {
   DODGE_COOLDOWN_MS,
   DODGE_DISTANCE,
@@ -8,6 +10,7 @@ import {
   GRAVITY,
   JUMP_IMPULSE,
   PLAYER_SPEED,
+  PLAYER_WALK_SPEED,
 } from '@shared/balance';
 import { heightAt } from '@/game/world/terrainHeight';
 
@@ -18,6 +21,8 @@ export interface InputIntent {
   moveZ: number;
   jump: boolean;
   dodge: boolean;
+  /** Shift held: move at run speed instead of the default walk. */
+  sprint: boolean;
 }
 
 const dashSpeed = (DODGE_DISTANCE / DODGE_DURATION_MS) * 1000;
@@ -41,6 +46,7 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
   const dodging = (entity.dodgingUntil ?? 0) > now;
 
   // Start a dodge: dash in the current move dir (or facing) with i-frames + cooldown.
+  // The dodge is also THE animation cancel: it may start at any point during a swing.
   const canDodge = intent.dodge && !dodging && now >= (entity.dodgeReadyAt ?? 0);
   if (canDodge) {
     const len = Math.hypot(intent.moveX, intent.moveZ);
@@ -50,22 +56,44 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     entity.dodgingUntil = now + DODGE_DURATION_MS;
     entity.iframeUntil = now + DODGE_IFRAME_MS;
     entity.dodgeReadyAt = now + DODGE_COOLDOWN_MS;
+    // Break the current swing instantly: un-root, drop the remaining melee lockout, and
+    // let weaponSystem expire the hitbox this same tick (it checks dodgingUntil).
+    entity.attackAnimUntil = 0;
+    entity.meleeReadyAt = 0;
+    // Also break out of hit knockback — the dodge is the universal escape.
+    entity.knockback = undefined;
+    entity.staggerUntil = 0;
   }
+
+  // Attacking LOCKS the player into the animation: move/turn/jump input is ignored until
+  // the swing finishes. But it's ROOT MOTION, not a dead stop — the swing itself strides
+  // forward along facing (lungeSpeed), so heavy moves close gaps instead of feeling stuck.
+  // Only the dodge above breaks out early.
+  const rooted = now < (entity.attackAnimUntil ?? 0);
 
   const stillDodging = (entity.dodgingUntil ?? 0) > now;
   if (stillDodging && entity.dodgeDir) {
     velocity.linear[0] = entity.dodgeDir[0] * dashSpeed;
     velocity.linear[2] = entity.dodgeDir[2] * dashSpeed;
+  } else if (rooted) {
+    const move = comboAt(entity.meleeCombo ?? 0);
+    const age = now - (entity.meleeStartedAt ?? now);
+    // Longer weapons stride further (greatsword lunges past a dagger's shuffle).
+    const v = lungeSpeed(move, age, currentWeapon().reachMul);
+    velocity.linear[0] = Math.sin(transform.rotationY) * v;
+    velocity.linear[2] = Math.cos(transform.rotationY) * v;
   } else {
-    velocity.linear[0] = intent.moveX * PLAYER_SPEED;
-    velocity.linear[2] = intent.moveZ * PLAYER_SPEED;
+    // Plain WASD walks; Shift sprints.
+    const speed = intent.sprint ? PLAYER_SPEED : PLAYER_WALK_SPEED;
+    velocity.linear[0] = intent.moveX * speed;
+    velocity.linear[2] = intent.moveZ * speed;
     // Face the movement direction when actually moving.
     if (intent.moveX !== 0 || intent.moveZ !== 0) {
       transform.rotationY = Math.atan2(intent.moveX, intent.moveZ);
     }
   }
 
-  if (intent.jump && isGrounded(entity)) {
+  if (intent.jump && !rooted && isGrounded(entity)) {
     velocity.linear[1] = JUMP_IMPULSE;
   }
 };

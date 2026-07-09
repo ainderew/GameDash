@@ -8,6 +8,8 @@ import { Zone } from '@/game/world/Zone';
 import { PostFX } from '@/game/fx/PostFX';
 import { Player } from '@/game/entities/Player';
 import { SlashFX } from '@/game/fx/SlashFX';
+import { AttackArcIndicator } from '@/game/fx/AttackArcIndicator';
+import { ImpactFX } from '@/game/fx/ImpactFX';
 import { MonsterModels } from '@/game/entities/MonsterModels';
 import { MonsterHealthBars } from '@/game/entities/MonsterHealthBars';
 import { Projectiles } from '@/game/entities/Projectiles';
@@ -29,8 +31,13 @@ export const GameCanvas = () => {
       dpr={[1, 1.5]}
       camera={{ fov: 55, near: 0.1, far: 200, position: [0, 3, 7] }}
       gl={{ powerPreference: 'high-performance', antialias: true }}
+      // Dev-only scene handle for console/tooling inspection (e.g. measuring placement).
+      onCreated={(state) => {
+        if (DEV) (window as unknown as { __scene?: unknown }).__scene = state.scene;
+      }}
     >
-      {DEV && <Perf position="top-right" />}
+      {/* Bottom-left so it doesn't cover the leva panel (top-right). */}
+      {DEV && <Perf position="bottom-left" />}
 
       <Suspense fallback={null}>
         <SkyAndLight />
@@ -38,12 +45,15 @@ export const GameCanvas = () => {
           <Zone obstacles={obstacles} />
           <Player playerRef={playerRef} />
           <SlashFX />
+          <AttackArcIndicator />
+          <ImpactFX />
           <MonsterModels />
           <MonsterHealthBars />
           <Projectiles />
           <Pickups />
           <DamageNumbers />
-          {/* Systems tick first (mounted before camera); camera reads resulting transforms. */}
+          {/* Ticks BEFORE all renderer useFrames via negative priority (see SIM_PRIORITY) —
+              same-frame input → ECS → animation, no one-frame lag. */}
           <SystemRunner />
           <ThirdPersonCamera target={playerRef} obstacles={obstacles} />
         </Physics>

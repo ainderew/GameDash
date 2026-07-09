@@ -4,6 +4,7 @@ import { useRef } from 'react';
 import { world } from '@/game/ecs/world';
 import type { Entity } from '@/game/ecs/components';
 import { DAMAGE_NUMBER_LIFETIME_MS } from '@/game/ecs/systems/combatHelpers';
+import { gameNow } from '@/game/feel/time';
 
 const POOL = 24;
 
@@ -21,7 +22,7 @@ export const DamageNumbers = () => {
   const free = useRef<number[]>(Array.from({ length: POOL }, (_, i) => i));
 
   useFrame(() => {
-    const now = performance.now();
+    const now = gameNow();
     const active = new Set<Entity>();
 
     for (const e of world.with('floatingNumber', 'transform')) {

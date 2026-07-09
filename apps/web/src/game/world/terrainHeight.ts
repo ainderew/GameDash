@@ -25,3 +25,22 @@ export const heightAt = (x: number, z: number): number => {
   const mask = Math.min(1, Math.max(0, (r - FLAT_RADIUS) / 18));
   return hill + noise(x, z) * mask;
 };
+
+// ── Dirt path ────────────────────────────────────────────────────────────────
+// A wavy trail running roughly north–south through the arena. Terrain.tsx tints
+// the ground with it; GrassField/Scatter keep vegetation off it. Purely visual —
+// the physics ground is flat either way.
+const PATH_HALF_WIDTH = 1.8;
+const PATH_EDGE = 1.6;
+
+const pathCenterX = (z: number) => 10 * Math.sin(z * 0.042) + 5 * Math.sin(z * 0.019 + 1.7);
+
+/** 1 on the trail, softly falling to 0 at its grassy edges; fades out past the hills. */
+export const pathMask = (x: number, z: number): number => {
+  const d = Math.abs(x - pathCenterX(z));
+  const t = Math.min(1, Math.max(0, (d - PATH_HALF_WIDTH) / PATH_EDGE));
+  const edge = 1 - t * t * (3 - 2 * t); // smoothstep, ascending
+  const r = Math.hypot(x, z);
+  const fade = Math.min(1, Math.max(0, 1 - (r - 66) / 10));
+  return edge * fade;
+};

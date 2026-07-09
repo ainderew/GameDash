@@ -1,12 +1,23 @@
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
-import { Box3, Object3D, Vector3 } from 'three';
+import {
+  Box3,
+  DynamicDrawUsage,
+  InstancedBufferAttribute,
+  Object3D,
+  Vector3,
+} from 'three';
 import type { BufferGeometry, InstancedMesh, Material, Mesh } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { monsters } from '@/game/ecs/world';
+import type { Entity } from '@/game/ecs/components';
 import { useGameModel } from '@/lib/loaders';
+import { MutantMonsters } from '@/game/entities/MutantModels';
+import { hitSquash } from '@/game/entities/hitSquash';
 import type { MonsterArchetype } from '@shared/monsters';
 import { MAX_MONSTERS } from '@shared/balance';
+import { gameNow } from '@/game/feel/time';
+import { feel } from '@/game/feel/config';
 
 interface ArchMeta {
   path: string;
@@ -16,8 +27,8 @@ interface ArchMeta {
   faceOffset: number;
 }
 
-const ARCHES: Record<MonsterArchetype, ArchMeta> = {
-  chaser: { path: '/models/monster-chaser.glb', height: 1.4, faceOffset: -Math.PI / 2 },
+// The chaser is rendered by MutantModels (skinned + skeletally animated) instead.
+const ARCHES: Partial<Record<MonsterArchetype, ArchMeta>> = {
   spitter: { path: '/models/monster-spitter.glb', height: 1.3, faceOffset: -Math.PI / 2 },
   brute: { path: '/models/monster-brute.glb', height: 2.7, faceOffset: -Math.PI / 2 },
 };
@@ -46,6 +57,7 @@ const attackPose = (at: number): [number, number, number] => {
   const k = smooth((at - 0.42) / 0.58);
   return [1 - k, 1.12 - 0.12 * k, 0.92 + 0.08 * k];
 };
+
 
 /** Bake a GLB scene into a single unit-height geometry (feet at y=0, centered in XZ). */
 const bake = (scene: Object3D): { geometry: BufferGeometry; material: Material } => {
@@ -78,28 +90,61 @@ const bake = (scene: Object3D): { geometry: BufferGeometry; material: Material }
   return { geometry, material: material! };
 };
 
+/**
+ * Add a per-instance additive-flash attribute (`aFlash`) and patch the material so it adds
+ * that color to the final fragment. Lets each monster flash white/red independently within
+ * a single instanced draw call, without a bespoke shader. Degrades to no-flash if the
+ * shader chunk name ever changes (never crashes).
+ */
+const withFlash = (geometry: BufferGeometry, src: Material): Material => {
+  const flash = new InstancedBufferAttribute(new Float32Array(MAX_MONSTERS * 3), 3);
+  flash.setUsage(DynamicDrawUsage);
+  geometry.setAttribute('aFlash', flash);
+
+  const material = src.clone();
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader =
+      'attribute vec3 aFlash;\nvarying vec3 vFlash;\n' +
+      shader.vertexShader.replace('void main() {', 'void main() {\n  vFlash = aFlash;');
+    shader.fragmentShader =
+      'varying vec3 vFlash;\n' +
+      shader.fragmentShader
+        .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n  gl_FragColor.rgb += vFlash;')
+        .replace('#include <output_fragment>', '#include <output_fragment>\n  gl_FragColor.rgb += vFlash;');
+  };
+  (material as Material & { customProgramCacheKey: () => string }).customProgramCacheKey = () =>
+    'monster-flash-v1';
+  material.needsUpdate = true;
+  return material;
+};
+
 /** One instanced draw call per archetype, matrices written from the ECS each frame. */
 const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
-  const meta = ARCHES[archetype];
+  const meta = ARCHES[archetype]!;
   const { scene } = useGameModel(meta.path);
   const ref = useRef<InstancedMesh>(null);
-  const { geometry, material } = useMemo(() => bake(scene.clone(true)), [scene]);
+  const { geometry, material } = useMemo(() => {
+    const baked = bake(scene.clone(true));
+    return { geometry: baked.geometry, material: withFlash(baked.geometry, baked.material) };
+  }, [scene]);
 
   useFrame(() => {
     const mesh = ref.current;
     if (!mesh) return;
-    const now = performance.now();
+    const now = gameNow();
+    const flashAttr = geometry.getAttribute('aFlash') as InstancedBufferAttribute;
+    const flashArr = flashAttr.array as Float32Array;
     let i = 0;
     for (const m of monsters) {
       if (m.monster !== archetype) continue;
       if (i >= MAX_MONSTERS) break;
       const [x, , z] = m.transform.position;
-      // Brief scale "pop" on hit for feedback (per-instance, no shader needed).
-      const pop = (m.hitFlashUntil ?? 0) > now ? 1.15 : 1;
 
       // Attack lunge: shove the model toward whoever it faces + squash/stretch.
       const at = (now - (m.attackStartedAt ?? -1e9)) / ATTACK_MS;
       const [fwd, sy, sxz] = attackPose(at);
+      // Hit reaction squash multiplies on top of the attack pose.
+      const [hsXZ, hsY] = hitSquash(m, now);
       const lunge = fwd * meta.height * 0.5;
       dummy.position.set(
         x + Math.sin(m.transform.rotationY) * lunge,
@@ -107,13 +152,33 @@ const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
         z + Math.cos(m.transform.rotationY) * lunge,
       );
       dummy.rotation.set(0, m.transform.rotationY + meta.faceOffset, 0);
-      dummy.scale.set(meta.height * sxz * pop, meta.height * sy * pop, meta.height * sxz * pop);
+      dummy.scale.set(
+        meta.height * sxz * hsXZ,
+        meta.height * sy * hsY,
+        meta.height * sxz * hsXZ,
+      );
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
+
+      // Per-instance hit flash (white for light, red for heavy), fading over its window.
+      const flashUntil = m.hitFlashUntil ?? 0;
+      if (flashUntil > now && m.hitFlashColor) {
+        const dur = feel.flash.durationMs[m.hitReactionStrength ?? 'light'];
+        const remaining = Math.max(0, Math.min(1, (flashUntil - now) / dur));
+        const k = feel.flash.intensity * remaining;
+        flashArr[i * 3] = m.hitFlashColor[0] * k;
+        flashArr[i * 3 + 1] = m.hitFlashColor[1] * k;
+        flashArr[i * 3 + 2] = m.hitFlashColor[2] * k;
+      } else {
+        flashArr[i * 3] = 0;
+        flashArr[i * 3 + 1] = 0;
+        flashArr[i * 3 + 2] = 0;
+      }
       i++;
     }
     mesh.count = i;
     mesh.instanceMatrix.needsUpdate = true;
+    flashAttr.needsUpdate = true;
   });
 
   return (
@@ -127,10 +192,10 @@ const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
   );
 };
 
-/** Real monster models replacing the grey-box spheres, one instanced mesh per archetype. */
+/** Real monster models: the skinned mutant chaser + instanced spitter/brute. */
 export const MonsterModels = () => (
   <>
-    <ArchetypeInstances archetype="chaser" />
+    <MutantMonsters />
     <ArchetypeInstances archetype="spitter" />
     <ArchetypeInstances archetype="brute" />
   </>

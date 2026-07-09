@@ -20,6 +20,9 @@ export const aiSystem = (world: World<Entity>, dt: number, now: number): void =>
 
   for (const m of world.with('transform', 'aiBrain', 'monster', 'velocity')) {
     const brain = m.aiBrain;
+    // Staggered: the monster can't act while its knockback plays out. knockbackSystem
+    // owns its velocity this frame; skip all AI (movement + attacks).
+    if ((m.staggerUntil ?? 0) > now) continue;
     const mp = m.transform.position;
     const dx = pp[0] - mp[0];
     const dz = pp[2] - mp[2];
@@ -75,7 +78,13 @@ export const aiSystem = (world: World<Entity>, dt: number, now: number): void =>
       if (m.ranged) {
         fireMonsterProjectile(world, m, dx, dz, dist, now);
       } else {
-        dealDamage(world, player, computeDamage(m.attackDamage ?? 5), now);
+        // Brutes hit heavy; everything else jabs. Strength scales the player's knockback
+        // (feel.knockback.playerScale shove under the hurt anim) + shake/flash/audio/hitstop.
+        const strength = m.monster === 'brute' ? 'heavy' : 'light';
+        dealDamage(world, player, computeDamage(m.attackDamage ?? 5), now, false, {
+          attacker: m,
+          strength,
+        });
       }
       brain.state = 'cooldown';
     }
