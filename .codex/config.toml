@@ -1,0 +1,9 @@
+[mcp_servers.tripo-ai]
+command = "npx"
+args = [
+    "-y",
+    "tripo-ai-mcp-server",
+]
+
+[mcp_servers.tripo-ai.env]
+TRIPO_API_SECRET = "tcli_88907536dec9433283623fe5e15fc15f"
