@@ -20,9 +20,11 @@ export const PostFX = () => {
       {/* Tight-radius AO: contact shadows for characters/rocks without smothering or
           shimmering the dense grass field (large radii flicker on thin swaying blades). */}
       <N8AO aoRadius={0.45} intensity={1.1} distanceFalloff={1} halfRes quality="low" />
+      {/* Threshold > 1 so only true HDR emitters (pickups, projectiles, sun disc) bloom —
+          at 0.75 the whole Preetham sky crossed it and washed out to white. */}
       <Bloom
         intensity={0.5}
-        luminanceThreshold={0.75}
+        luminanceThreshold={1.05}
         luminanceSmoothing={0.3}
         mipmapBlur
         radius={0.6}

@@ -14,6 +14,11 @@ export const cameraRig = {
   dist: Math.hypot(CAMERA_DISTANCE, CAMERA_HEIGHT - 1),
 };
 
+// Dev-only console handle (same pattern as window.__scene) so tooling can aim the camera.
+if (import.meta.env.DEV) {
+  (window as unknown as { __cameraRig?: typeof cameraRig }).__cameraRig = cameraRig;
+}
+
 /** Radians of orbit per pixel of mouse travel. */
 export const MOUSE_SENS = 0.0025;
 /** Pitch limits: never fully horizontal (camera in the grass), never fully top-down. */

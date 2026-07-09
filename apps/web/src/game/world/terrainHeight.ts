@@ -17,10 +17,17 @@ const noise = (x: number, z: number): number =>
 /** Radius within which the ground is flat (spawn-safe). Exported for scatter placement. */
 export const PLAY_RADIUS = FLAT_RADIUS;
 
+/** Ridge cap: uncapped, perimeter hills reach ~70 units — a wall ~31° above the horizon
+ *  from the play area that buries the sky entirely (the camera tops out ~19° up).
+ *  Capped near 14, the skyline sits ~7° up and the sky dome shows above it. */
+const HILL_MAX = 14;
+
 /** Height field: flat valley floor, rolling hills rising toward the perimeter. */
 export const heightAt = (x: number, z: number): number => {
   const r = Math.hypot(x, z);
-  const hill = r > HILL_START ? Math.pow((r - HILL_START) / 22, 1.9) * 6 : 0;
+  const raw = r > HILL_START ? Math.pow((r - HILL_START) / 22, 1.9) * 6 : 0;
+  // tanh cap: identical slope near the valley, asymptotes to HILL_MAX at the perimeter.
+  const hill = HILL_MAX * Math.tanh(raw / HILL_MAX);
   // Undulation masked to ~0 in the flat play area, growing outward.
   const mask = Math.min(1, Math.max(0, (r - FLAT_RADIUS) / 18));
   return hill + noise(x, z) * mask;

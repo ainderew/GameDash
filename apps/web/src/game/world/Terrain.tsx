@@ -96,8 +96,9 @@ const TERRAIN_SPLAT = /* glsl */ `
     dirtCol *= 0.92 + 0.16 * tnoise(p * 3.1);
     ground = mix(ground, dirtCol, smoothstep(0.05, 0.85, path));
 
-    // Rocky tint climbing the perimeter hills, noisy threshold so it creeps.
-    float rocky = smoothstep(3.5, 7.0, h + (tfbm(p * 0.11) - 0.5) * 3.0);
+    // Rocky tint creeping up the hill crests. Thresholds sit just under HILL_MAX
+    // (terrainHeight.ts caps ridges ~14) so slopes stay grassy and only tops rock over.
+    float rocky = smoothstep(9.0, 13.5, h + (tfbm(p * 0.11) - 0.5) * 3.0);
     ground = mix(ground, uRock, rocky);
 
     diffuseColor.rgb = ground;

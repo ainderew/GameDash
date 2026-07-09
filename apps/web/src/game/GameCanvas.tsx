@@ -29,11 +29,17 @@ export const GameCanvas = () => {
     <Canvas
       shadows
       dpr={[1, 1.5]}
-      camera={{ fov: 55, near: 0.1, far: 200, position: [0, 3, 7] }}
+      // far must exceed the Sky dome radius (500) or the sky gets clipped and never draws;
+      // fog hides everything past ~300 anyway, so the big far plane costs nothing visually.
+      camera={{ fov: 55, near: 0.1, far: 2000, position: [0, 3, 7] }}
       gl={{ powerPreference: 'high-performance', antialias: true }}
       // Dev-only scene handle for console/tooling inspection (e.g. measuring placement).
       onCreated={(state) => {
-        if (DEV) (window as unknown as { __scene?: unknown }).__scene = state.scene;
+        if (DEV) {
+          const w = window as unknown as { __scene?: unknown; __r3f?: unknown };
+          w.__scene = state.scene;
+          w.__r3f = state;
+        }
       }}
     >
       {/* Bottom-left so it doesn't cover the leva panel (top-right). */}
