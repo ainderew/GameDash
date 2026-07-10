@@ -24,6 +24,10 @@ export interface ComboMove {
   halfArc: number;
   /** Damage multiplier vs base MELEE_DAMAGE. */
   damageMul: number;
+  /** Normalized [start, end] of the visible blade delivery inside this clip. */
+  hitWindow: readonly [number, number];
+  /** Normalized point at which a buffered next move may take over. */
+  cancelAt: number;
   /**
    * Root motion: forward distance (world units) the swing itself carries the character.
    * MUTABLE — the leva "Attack · lunge" panel writes here live; bake tuned values back.
@@ -36,10 +40,10 @@ export interface ComboMove {
 // Every move plays its OWN self-contained single-swing clip (each starts/ends near the
 // guard stance), so chained crossfades line up and mashing reads as a choreographed chain.
 export const COMBO_MOVES: ComboMove[] = [
-  { key: 'slash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, lungeDist: 1.6, clip: 'light1' },
-  { key: 'altSlash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, lungeDist: 1.6, clip: 'light2' },
-  { key: 'spin', weight: 'heavy', halfArc: Math.PI, damageMul: 1.15, lungeDist: 0.35, clip: 'spin' },
-  { key: 'uppercut', weight: 'heavy', halfArc: Math.PI / 4, damageMul: 1.7, lungeDist: 1.4, clip: 'finisher' },
+  { key: 'slash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.32, 0.45], cancelAt: 0.88, lungeDist: 1.6, clip: 'light1' },
+  { key: 'altSlash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.34, 0.48], cancelAt: 0.88, lungeDist: 1.6, clip: 'light2' },
+  { key: 'spin', weight: 'heavy', halfArc: Math.PI, damageMul: 1.15, hitWindow: [0.38, 0.62], cancelAt: 0.9, lungeDist: 0.35, clip: 'spin' },
+  { key: 'uppercut', weight: 'heavy', halfArc: Math.PI / 4, damageMul: 1.7, hitWindow: [0.42, 0.56], cancelAt: 0.92, lungeDist: 1.4, clip: 'finisher' },
 ];
 
 /** After a move's animation ends, how long the player may still press to keep the chain. */
@@ -68,10 +72,12 @@ export const ATTACK_CLIP_S: Record<ComboClip, number> = {
  * so gameplay duration and animation stay locked together while tuning.
  */
 export const ATTACK_TIMESCALE: Record<ComboClip, number> = {
-  light1: 2,
-  light2: 2,
-  spin: 2,
-  finisher: 1.5,
+  // Let the contact and follow-through read. These are still responsive, but no longer
+  // compress the mocap so far that the weapon appears to stop short of its full arc.
+  light1: 1.4,
+  light2: 1.4,
+  spin: 1.3,
+  finisher: 1.25,
 };
 
 // ── Phase timing helpers (read the tunable config live) ─────────────────────
@@ -89,9 +95,8 @@ export const moveAnimMs = (m: ComboMove): number =>
 
 /** Hitbox-live window measured from swing start, ms: [start, end). Clamped into the anim. */
 export const moveActiveWindow = (m: ComboMove): { start: number; end: number } => {
-  const p = movePhase(m);
-  const end = Math.min(p.windupMs + p.activeMs, moveAnimMs(m));
-  return { start: Math.min(p.windupMs, end), end };
+  const duration = moveAnimMs(m);
+  return { start: duration * m.hitWindow[0], end: duration * m.hitWindow[1] };
 };
 
 /**
@@ -109,7 +114,9 @@ export const lungeSpeed = (m: ComboMove, ageMs: number, mul = 1): number => {
 };
 
 /** How far into the swing (fraction of the full anim) a chain press may cancel into the next move. */
-export const CHAIN_CANCEL_FRAC = 0.6;
+// Keep nearly all of the outgoing swing visible before a buffered input takes over.
+// The existing input buffer preserves responsiveness even though the handoff is later.
+export const CHAIN_CANCEL_FRAC = 0.86;
 
 /**
  * When the NEXT melee press is accepted, ms from swing start: never before the hitbox closes,
@@ -117,6 +124,6 @@ export const CHAIN_CANCEL_FRAC = 0.6;
  * (A dodge, by contrast, cancels the swing at ANY point — see applyPlayerIntent.)
  */
 export const chainReadyMs = (m: ComboMove): number => {
-  const p = movePhase(m);
-  return Math.max(p.windupMs + p.activeMs, moveAnimMs(m) * CHAIN_CANCEL_FRAC);
+  const { end } = moveActiveWindow(m);
+  return Math.max(end, moveAnimMs(m) * Math.max(CHAIN_CANCEL_FRAC, m.cancelAt));
 };

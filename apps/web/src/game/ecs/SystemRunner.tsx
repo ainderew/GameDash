@@ -7,6 +7,13 @@ import { world } from '@/game/ecs/world';
 import { applyPlayerIntent, movementSystem } from '@/game/ecs/systems/movementSystem';
 import { fireRanged, MELEE_BUFFER_MS, startMelee, weaponSystem } from '@/game/ecs/systems/weaponSystem';
 import { projectileSystem } from '@/game/ecs/systems/projectileSystem';
+import { dropRelic, relicSystem } from '@/game/ecs/systems/relicSystem';
+import { teammateSystem } from '@/game/ecs/systems/teammateSystem';
+import { updatePassControl } from '@/game/combat/passControl';
+import { passAim } from '@/game/combat/passAim';
+import { stereoPanFor } from '@/game/combat/passTargeting';
+import { playPassChime, playPassFail, playWhoosh } from '@/game/feel/audio';
+import { RELIC_AIM_MOVE_SCALE } from '@shared/balance';
 import { aiSystem } from '@/game/ecs/systems/aiSystem';
 import { knockbackSystem } from '@/game/ecs/systems/knockbackSystem';
 import { separationSystem } from '@/game/ecs/systems/separationSystem';
@@ -17,9 +24,10 @@ import { pickupSystem, spawnPickupsFromEvents } from '@/game/ecs/systems/lootSys
 import { createSpawnState, spawnSystem } from '@/game/ecs/systems/spawnSystem';
 import { drainEvents } from '@/game/events';
 import { useInput } from '@/game/input/useInput';
-import { useUIStore, COMBO_WINDOW_MS } from '@/ui/store';
+import { useUIStore, COMBO_WINDOW_MS, type GameScene } from '@/ui/store';
 import { advanceTime, gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
+import { resolveHubCollisions } from '@/game/world/hubLayout';
 
 const players = world.with('transform', 'velocity', 'playerControlled');
 
@@ -63,7 +71,7 @@ const cursorGroundPoint = (state: RootState, groundY: number): [number, number] 
   return [aimVec.x, aimVec.z];
 };
 
-export const SystemRunner = () => {
+export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
   const input = useInput();
   const spawnState = useRef(createSpawnState());
   const hpBridgeAcc = useRef(0);
@@ -79,10 +87,8 @@ export const SystemRunner = () => {
     const realNow = performance.now();
     const i = input.current;
 
-    // 1. Spawning.
-    spawnSystem(world, now, spawnState.current);
-
-    // 2. Player intent (movement + attacks + parry).
+    // 1. Player intent. In the hub this is the whole simulation: no spawns, combat,
+    // Relic, or teammate stand-ins are allowed to leak into the safe social space.
     // WASD is CAMERA-RELATIVE: rotate the input axes by the orbit yaw so "forward" is
     // always away from the camera, wherever the mouse has spun it.
     const ix = (i.right ? 1 : 0) - (i.left ? 1 : 0);
@@ -98,9 +104,15 @@ export const SystemRunner = () => {
       moveX /= len;
       moveZ /= len;
     }
+    // Aiming a pass steadies the carrier: 80% speed, still fully mobile.
+    if (passAim.aiming) {
+      moveX *= RELIC_AIM_MOVE_SCALE;
+      moveZ *= RELIC_AIM_MOVE_SCALE;
+    }
     const intent = { moveX, moveZ, jump: i.jump, dodge: i.dodge, sprint: i.sprint };
     for (const player of players) {
       applyPlayerIntent(player, intent, now);
+      if (mode === 'hub') continue;
       // Attacks aim at the cursor: the swing/projectile fires toward the ground point
       // under the mouse, snapping the facing the instant the attack starts.
       const aim = cursorGroundPoint(state, player.transform.position[1]);
@@ -109,21 +121,42 @@ export const SystemRunner = () => {
         meleeBufferedAt.current = -Infinity;
       }
       if (i.ranged) fireRanged(world, player, now, aim);
+      // Relic pass: E tap = quick pass, hold = soft-lock aim mode, release = throw.
+      updatePassControl(world, player, i.pass, now);
+      // Intentional drop is its own verb (G) — a failed pass must never dump the relic.
+      if (i.drop) dropRelic(world, player, now);
       // Parry: open a brief block window at will; a hit inside it is negated + punished.
       if (i.parry && feel.parry.enabled) player.blockingUntil = now + feel.parry.windowMs;
     }
     i.jump = false;
+    if (mode === 'hub') {
+      i.melee = false;
+      i.ranged = false;
+      i.parry = false;
+      i.pass = false;
+      i.drop = false;
+      movementSystem(world, dt);
+      for (const player of players) resolveHubCollisions(player);
+      return;
+    }
+
+    // 2. Expedition spawning.
+    spawnSystem(world, now, spawnState.current);
+
     i.melee = false;
     i.ranged = false;
     i.parry = false;
+    i.drop = false;
 
     // 3. AI → 4. weapons → 5. knockback → 6. projectiles → 7. movement.
     aiSystem(world, dt, now);
+    teammateSystem(world, now); // stand-in players: patrol + return passes
     weaponSystem(world, now);
     knockbackSystem(world, dt, now); // drives staggered targets before integration
     projectileSystem(world, dt, now);
     movementSystem(world, dt);
     separationSystem(world); // resolve overlaps after integration
+    relicSystem(world, dt, now); // after integration so the carried Relic tracks the final pose
 
     // 8. Death resolution (emits LootDropped / PlayerDowned).
     healthSystem(world);
@@ -142,6 +175,17 @@ export const SystemRunner = () => {
       for (const ev of events) {
         if (ev.type === 'MaterialCollected') gained += 1;
         else if (ev.type === 'PlayerDowned') store.setHuntFailed(true);
+        else if (ev.type === 'RelicPassLaunched') {
+          // Thrower/world feedback: every launch whooshes. Receiver feedback: a soft
+          // chime panned toward where the throw came from (only when WE receive).
+          playWhoosh('light');
+          if (ev.toLocalPlayer) {
+            const p = players.first;
+            if (p?.transform) playPassChime(stereoPanFor(p.transform.position, ev.from, cameraRig.yaw));
+          }
+        } else if (ev.type === 'RelicPassFailed') {
+          playPassFail();
+        }
       }
       if (gained > 0) store.addMaterials(gained);
     }

@@ -41,12 +41,54 @@ export interface AttackState {
   combo?: number;
 }
 
+export type RelicPhase = 'carried' | 'inFlight' | 'grounded';
+
+/**
+ * The living Relic — one entity per session. A small state machine driven by relicSystem:
+ * carried (floats beside its carrier) → inFlight (a targeted pass or an untargeted lob) →
+ * grounded (hovers where it landed until someone walks into it) → carried…
+ */
+export interface RelicState {
+  phase: RelicPhase;
+  /** Who holds it (carried only). */
+  carrier?: Entity;
+  /**
+   * Flight kind: 'pass' = deterministic quadratic Bézier to a teammate's catch socket
+   * (auto-caught on arrival, uninterceptable); 'lob' = untargeted parabola to a ground
+   * point (intentional drop / failed pass), catchable by walk-in.
+   */
+  mode?: 'pass' | 'lob';
+  /** Pass receiver (pass mode only). */
+  target?: Entity;
+  /** Who threw the current pass — their rotation cooldown is refunded if it fails. */
+  thrower?: Entity;
+  /** gameNow() of the last failed pass — drives the "hot" grounded marker pulse. */
+  failedAt?: number;
+  /** Flight start/end points in world space (inFlight only). `to` is the live endpoint. */
+  from?: Vector3Tuple;
+  to?: Vector3Tuple;
+  /** Bézier control point (pass mode only). */
+  control?: Vector3Tuple;
+  /** The endpoint predicted at release — homing may correct `to` at most 3m from here. */
+  endBase?: Vector3Tuple;
+  /** gameNow() when the throw left the carrier's hands (inFlight only). */
+  startedAt?: number;
+  /** Total flight duration for the current throw, ms. */
+  flightMs?: number;
+  /** Peak height of the parabolic arc above the from→to line, world units (lob only). */
+  arcHeight?: number;
+  /** gameNow() before which no catch can happen — prevents instant self-recatch. */
+  noCatchUntil?: number;
+}
+
 export interface Entity {
   transform?: Transform;
   velocity?: Velocity;
   health?: Health;
   /** Marks the single player-controlled entity. */
   playerControlled?: true;
+  /** Number of jumps used since the player last touched the ground (maximum two). */
+  jumpsUsed?: number;
   /** Timestamp (ms, performance.now) until which the entity has i-frames. */
   iframeUntil?: number;
   /** Timestamp (ms) until which the entity is mid-dodge (dash active). */
@@ -121,6 +163,18 @@ export interface Entity {
   // ── Pickup ──────────────────────────────────────────────────────────────
   pickup?: { tableId: string };
 
+  // ── Relic ───────────────────────────────────────────────────────────────
+  relic?: RelicState;
+  /** gameNow() until which this player can't receive the Relic (post-pass rotation rule). */
+  relicRecatchUntil?: number;
+
+  // ── Teammate (local stand-in for other players until netcode lands) ──────
+  teammate?: true;
+  /** Simple back-and-forth patrol between two XZ points, driven by teammateSystem. */
+  patrol?: { a: [number, number]; b: [number, number]; toB: boolean };
+  /** gameNow() when this teammate caught the Relic — they pass it back after a hold. */
+  relicHeldSince?: number;
+
   // ── FX ──────────────────────────────────────────────────────────────────
   /** Floating damage number: transient, aged out by floatingNumberSystem. */
   floatingNumber?: { amount: number; spawnedAt: number; crit: boolean };
@@ -139,5 +193,8 @@ export interface Entity {
     count: number;
     /** Final radius the effect expands to. */
     radius: number;
+    /** Impact-out direction on XZ. Sparks use this to inherit the sword's momentum. */
+    dirX: number;
+    dirZ: number;
   };
 }

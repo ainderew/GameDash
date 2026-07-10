@@ -48,6 +48,8 @@ export const spawnImpactVfx = (
   point: Vector3Tuple,
   strength: HitStrength,
   colorHex: string,
+  dirX = 0,
+  dirZ = 0,
 ): void => {
   const spawnedAtReal = performance.now();
   const color = hexToRgb(colorHex);
@@ -57,10 +59,12 @@ export const spawnImpactVfx = (
       kind: 'spark',
       strength,
       spawnedAtReal,
-      lifetimeMs: feel.vfx.sparkLifetimeMs,
+      lifetimeMs: feel.vfx.sparkLifetimeMs[strength],
       color,
       count: feel.vfx.sparkCount[strength],
       radius: feel.vfx.sparkRadius[strength],
+      dirX,
+      dirZ,
     },
   });
   world.add({
@@ -73,6 +77,8 @@ export const spawnImpactVfx = (
       color,
       count: 0,
       radius: feel.vfx.ringRadius[strength],
+      dirX,
+      dirZ,
     },
   });
 };
@@ -116,7 +122,14 @@ export const onHitLanded = (ctx: HitContext): void => {
   target.hitFlashColor = hexToRgb(flashHex);
 
   // 6. IMPACT VFX — spark burst + shockwave ring exactly at the contact point.
-  spawnImpactVfx(world, point, strength, strength === 'heavy' ? feel.vfx.colorHeavy : feel.vfx.colorLight);
+  spawnImpactVfx(
+    world,
+    point,
+    strength,
+    strength === 'heavy' ? feel.vfx.colorHeavy : feel.vfx.colorLight,
+    dirX,
+    dirZ,
+  );
 
   // HUD juice: a player hit on an enemy feeds the combo counter.
   if (ctx.attacker?.playerControlled && !target.playerControlled) {

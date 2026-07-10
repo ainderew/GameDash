@@ -1,16 +1,25 @@
 import { useFrame } from '@react-three/fiber';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
-import { world } from '@/game/ecs/world';
+import { relics, world } from '@/game/ecs/world';
+import { passAim } from '@/game/combat/passAim';
 import type { Entity } from '@/game/ecs/components';
 import { AnimatedCharacter } from '@/game/entities/AnimatedCharacter';
 import type { CharState } from '@/game/entities/AnimatedCharacter';
+import {
+  applyCharacterTransform,
+  CHARACTER_FILL_LAYER,
+  PLAYER_CHARACTERS,
+} from '@/game/entities/characters';
+import { useUIStore } from '@/ui/store';
 import { WeaponMount } from '@/game/entities/Weapon';
 import { comboAt, type ComboClip } from '@/game/combat/combo';
 import { getWeapon } from '@/game/combat/weapons';
 import { useWeaponStore } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
+import { playFootstep } from '@/game/feel/audio';
+import { heightAt } from '@/game/world/terrainHeight';
 import { DODGE_DURATION_MS } from '@shared/balance';
 
 interface Props {
@@ -40,6 +49,11 @@ const HURT_ANIM_MS = 700;
 const DODGE_ANIM_MS = 450;
 /** Standing still this long switches the idle to the bored/fidget clip. */
 const BORED_IDLE_AFTER_MS = 3000;
+/** How long the throw follow-through shows after a pass launches. The player is NOT
+ * rooted during this — the clip plays over whatever they're doing (spec §8). */
+const THROW_FOLLOW_MS = 550;
+/** World units per left/right foot plant; cadence scales continuously with actual speed. */
+const STEP_LENGTH = { walk: 1.35, run: 1.75 } as const;
 /**
  * Between the sim (SystemRunner, -100) and the default-0 renderers. AnimatedCharacter's
  * useFrame registers BEFORE Player's (child effects first), so at equal priority it would
@@ -70,10 +84,19 @@ export const Player = ({ playerRef }: Props) => {
   const group = useRef<Group>(null);
   const entityRef = useRef<Entity | null>(null);
   const charState = useRef<CharState>('idle');
+  // Dev-only console handle (same pattern as __world / __passAim) — read the live
+  // animation state from tooling: window.__charState.current
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    (window as unknown as { __charState?: typeof charState }).__charState = charState;
+  }
 
   // Weapon: find the hand bone once the rig loads, then mount the current weapon onto it.
   const [handBone, setHandBone] = useState<Object3D | null>(null);
   const weaponId = useWeaponStore((s) => s.currentId);
+
+  // Which skinned model the avatar uses — all characters share the hero clip set.
+  const characterId = useUIStore((s) => s.playerCharacter);
+  useEffect(() => applyCharacterTransform(characterId), [characterId]);
   // Hero materials + their rest emissive, for the hit flash (monsters do this per-instance).
   const flashMats = useRef<{ mat: MeshStandardMaterial; base: [number, number, number] }[]>([]);
   const wasFlashing = useRef(false);
@@ -95,12 +118,22 @@ export const Player = ({ playerRef }: Props) => {
     setHandBone(hand);
   }, []);
 
+  const weapon = getWeapon(weaponId);
+
   // Latch each dodge so its roll clip outlives the (much shorter) dash itself.
   const dodgeAnimUntil = useRef(0);
   const lastDodgeStamp = useRef(0);
 
   /** gameNow() when the current uninterrupted idle began (null while doing anything). */
   const idleSince = useRef<number | null>(null);
+  /** True while pass-aiming — AnimatedCharacter freezes the throw clip at its wind-up. */
+  const throwHold = useRef(false);
+  /** gameNow() until which the throw follow-through plays after a launch. */
+  const throwFollowUntil = useRef(0);
+  /** startedAt of the last pass we latched, so each launch triggers exactly once. */
+  const lastThrowStamp = useRef<number | undefined>(undefined);
+  /** gameNow() when another foot plant may sound; uses game time, so hitstop stays silent. */
+  const nextFootstepAt = useRef(0);
 
   useEffect(() => {
     const entity = world.add(makePlayerEntity());
@@ -138,10 +171,25 @@ export const Player = ({ playerRef }: Props) => {
 
     const hurting = e.hitReactionAt != null && now < e.hitReactionAt + HURT_ANIM_MS;
 
+    // Relic throw: hold the wind-up while aiming AND planted — while aim-walking the
+    // legs play locomotion instead (a frozen full-body pose glides; the relic's aim
+    // pose + trajectory carry the "aiming" read until upper-body masking exists).
+    // On launch (aimed or quick pass) the follow-through plays for a beat, latched off
+    // the relic's flight state so it fires on the exact launch tick, once per pass.
+    throwHold.current = passAim.aiming;
+    const rs = relics.first?.relic;
+    if (rs?.mode === 'pass' && rs.thrower === e && rs.startedAt !== lastThrowStamp.current) {
+      lastThrowStamp.current = rs.startedAt;
+      throwFollowUntil.current = now + THROW_FOLLOW_MS;
+    }
+    const throwing =
+      (passAim.aiming && speed <= WALK_SPEED_THRESHOLD) || now < throwFollowUntil.current;
+
     let next: CharState;
     if (dead) next = 'death';
     else if (dodging) next = 'dodge';
     else if (attacking) next = ATTACK_STATE[comboAt(e.meleeCombo ?? 0).clip];
+    else if (throwing) next = 'throw';
     else if (hurting) next = 'hurt';
     else if (y > AIRBORNE_Y) next = 'jump';
     else if (speed > RUN_SPEED_THRESHOLD) next = 'run';
@@ -153,6 +201,20 @@ export const Player = ({ playerRef }: Props) => {
     }
     if (next !== 'idle' && next !== 'idle-bored') idleSince.current = null;
     charState.current = next;
+
+    // Audio follows actual horizontal travel rather than render delta: stopping, collisions,
+    // and any future movement-speed buffs naturally retime the left/right foot cadence.
+    const locomotion = next === 'walk' || next === 'run';
+    const grounded = Math.abs(y - heightAt(x, z)) < 0.08 && Math.abs(e.velocity.linear[1]) < 0.08;
+    if (!locomotion || !grounded) {
+      nextFootstepAt.current = now;
+    } else if (now >= nextFootstepAt.current) {
+      const running = next === 'run';
+      if (playFootstep(running)) {
+        const stepMs = (STEP_LENGTH[running ? 'run' : 'walk'] / Math.max(speed, 0.01)) * 1000;
+        nextFootstepAt.current = now + stepMs;
+      }
+    }
 
     // Hit flash: additive red emissive on the hero's materials, fading over the flash window.
     const flashUntil = e.hitFlashUntil ?? 0;
@@ -170,8 +232,22 @@ export const Player = ({ playerRef }: Props) => {
 
   return (
     <group ref={group}>
+      {/* Soft overhead bounce that follows the player and lights ONLY the playable
+          character (layer-scoped) — keeps the backlit side readable without touching
+          world lighting. No shadows, so it costs one light slot and nothing else. */}
+      <pointLight
+        position={[0, 2.4, 0]}
+        intensity={4}
+        distance={6}
+        decay={2}
+        color="#ffe7cc"
+        onUpdate={(l) => l.layers.set(CHARACTER_FILL_LAYER)}
+      />
+      {/* key: full remount on character switch — useAnimations caches actions by clip
+          name against the old skeleton, which leaves the new rig undriven (T-pose). */}
       <AnimatedCharacter
-        characterPath="/models/hero/hero.glb"
+        key={characterId}
+        characterPath={PLAYER_CHARACTERS[characterId].modelPath}
         idlePath="/models/hero/anim-idle.glb"
         boredPath="/models/hero/anim-idle-bored.glb"
         walkPath="/models/hero/anim-walk.glb"
@@ -184,11 +260,13 @@ export const Player = ({ playerRef }: Props) => {
         light1Path="/models/hero/anim-attack-l1.glb"
         light2Path="/models/hero/anim-attack-l2.glb"
         finisherPath="/models/hero/anim-finisher.glb"
+        throwPath="/models/hero/anim-throw.glb"
         targetHeight={1.8}
         stateRef={charState}
+        throwHoldRef={throwHold}
         onRigReady={onRigReady}
       />
-      {handBone && <WeaponMount bone={handBone} def={getWeapon(weaponId)} />}
+      {handBone && <WeaponMount bone={handBone} def={weapon} stateRef={charState} />}
     </group>
   );
 };

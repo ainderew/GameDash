@@ -84,7 +84,9 @@ export const CombatHUD = () => {
         <span className="font-semibold text-white/90">L-click / J</span> melee ·{' '}
         <span className="font-semibold text-white/90">R-click / K</span> shoot ·{' '}
         <span className="font-semibold text-white/90">F</span> parry ·{' '}
-        <span className="font-semibold text-white/90">Q</span> swap weapon ·{' '}
+        <span className="font-semibold text-white/90">E</span> pass relic (hold: aim) ·{' '}
+        <span className="font-semibold text-white/90">G</span> drop relic ·{' '}
+        <span className="font-semibold text-white/90">Tab</span> swap weapon ·{' '}
         <span className="font-semibold text-white/90">Mouse</span> camera ·{' '}
         <span className="font-semibold text-white/90">Wheel</span> zoom ·{' '}
         <span className="font-semibold text-white/90">Esc</span> free cursor

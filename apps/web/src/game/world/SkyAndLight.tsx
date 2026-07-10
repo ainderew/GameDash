@@ -1,27 +1,18 @@
 import { useMemo } from 'react';
 import { BackSide, Color, ShaderMaterial, Vector3 } from 'three';
 
-/**
- * Sun direction shared by the sky dome and the shadow-casting directional light.
- * Elevation ~16° — low enough that the sun disc is actually visible in-frame (the orbit
- * camera never pitches above ~19° over the horizon), Enshrouded-style long warm light.
- */
-export const SUN_POSITION: [number, number, number] = [38, 12, 18];
+/** Golden-hour sun shared by the sky, foliage shaders, and shadow light. */
+export const SUN_POSITION: [number, number, number] = [-30, 11, -56];
 
-/**
- * BotW-style stylized sky dome: a three-stop zenith→horizon gradient with the blue
- * compressed toward the horizon (the camera only ever sees the lowest ~20° of sky, where
- * a physically-based model is washed-out white), plus an HDR sun disc + Mie-style halo
- * that the bloom pass picks up. Screen-space dither kills gradient banding.
- *
- * Colors are authored in sRGB and converted to linear by THREE.Color; the ACES pass in
- * PostFX desaturates slightly, so they're kept a touch more saturated than the target.
- */
-const SKY_UNIFORMS = {
-  uZenith: '#2a66bd',
-  uSky: '#4e8fd4',
-  uHorizon: '#cde5f2',
-  uSunColor: '#fff2d0',
+export const WORLD_PALETTE = {
+  zenith: '#607bc2',
+  upperSky: '#91a8d6',
+  horizon: '#f4b39d',
+  sunset: '#ff9c79',
+  cloudLight: '#ffe5c8',
+  cloudShadow: '#b989a8',
+  sun: '#fff0bd',
+  fog: '#dca99b',
 };
 
 const skyVertex = /* glsl */ `
@@ -34,98 +25,139 @@ const skyVertex = /* glsl */ `
 
 const skyFragment = /* glsl */ `
   uniform vec3 uZenith;
-  uniform vec3 uSky;
+  uniform vec3 uUpperSky;
   uniform vec3 uHorizon;
+  uniform vec3 uSunset;
+  uniform vec3 uCloudLight;
+  uniform vec3 uCloudShadow;
   uniform vec3 uSunColor;
   uniform vec3 uSunDir;
   varying vec3 vDir;
+
+  float hash31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+  }
+
+  float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash31(i), hash31(i + vec3(1.0, 0.0, 0.0)), f.x),
+          mix(hash31(i + vec3(0.0, 1.0, 0.0)), hash31(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+      mix(mix(hash31(i + vec3(0.0, 0.0, 1.0)), hash31(i + vec3(1.0, 0.0, 1.0)), f.x),
+          mix(hash31(i + vec3(0.0, 1.0, 1.0)), hash31(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+      f.z
+    );
+  }
+
+  float fbm(vec3 p) {
+    float value = 0.0;
+    value += noise3(p) * 0.52;
+    value += noise3(p * 2.03 + 7.1) * 0.28;
+    value += noise3(p * 4.11 + 19.7) * 0.14;
+    value += noise3(p * 8.07 + 43.2) * 0.06;
+    return value;
+  }
 
   void main() {
     vec3 dir = normalize(vDir);
     float h = dir.y;
 
-    // Compressed ramp: horizon white → sky blue by ~0.16, deep zenith by ~0.5, so the
-    // blue actually shows in the low band the gameplay camera can see.
-    vec3 col = mix(uHorizon, uSky, smoothstep(0.02, 0.16, h));
-    col = mix(col, uZenith, smoothstep(0.16, 0.5, h));
-    // Below the horizon (rarely visible past terrain): dim ground haze, no hard line.
-    col = mix(col, uHorizon * 0.85, smoothstep(0.0, -0.15, h));
+    // Periwinkle zenith, dusty blue mid-sky, and the peach horizon from the reference.
+    vec3 col = mix(uHorizon, uUpperSky, smoothstep(0.005, 0.18, h));
+    col = mix(col, uZenith, smoothstep(0.22, 0.62, h));
 
-    // Sun: small hot disc (HDR > bloom threshold) + tight glow + wide warm haze.
-    float s = clamp(dot(dir, uSunDir), 0.0, 1.0);
-    col += uSunColor * pow(s, 2200.0) * 3.5;
-    col += uSunColor * pow(s, 48.0) * 0.4;
-    col += uSunColor * pow(s, 6.0) * 0.12;
+    float sunDot = clamp(dot(dir, uSunDir), 0.0, 1.0);
+    float sunsetWash = pow(sunDot, 3.0) * (1.0 - smoothstep(0.34, 0.7, h));
+    col = mix(col, uSunset, sunsetWash * 0.56);
 
-    // Screen-space dither so the smooth gradient doesn't band in 8-bit.
+    // Puffy, painterly cloud banks. Sampling direction-space keeps the dome seamless.
+    vec3 cloudP = vec3(dir.x * 2.6, dir.y * 7.0 + 1.8, dir.z * 2.6);
+    float broad = fbm(cloudP);
+    float billow = fbm(cloudP * 1.7 + vec3(5.2, 1.1, -3.7));
+    float cloudShape = broad * 0.67 + billow * 0.33;
+    float cloudBand = smoothstep(-0.04, 0.12, h) * (1.0 - smoothstep(0.68, 0.96, h));
+    float clouds = smoothstep(0.46, 0.6, cloudShape) * cloudBand;
+    // Break up the bottom edge so the banks form discrete soft towers.
+    clouds *= smoothstep(0.38, 0.53, broad + h * 0.11);
+    float litEdge = smoothstep(0.48, 0.68, billow + sunDot * 0.16);
+    vec3 cloudColor = mix(uCloudShadow, uCloudLight, litEdge);
+    cloudColor = mix(cloudColor, uSunset, (1.0 - litEdge) * sunsetWash * 0.45);
+    col = mix(col, cloudColor, clouds * 0.88);
+
+    // Compact HDR disc, creamy inner halo, and a broad warm atmospheric glow.
+    col += uSunColor * pow(sunDot, 2600.0) * 5.5;
+    col += uSunColor * pow(sunDot, 90.0) * 0.58;
+    col += uSunColor * pow(sunDot, 9.0) * 0.11;
+
+    // Warm haze below the skyline, hiding the terrain/dome join.
+    col = mix(col, uHorizon * 0.82, smoothstep(0.02, -0.18, h));
+
     float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     col += (dither - 0.5) / 255.0;
-
     gl_FragColor = vec4(col, 1.0);
   }
 `;
 
 const SkyDome = () => {
-  const material = useMemo(() => {
-    return new ShaderMaterial({
-      uniforms: {
-        uZenith: { value: new Color(SKY_UNIFORMS.uZenith) },
-        uSky: { value: new Color(SKY_UNIFORMS.uSky) },
-        uHorizon: { value: new Color(SKY_UNIFORMS.uHorizon) },
-        uSunColor: { value: new Color(SKY_UNIFORMS.uSunColor) },
-        uSunDir: { value: new Vector3(...SUN_POSITION).normalize() },
-      },
-      vertexShader: skyVertex,
-      fragmentShader: skyFragment,
-      side: BackSide,
-      depthWrite: false,
-      fog: false,
-    });
-  }, []);
+  const material = useMemo(
+    () =>
+      new ShaderMaterial({
+        uniforms: {
+          uZenith: { value: new Color(WORLD_PALETTE.zenith) },
+          uUpperSky: { value: new Color(WORLD_PALETTE.upperSky) },
+          uHorizon: { value: new Color(WORLD_PALETTE.horizon) },
+          uSunset: { value: new Color(WORLD_PALETTE.sunset) },
+          uCloudLight: { value: new Color(WORLD_PALETTE.cloudLight) },
+          uCloudShadow: { value: new Color(WORLD_PALETTE.cloudShadow) },
+          uSunColor: { value: new Color(WORLD_PALETTE.sun) },
+          uSunDir: { value: new Vector3(...SUN_POSITION).normalize() },
+        },
+        vertexShader: skyVertex,
+        fragmentShader: skyFragment,
+        side: BackSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    [],
+  );
 
   return (
     <mesh material={material} frustumCulled={false} renderOrder={-1}>
-      {/* Radius must stay inside the camera far plane (2000) or the dome gets clipped. */}
-      <sphereGeometry args={[900, 32, 24]} />
+      <sphereGeometry args={[900, 48, 32]} />
     </mesh>
   );
 };
 
-/**
- * Stylized-fantasy sky + lighting: gradient blue sky with a visible low sun, sky/ground
- * hemisphere bounce, and distance fog tinted to the sky's horizon color so terrain
- * dissolves into the sky with no seam (the BotW aerial-perspective trick).
- */
-export const SkyAndLight = () => {
-  return (
-    <>
-      <SkyDome />
-      {/* Fog color === dome horizon color; density low enough that mid-range hills stay
-          readable instead of becoming a flat wall (BotW's near/mid/far layering). */}
-      <fogExp2 attach="fog" args={[SKY_UNIFORMS.uHorizon, 0.006]} />
+/** Sunset sky, aerial perspective, and a warm key/cool-bounce lighting rig. */
+export const SkyAndLight = () => (
+  <>
+    <SkyDome />
+    <fogExp2 attach="fog" args={[WORLD_PALETTE.fog, 0.0075]} />
 
-      {/* Bright sky key from above, lush bounce from the grass below. */}
-      <hemisphereLight args={['#bcd9f7', '#8a9a4a', 1.15]} />
+    {/* Low ambient keeps the golden key directional and gives foliage real depth. */}
+    <hemisphereLight args={['#b8c8ec', '#596a35', 1.02]} />
 
-      {/* Warm sun. */}
-      <directionalLight
-        castShadow
-        position={SUN_POSITION}
-        intensity={3.1}
-        color="#ffedbc"
-        shadow-mapSize={[1024, 1024]}
-        shadow-camera-left={-38}
-        shadow-camera-right={38}
-        shadow-camera-top={38}
-        shadow-camera-bottom={-38}
-        shadow-camera-near={1}
-        shadow-camera-far={140}
-        shadow-bias={-0.0004}
-        shadow-normalBias={0.02}
-      />
+    <directionalLight
+      castShadow
+      position={SUN_POSITION}
+      intensity={4.15}
+      color="#ffd59a"
+      shadow-mapSize={[2048, 2048]}
+      shadow-camera-left={-42}
+      shadow-camera-right={42}
+      shadow-camera-top={42}
+      shadow-camera-bottom={-42}
+      shadow-camera-near={1}
+      shadow-camera-far={170}
+      shadow-bias={-0.00035}
+      shadow-normalBias={0.035}
+      shadow-radius={3}
+    />
 
-      {/* Subtle cool fill from the opposite side to open up shadows. */}
-      <directionalLight position={[-20, 12, -16]} intensity={0.42} color="#cfe0ff" />
-    </>
-  );
-};
+    <directionalLight position={[24, 15, 30]} intensity={0.38} color="#a9c4ff" />
+  </>
+);

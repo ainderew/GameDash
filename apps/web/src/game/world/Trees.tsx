@@ -4,6 +4,7 @@ import { Box3, Vector3 } from 'three';
 import type { Group, Mesh } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt } from '@/game/world/Terrain';
+import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
 
 /**
  * Stylized Nature MegaKit trees: five CommonTree variants for the treeline
@@ -56,9 +57,9 @@ const LANDMARK_TREES = [
 ];
 
 /** Scatter tree placements in an annulus, skipping the steep peaks. */
-const placeTrees = (count: number): Placement[] => {
+const placeTrees = (count: number, clearRadius: number): Placement[] => {
   const rng = mulberry32(773311);
-  const rMin = 14;
+  const rMin = Math.max(14, clearRadius);
   const rMax = 88;
   const items: Placement[] = [];
   let guard = 0;
@@ -104,7 +105,7 @@ const placeTrees = (count: number): Placement[] => {
  * lightweight clones (shared geometry/material). Each tree's group pivots at its base
  * and gently sways (rotation only — no vertex work) to keep the world alive.
  */
-export const Trees = () => {
+export const Trees = ({ clearRadius = 0 }: { clearRadius?: number }) => {
   const scenes: Group[] = [
     useGameModel(MODEL_PATHS[0]!).scene,
     useGameModel(MODEL_PATHS[1]!).scene,
@@ -116,7 +117,7 @@ export const Trees = () => {
   ];
   const swayRefs = useRef<(Group | null)[]>([]);
 
-  const placements = useMemo(() => placeTrees(30), []);
+  const placements = useMemo(() => placeTrees(30, clearRadius), [clearRadius]);
 
   // Normalize each source model once: scale to BASE_HEIGHT, feet at the group origin.
   // (yLift is in unscaled model units — the group's scale carries it to world units.)
@@ -139,6 +140,7 @@ export const Trees = () => {
         object.traverse((child) => {
           const mesh = child as Mesh;
           if (mesh.isMesh) {
+            mesh.material = enhanceNatureMaterial(mesh.material);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
           }

@@ -20,7 +20,38 @@ export interface MaterialCollected {
   tableId: string;
 }
 
-export type GameEvent = LootDropped | PlayerDowned | MaterialCollected;
+// ── Relic pass lifecycle ────────────────────────────────────────────────────
+// Feedback (audio/UI) hangs off these events, never off the pass call sites —
+// when netcode lands, the emits move to the server-ack handler and every
+// consumer follows unchanged. (Spec: "once the server accepts a pass".)
+
+export interface RelicPassLaunched {
+  type: 'RelicPassLaunched';
+  /** True when the LOCAL player is the receiver — gates receiver-side feedback. */
+  toLocalPlayer: boolean;
+  /** Launch position (directional audio panning). */
+  from: Vector3Tuple;
+}
+
+export interface RelicCaught {
+  type: 'RelicCaught';
+  byLocalPlayer: boolean;
+  position: Vector3Tuple;
+}
+
+export interface RelicPassFailed {
+  type: 'RelicPassFailed';
+  position: Vector3Tuple;
+  reason: 'receiver_downed' | 'receiver_escaped';
+}
+
+export type GameEvent =
+  | LootDropped
+  | PlayerDowned
+  | MaterialCollected
+  | RelicPassLaunched
+  | RelicCaught
+  | RelicPassFailed;
 
 let queue: GameEvent[] = [];
 

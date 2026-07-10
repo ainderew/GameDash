@@ -7,6 +7,7 @@ import { GrassField } from '@/game/world/GrassField';
 import { Trees } from '@/game/world/Trees';
 import { heightAt } from '@/game/world/Terrain';
 import { useGameModel } from '@/lib/loaders';
+import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
 
 interface Props {
   /** Camera de-occlusion reads these landmark meshes. */
@@ -36,7 +37,9 @@ export const Zone = ({ obstacles }: Props) => {
       if (m.isMesh && !mesh) mesh = m;
     });
     if (!mesh) throw new Error('boulder model has no mesh');
-    return mesh;
+    const clone = mesh.clone();
+    clone.material = enhanceNatureMaterial(mesh.material);
+    return clone;
   }, [boulderGltf.scene]);
 
   useEffect(() => {

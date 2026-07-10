@@ -11,7 +11,9 @@ import {
 } from '@/game/combat/combo';
 import { playWhoosh } from '@/game/feel/audio';
 import { currentWeapon } from '@/game/combat/weaponStore';
+import { weaponSockets } from '@/game/combat/weaponSockets';
 import { computeDamage } from '@shared/combat';
+import { Vector3 } from 'three';
 import {
   MELEE_DAMAGE,
   MELEE_RANGE,
@@ -29,6 +31,12 @@ export interface AttackIntent {
 
 /** How long a melee press made during the swing lockout stays buffered, ms. */
 export const MELEE_BUFFER_MS = 250;
+
+// Renderer-owned sockets refine visual contact with the previous rendered blade pose. Gameplay
+// still uses the deterministic arc broad phase below, which keeps systems testable/headless.
+const bladeBase = new Vector3();
+const bladeTip = new Vector3();
+const bladeContact = new Vector3();
 
 /** Snap an entity's facing toward a world-space XZ point (cursor aim). */
 const faceToward = (e: Entity, aimAt: [number, number]): void => {
@@ -159,15 +167,32 @@ export const weaponSystem = (world: World<Entity>, now: number): void => {
 
       // Contact point on the near edge of the target, chest height — where sparks land.
       const mr = m.radius ?? 0.5;
+      const point: [number, number, number] = [
+        m.transform.position[0] - ux * mr,
+        m.transform.position[1] + 1.0,
+        m.transform.position[2] - uz * mr,
+      ];
+      const baseSocket = weaponSockets.base;
+      const tipSocket = weaponSockets.tip;
+      if (baseSocket && tipSocket) {
+        baseSocket.getWorldPosition(bladeBase);
+        tipSocket.getWorldPosition(bladeTip);
+        bladeContact.set(point[0], point[1], point[2]);
+        const blade = bladeTip.sub(bladeBase);
+        const lenSq = blade.lengthSq();
+        if (lenSq > 1e-6) {
+          const fraction = Math.max(0, Math.min(1, bladeContact.sub(bladeBase).dot(blade) / lenSq));
+          bladeBase.addScaledVector(blade, fraction);
+          point[0] = bladeBase.x;
+          point[1] = bladeBase.y;
+          point[2] = bladeBase.z;
+        }
+      }
       dealDamage(world, m, computeDamage(MELEE_DAMAGE * move.damageMul), now, false, {
         attacker: player,
         strength: move.weight,
         dir: [ux, uz],
-        point: [
-          m.transform.position[0] - ux * mr,
-          m.transform.position[1] + 1.0,
-          m.transform.position[2] - uz * mr,
-        ],
+        point,
       });
       atk.hitSet.add(m);
     }

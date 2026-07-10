@@ -5,6 +5,8 @@ import { Box3, LoopOnce, LoopRepeat, Vector3 } from 'three';
 import type { AnimationClip, Group, Object3D } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
+import { deMetalize } from '@/lib/materials';
+import { CHARACTER_FILL_LAYER } from '@/game/entities/characters';
 import { heroTransform } from '@/game/entities/heroConfig';
 import { ATTACK_CLIP_S, ATTACK_TIMESCALE, type ComboClip } from '@/game/combat/combo';
 
@@ -18,6 +20,7 @@ export type CharState =
   | 'dodge'
   | 'hurt'
   | 'death'
+  | 'throw'
   | 'attack-spin'
   | 'attack-light1'
   | 'attack-light2'
@@ -41,9 +44,17 @@ interface Props {
   light1Path: string;
   light2Path: string;
   finisherPath: string;
+  /** Relic throw clip (wind-up → release → follow-through). */
+  throwPath: string;
   targetHeight?: number;
   /** Owner writes the desired CharState each frame; the machine crossfades to it. */
   stateRef: React.MutableRefObject<CharState>;
+  /**
+   * While true and the 'throw' state is active, the clip plays up to its wind-up frame
+   * and FREEZES there (aim hold). Dropping to false releases the throw — the rest of
+   * the clip plays. Pause only stops clip time; crossfade weights keep blending.
+   */
+  throwHoldRef?: React.MutableRefObject<boolean>;
   /** Called once the rig is loaded, with its root — used to find bones (e.g. RightHand). */
   onRigReady?: (root: Object3D) => void;
 }
@@ -60,7 +71,18 @@ const FAST_STATES: ReadonlySet<CharState> = new Set([
   'attack-spin',
   'attack-finisher',
   'dodge',
+  'throw',
 ]);
+
+// ── Relic throw clip windows (seconds in CLIP time, pre-timeScale) ─────────
+/** Skip the clip's slow approach; enter partway into the wind-up (aim hold only). */
+const THROW_START_S = 0.3;
+/**
+ * The aim-hold pose AND the release point: an aim hold plays up to here and freezes;
+ * a throw entered WITHOUT a hold (quick pass) starts here directly, so the arm whips
+ * the same instant the relic launches instead of winding up after it's gone.
+ */
+const THROW_HOLD_S = 1.05;
 
 /**
  * Per-state clip start offset, seconds. The 'Stand To Roll' dodge clip has a short
@@ -75,6 +97,8 @@ const START_AT: Partial<Record<CharState, number>> = { dodge: 0.1 };
  */
 export const STATE_TIMESCALE: Partial<Record<CharState, number>> = {
   dodge: 2,
+  // The Mixamo throw is leisurely mocap (3.8 s) — run it hot so the release snaps.
+  throw: 1.6,
 };
 
 /** Which combat clip each attack state plays — for duration stamping + speed lookup. */
@@ -96,6 +120,7 @@ const LOOPS: Record<CharState, boolean> = {
   dodge: false,
   hurt: false,
   death: false,
+  throw: false,
   'attack-spin': false,
   'attack-light1': false,
   'attack-light2': false,
@@ -122,8 +147,10 @@ export const AnimatedCharacter = ({
   light1Path,
   light2Path,
   finisherPath,
+  throwPath,
   targetHeight = 1.8,
   stateRef,
+  throwHoldRef,
   onRigReady,
 }: Props) => {
   const character = useGameModel(characterPath);
@@ -139,6 +166,7 @@ export const AnimatedCharacter = ({
   const light1 = useGameModel(light1Path);
   const light2 = useGameModel(light2Path);
   const finisher = useGameModel(finisherPath);
+  const throwClip = useGameModel(throwPath);
   const group = useRef<Group>(null);
 
   // Normalize to targetHeight from the bind-pose bounds (Mixamo/Tripo export scale varies).
@@ -150,17 +178,20 @@ export const AnimatedCharacter = ({
   }, [character.scene, targetHeight]);
 
   useEffect(() => {
+    deMetalize(character.scene); // Tripo bakes metalness 0.4 — blackens diffuse (see helper)
     character.scene.traverse((child) => {
-      const m = child as {
+      const m = child as unknown as {
         isMesh?: boolean;
         castShadow?: boolean;
         receiveShadow?: boolean;
         frustumCulled?: boolean;
+        layers?: { enable: (l: number) => void };
       };
       if (m.isMesh) {
         m.castShadow = true;
         m.receiveShadow = true;
         m.frustumCulled = false; // skinned bounds jitter; don't cull mid-swing
+        m.layers?.enable(CHARACTER_FILL_LAYER); // receive the player-only fill light
       }
     });
     onRigReady?.(character.scene);
@@ -186,6 +217,7 @@ export const AnimatedCharacter = ({
       ['attack-light1', light1.animations[0]],
       ['attack-light2', light2.animations[0]],
       ['attack-finisher', finisher.animations[0]],
+      ['throw', throwClip.animations[0]],
     ];
     return named
       .filter((n): n is [CharState, AnimationClip] => n[1] !== undefined)
@@ -210,6 +242,7 @@ export const AnimatedCharacter = ({
     light1.animations,
     light2.animations,
     finisher.animations,
+    throwClip.animations,
   ]);
 
   const { actions } = useAnimations(clips, group);
@@ -236,6 +269,14 @@ export const AnimatedCharacter = ({
       g.scale.setScalar(scale * heroTransform.scaleMul);
     }
 
+    // Throw aim-hold: while E is held, the throw clip advances to its wind-up frame and
+    // freezes there (paused stops CLIP time only — crossfade weights keep blending, so
+    // entering the hold still eases in). Releasing unpauses: the throw plays through.
+    if (current.current === 'throw') {
+      const a = actions.throw;
+      if (a) a.paused = throwHoldRef?.current === true && a.time >= THROW_HOLD_S;
+    }
+
     // State machine crossfade.
     const next = stateRef.current;
     if (next === current.current) return;
@@ -245,7 +286,10 @@ export const AnimatedCharacter = ({
     const fade = FAST_STATES.has(next) ? FADE_FAST : FADE;
     from?.fadeOut(fade);
     to.reset();
-    to.time = START_AT[next] ?? 0;
+    // Throw entry point depends on context: holding = play the wind-up (then freeze);
+    // launching cold (quick pass) = start at the release so the motion matches the relic.
+    if (next === 'throw') to.time = throwHoldRef?.current ? THROW_START_S : THROW_HOLD_S;
+    else to.time = START_AT[next] ?? 0;
     // Read the (live-tunable) speed at swing start so leva edits apply immediately.
     // Attack states pull from combat data so playback speed matches the gameplay window.
     const combatClip = ATTACK_CLIP_FOR_STATE[next];

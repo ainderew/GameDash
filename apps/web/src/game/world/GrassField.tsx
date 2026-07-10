@@ -11,10 +11,12 @@ import {
   StaticDrawUsage,
   UniformsLib,
   Vector2,
+  Vector3,
 } from 'three';
 import type { Mesh, MeshStandardMaterial, Texture } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt, pathMask } from '@/game/world/terrainHeight';
+import { SUN_POSITION } from '@/game/world/SkyAndLight';
 
 /**
  * GRASS FIELD v3 — instanced tuft models from the Stylized Nature MegaKit,
@@ -55,8 +57,8 @@ const TINT_CELL = 6; // world-units per patch of coherent colour variation
 
 // Root ≈ the average terrain colour at play level (the grassLow→grassHigh splat,
 // Terrain.tsx) — THE trick that melts the tufts into the ground.
-const ROOT_COLOR = '#79b224';
-const SSS_COLOR = '#d8e07a';
+const ROOT_COLOR = '#4d7223';
+const SSS_COLOR = '#f1c875';
 
 interface Variant {
   path: string;
@@ -74,28 +76,28 @@ interface Variant {
 const VARIANTS: Variant[] = [
   {
     path: '/models/grass/Grass_Common_Short.gltf', // 155 tris — the dense base layer
-    count: 3400,
+    count: 4400,
     ringFraction: 0.14,
     scale: [0.65, 1.05],
     yScale: [0.8, 1.25],
   },
   {
     path: '/models/grass/Grass_Common_Tall.gltf', // 326 tris — mid-height fill
-    count: 700,
+    count: 860,
     ringFraction: 0.25,
     scale: [0.55, 0.85],
     yScale: [0.8, 1.15],
   },
   {
     path: '/models/grass/Grass_Wispy_Short.gltf', // 494 tris — feathery accents
-    count: 260,
+    count: 310,
     ringFraction: 0.1,
     scale: [0.6, 1.0],
     yScale: [0.85, 1.2],
   },
   {
     path: '/models/grass/Grass_Wispy_Tall.gltf', // 622 tris — tall silhouette accents
-    count: 160,
+    count: 190,
     ringFraction: 0.35,
     scale: [0.5, 0.8],
     yScale: [0.85, 1.15],
@@ -118,6 +120,7 @@ const VERT = /* glsl */ `
   varying float vAO;
   varying vec2  vUv;
   varying vec3  vTint;
+  varying vec3  vWorldNormal;
   #include <fog_pars_vertex>
 
   float hash12(vec2 p) {
@@ -140,6 +143,7 @@ const VERT = /* glsl */ `
     // so waves ROLL across the field instead of every tuft pulsing in place.
     vec3 root = (modelMatrix * instanceMatrix[3]).xyz;
     vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vWorldNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
 
     float phase  = dot(root.xz, uWindDir) * uWindScale;
     float jitter = hash12(root.xz) * 6.2831;
@@ -165,11 +169,15 @@ const FRAG = /* glsl */ `
   uniform sampler2D uMap;
   uniform vec3 uRootColor;
   uniform vec3 uSSSColor;
+  uniform vec3 uSunDir;
+  uniform vec3 uAmbientLight;
+  uniform vec3 uSunLight;
 
   varying float vT;
   varying float vAO;
   varying vec2  vUv;
   varying vec3  vTint;
+  varying vec3  vWorldNormal;
   #include <fog_pars_fragment>
 
   void main() {
@@ -178,9 +186,13 @@ const FRAG = /* glsl */ `
     // Melt the lowest part of each tuft into the terrain colour.
     col = mix(uRootColor, col, smoothstep(0.0, 0.45, vT));
     // Pack's baked occlusion separates the blades inside a tuft (kept subtle).
-    col *= mix(0.72, 1.04, vAO);
-    // Fake SSS: warm translucency where sunlight punches through the thin tips.
-    col += uSSSColor * pow(vT, 3.0) * 0.16;
+    col *= mix(0.67, 1.03, vAO);
+    vec3 n = normalize(vWorldNormal);
+    float wrappedSun = clamp((dot(n, normalize(uSunDir)) + 0.48) / 1.48, 0.0, 1.0);
+    float skyFacing = 0.72 + 0.28 * clamp(n.y, 0.0, 1.0);
+    col *= uAmbientLight * skyFacing + uSunLight * wrappedSun * 0.76;
+    // Restrained warm translucency on sun-facing tips.
+    col += uSSSColor * pow(vT, 3.0) * wrappedSun * 0.075;
     col *= vTint;
 
     gl_FragColor = vec4(col, 1.0);
@@ -224,7 +236,6 @@ const prepareGeometry = (scene: { traverse: (cb: (o: unknown) => void) => void }
   geo.setAttribute('aT', new Float32BufferAttribute(aT, 1));
   geo.setAttribute('aAO', new Float32BufferAttribute(aAO, 1));
   geo.deleteAttribute('color');
-  geo.deleteAttribute('normal');
   return geo;
 };
 
@@ -236,7 +247,7 @@ const patchNoise = (x: number, z: number) => {
   return s - Math.floor(s);
 };
 
-const buildField = (geometries: BufferGeometry[], map: Texture) => {
+const buildField = (geometries: BufferGeometry[], map: Texture, clearRadius: number) => {
   const material = new ShaderMaterial({
     vertexShader: VERT,
     fragmentShader: FRAG,
@@ -250,6 +261,9 @@ const buildField = (geometries: BufferGeometry[], map: Texture) => {
       uMap: { value: map },
       uRootColor: { value: new Color(ROOT_COLOR) },
       uSSSColor: { value: new Color(SSS_COLOR) },
+      uSunDir: { value: new Vector3(...SUN_POSITION).normalize() },
+      uAmbientLight: { value: new Color('#c2cbae') },
+      uSunLight: { value: new Color('#e7bd82') },
     },
     side: DoubleSide,
     fog: true,
@@ -258,8 +272,8 @@ const buildField = (geometries: BufferGeometry[], map: Texture) => {
   const rng = mulberry32(20260709);
   const dummy = new Object3D();
   const tint = new Color();
-  const tintFresh = new Color('#ffffff');
-  const tintDry = new Color('#c9d6a3');
+  const tintFresh = new Color('#cbd9a7');
+  const tintDry = new Color('#9c8f58');
 
   const meshes = VARIANTS.map((variant, vi) => {
     const mesh = new InstancedMesh(geometries[vi]!, material, variant.count);
@@ -277,6 +291,7 @@ const buildField = (geometries: BufferGeometry[], map: Texture) => {
       const a = rng() * Math.PI * 2;
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
+      if (Math.hypot(x, z) < clearRadius) continue;
       if (heightAt(x, z) > MAX_TERRAIN_Y) continue; // stay off the steep peaks
       if (pathMask(x, z) > 0.35) continue; // and off the dirt trail
 
@@ -307,7 +322,7 @@ const buildField = (geometries: BufferGeometry[], map: Texture) => {
 };
 
 /** Stylized wind-swept grass tufts from the nature pack. Mounted once in Zone.tsx. */
-export const GrassField = () => {
+export const GrassField = ({ clearRadius = 0 }: { clearRadius?: number }) => {
   const commonShort = useGameModel(VARIANTS[0]!.path);
   const commonTall = useGameModel(VARIANTS[1]!.path);
   const wispyShort = useGameModel(VARIANTS[2]!.path);
@@ -325,7 +340,10 @@ export const GrassField = () => {
     return mat.map;
   }, [commonShort.scene]);
 
-  const { meshes, material } = useMemo(() => buildField(geometries, map), [geometries, map]);
+  const { meshes, material } = useMemo(
+    () => buildField(geometries, map, clearRadius),
+    [geometries, map, clearRadius],
+  );
 
   useEffect(
     () => () => {

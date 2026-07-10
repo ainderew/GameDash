@@ -21,6 +21,8 @@ export interface WeaponDef {
   class: WeaponClass;
   /** GLB to load (e.g. a Tripo export). When omitted, a procedural mesh is built. */
   modelPath?: string;
+  /** Original model-local hilt point. GLB mounts are re-centered here before hand rotation. */
+  modelGripPivot?: Vector3Tuple;
 
   // Procedural mesh dimensions (world units, pre-attach-scale). Ignored if modelPath is set.
   blade: { length: number; width: number; thickness: number; color: string; metalness: number };
@@ -29,6 +31,11 @@ export interface WeaponDef {
 
   /** Attach transform in the R_Hand bone's local space. Tunable in leva. */
   attach: { position: Vector3Tuple; rotation: Vector3Tuple; scale: number };
+  /** Alternate hand-local transform calibrated against the sword-running Mixamo clip. */
+  runAttach: { position: Vector3Tuple; rotation: Vector3Tuple; scale: number };
+  /** Local blade points used to generate the actual moving sword trail. */
+  bladeBase: Vector3Tuple;
+  bladeTip: Vector3Tuple;
 
   /** Melee reach multiplier vs the base MELEE_RANGE (a greatsword out-reaches a dagger). */
   reachMul: number;
@@ -59,6 +66,9 @@ export const WEAPONS: Record<string, WeaponDef> = {
     guard: { width: 0.14, depth: 0.14, color: '#20242b' },
     grip: { length: 0.26, radius: 0.02, color: '#7a1f1f' },
     attach: { ...DEFAULT_ATTACH },
+    runAttach: { position: [0, 0.02, 0], rotation: [Math.PI / 2, 0, 0], scale: 1 },
+    bladeBase: [0, 0.26, 0],
+    bladeTip: [0, 1.31, 0],
     reachMul: 1,
     weightBias: 'light',
     hands: 'two',
@@ -72,6 +82,9 @@ export const WEAPONS: Record<string, WeaponDef> = {
     guard: { width: 0.34, depth: 0.06, color: '#2b2118' },
     grip: { length: 0.34, radius: 0.026, color: '#3a2a1a' },
     attach: { position: [0, 0.02, 0], rotation: [Math.PI / 2, 0, 0], scale: 1 },
+    runAttach: { position: [0, 0.02, 0], rotation: [Math.PI / 2, 0, 0], scale: 1 },
+    bladeBase: [0, 0.34, 0],
+    bladeTip: [0, 1.84, 0],
     reachMul: 1.3,
     weightBias: 'heavy',
     hands: 'two',
@@ -85,6 +98,9 @@ export const WEAPONS: Record<string, WeaponDef> = {
     guard: { width: 0.1, depth: 0.03, color: '#1c1c22' },
     grip: { length: 0.14, radius: 0.018, color: '#243b53' },
     attach: { position: [0, 0.01, 0], rotation: [Math.PI / 2, 0, 0], scale: 1 },
+    runAttach: { position: [0, 0.01, 0], rotation: [Math.PI / 2, 0, 0], scale: 1 },
+    bladeBase: [0, 0.14, 0],
+    bladeTip: [0, 0.56, 0],
     reachMul: 0.8,
     weightBias: 'light',
     hands: 'one',
@@ -99,11 +115,19 @@ export const WEAPONS: Record<string, WeaponDef> = {
     name: 'Tripo Katana',
     class: 'katana',
     modelPath: '/models/weapon-tripo-sword.glb',
+    modelGripPivot: [0, -0.42, 0],
     // Fallback procedural dims (unused while modelPath resolves).
     blade: { length: 1.1, width: 0.06, thickness: 0.02, color: '#d9e2ec', metalness: 0.9 },
     guard: { width: 0.16, depth: 0.1, color: '#20242b' },
     grip: { length: 0.24, radius: 0.02, color: '#5a3a1a' },
-    attach: { position: [0.315, -0.135, 0.03], rotation: [3.0908, 0, -1.32], scale: 1 },
+    // Equivalent to the previously tuned idle transform after re-centering on the hilt.
+    attach: { position: [0.0102, -0.0221, 0.0263], rotation: [3.0908, 0, -1.32], scale: 0.7 },
+    // Keep the hilt in the same palm but rotate/offset the blade outward for Mixamo's
+    // sword-run wrist pose, avoiding the chest/head silhouette during arm swing.
+    runAttach: { position: [0.0102, -0.0221, 0.0263], rotation: [3.0908, 0.18, -1.9], scale: 0.7 },
+    // Socket coordinates are relative to the new grip-centred origin.
+    bladeBase: [0, 0.17, 0],
+    bladeTip: [0, 0.92, 0],
     reachMul: 1,
     weightBias: 'light',
     hands: 'two',

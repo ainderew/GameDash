@@ -4,6 +4,7 @@ import type { BufferGeometry, Group, Mesh } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt } from '@/game/world/Terrain';
 import { pathMask } from '@/game/world/terrainHeight';
+import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
 
 /**
  * Ground dressing from the Stylized Nature MegaKit, all instanced:
@@ -102,7 +103,7 @@ const buildInstanced = (scene: Group, items: Item[], cast: boolean, receive: boo
   });
   return sources.map((src) => {
     const geo = (src.geometry as BufferGeometry).clone().applyMatrix4(src.matrixWorld);
-    const mesh = new InstancedMesh(geo, src.material, items.length);
+    const mesh = new InstancedMesh(geo, enhanceNatureMaterial(src.material), items.length);
     mesh.instanceMatrix.setUsage(StaticDrawUsage);
     items.forEach((it, i) => {
       dummy.position.set(it.x, it.y - 0.02, it.z);
@@ -117,7 +118,7 @@ const buildInstanced = (scene: Group, items: Item[], cast: boolean, receive: boo
   });
 };
 
-export const Scatter = () => {
+export const Scatter = ({ clearRadius = 0 }: { clearRadius?: number }) => {
   const rock1 = useGameModel(PATHS.rocks[0]!);
   const rock2 = useGameModel(PATHS.rocks[1]!);
   const rock3 = useGameModel(PATHS.rocks[2]!);
@@ -135,13 +136,15 @@ export const Scatter = () => {
   const meshes = useMemo(() => {
     const rng = mulberry32(20260708);
     const out: InstancedMesh[] = [];
+    const withClearing = (items: Item[]) =>
+      clearRadius > 0 ? items.filter((item) => Math.hypot(item.x, item.z) >= clearRadius) : items;
     const add = (scenes: Group[], items: Item[], cast: boolean, receive: boolean) =>
-      partition(items, scenes.length).forEach((bucket, i) =>
+      partition(withClearing(items), scenes.length).forEach((bucket, i) =>
         out.push(...buildInstanced(scenes[i]!, bucket, cast, receive)),
       );
 
     // Mid-size rocks (natural height ≈ 2m) — the only scatter worth a shadow pass.
-    add([rock1.scene, rock2.scene, rock3.scene], scatter(rng, 70, 6, 80, 0.35, 1.4, 6), true, true);
+    add([rock1.scene, rock2.scene, rock3.scene], scatter(rng, 44, 6, 80, 0.35, 1.4, 6), true, true);
     // Tiny pebbles (≈ 10cm natural) sprinkled everywhere — the trail included.
     add(
       [pebble1.scene, pebble2.scene, pebble3.scene],
@@ -151,18 +154,18 @@ export const Scatter = () => {
     );
     // Clover patches hug the ground between grass tufts — sells a "textured" floor.
     // (Kept small and sparse: the purple blossoms get loud fast.)
-    add([clover1.scene, clover2.scene], scatter(rng, 110, 3, 58, 0.18, 0.34), false, true);
+    add([clover1.scene, clover2.scene], scatter(rng, 58, 3, 58, 0.16, 0.3), false, true);
     // Low broadleaf ground cover.
-    add([plant.scene], scatter(rng, 130, 3, 58, 1.0, 2.0), false, true);
+    add([plant.scene], scatter(rng, 165, 3, 58, 1.0, 2.0), false, true);
     // Sparse flowers for colour accents (multi-material: stem + petal meshes).
-    add([flower3.scene], scatter(rng, 45, 4, 55, 0.35, 0.55), false, true);
-    add([flower4.scene], scatter(rng, 35, 4, 55, 0.35, 0.55), false, true);
+    add([flower3.scene], scatter(rng, 68, 4, 55, 0.32, 0.52), false, true);
+    add([flower4.scene], scatter(rng, 54, 4, 55, 0.32, 0.52), false, true);
     // Ferns toward the treeline, mushrooms in the open — preview-render dressing.
     add([fern.scene], scatter(rng, 45, 10, 70, 0.3, 0.55, 5), false, true);
     add([mushroom.scene], scatter(rng, 24, 6, 55, 0.6, 1.1), false, true);
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, clover1, clover2, plant, flower3, flower4, fern, mushroom]);
+  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, clover1, clover2, plant, flower3, flower4, fern, mushroom, clearRadius]);
 
   // Cloned geometries are ours to dispose; materials belong to the loader cache.
   useEffect(

@@ -15,12 +15,12 @@ const SEG = 128;
  * tufts' root melt colour (uRootColor in GrassField.tsx) — keep them in sync.
  */
 const COLORS = {
-  grassLow: '#5da30f',
-  grassHigh: '#9cc63e',
-  grassDry: '#a3a832', // sun-scorched patches
-  dirt: '#b99c5f', // walking trail (pathMask, terrainHeight.ts)
-  dirtDark: '#96794a',
-  rock: '#8a8172',
+  grassLow: '#3f681a',
+  grassHigh: '#739a2b',
+  grassDry: '#918b35', // sun-scorched patches
+  dirt: '#b58a55', // walking trail (pathMask, terrainHeight.ts)
+  dirtDark: '#76583b',
+  rock: '#716b63',
 };
 
 /**
@@ -88,7 +88,9 @@ const TERRAIN_SPLAT = /* glsl */ `
     ground = mix(ground, uGrassDry, dry * 0.7);
 
     // High-frequency detail grain — the stylized stand-in for a detail map.
-    ground *= 0.93 + 0.14 * tnoise(p * 1.9);
+    ground *= 0.89 + 0.17 * tnoise(p * 1.9);
+    float speckle = smoothstep(0.73, 0.88, tnoise(p * 5.8 + vec2(17.0, -9.0)));
+    ground = mix(ground, ground * vec3(0.72, 0.79, 0.61), speckle * 0.22);
 
     // Dirt trail: mottled packed earth, cracks hinted by darker cells.
     float path = tpath(p);
@@ -99,6 +101,8 @@ const TERRAIN_SPLAT = /* glsl */ `
     // Rocky tint creeping up the hill crests. Thresholds sit just under HILL_MAX
     // (terrainHeight.ts caps ridges ~14) so slopes stay grassy and only tops rock over.
     float rocky = smoothstep(9.0, 13.5, h + (tfbm(p * 0.11) - 0.5) * 3.0);
+    float slope = 1.0 - smoothstep(0.48, 0.88, abs(normalize(vWorldNormal).y));
+    rocky = max(rocky, slope * smoothstep(0.4, 0.72, tfbm(p * 0.18 + 83.0)));
     ground = mix(ground, uRock, rocky);
 
     diffuseColor.rgb = ground;
@@ -125,7 +129,7 @@ export const Terrain = () => {
   }, []);
 
   const material = useMemo(() => {
-    const mat = new MeshStandardMaterial({ roughness: 0.95, metalness: 0 });
+    const mat = new MeshStandardMaterial({ roughness: 0.9, metalness: 0 });
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uGrassLow = { value: new Color(COLORS.grassLow) };
       shader.uniforms.uGrassHigh = { value: new Color(COLORS.grassHigh) };
@@ -134,15 +138,24 @@ export const Terrain = () => {
       shader.uniforms.uDirtDark = { value: new Color(COLORS.dirtDark) };
       shader.uniforms.uRock = { value: new Color(COLORS.rock) };
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;')
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;\nvarying vec3 vWorldNormal;')
+        .replace(
+          '#include <beginnormal_vertex>',
+          '#include <beginnormal_vertex>\nvWorldNormal = normalize(mat3(modelMatrix) * objectNormal);',
+        )
         .replace(
           '#include <begin_vertex>',
           '#include <begin_vertex>\nvWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
         );
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n${TERRAIN_GLSL}`)
-        .replace('#include <color_fragment>', TERRAIN_SPLAT);
+        .replace('#include <common>', `#include <common>\nvarying vec3 vWorldNormal;\n${TERRAIN_GLSL}`)
+        .replace('#include <color_fragment>', TERRAIN_SPLAT)
+        .replace(
+          '#include <roughnessmap_fragment>',
+          '#include <roughnessmap_fragment>\nroughnessFactor *= 0.88 + 0.12 * tnoise(vWorldPos.xz * 2.4);',
+        );
     };
+    mat.customProgramCacheKey = () => 'sunset-terrain-v2';
     return mat;
   }, []);
 

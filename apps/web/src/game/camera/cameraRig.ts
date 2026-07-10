@@ -1,4 +1,4 @@
-import { CAMERA_DISTANCE, CAMERA_HEIGHT } from '@shared/balance';
+import { CAMERA_DISTANCE } from '@shared/balance';
 
 /**
  * ORBIT RIG — the mouse-driven third-person camera state (AAA-style mouse look).
@@ -10,8 +10,9 @@ import { CAMERA_DISTANCE, CAMERA_HEIGHT } from '@shared/balance';
  */
 export const cameraRig = {
   yaw: 0,
-  pitch: Math.atan2(CAMERA_HEIGHT - 1, CAMERA_DISTANCE),
-  dist: Math.hypot(CAMERA_DISTANCE, CAMERA_HEIGHT - 1),
+  // Lower, wider establishing angle so the sky and long shadows enter the composition.
+  pitch: 0.2,
+  dist: CAMERA_DISTANCE + 2.5,
 };
 
 // Dev-only console handle (same pattern as window.__scene) so tooling can aim the camera.

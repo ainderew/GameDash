@@ -93,8 +93,14 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     }
   }
 
-  if (intent.jump && !rooted && isGrounded(entity)) {
+  const grounded = isGrounded(entity);
+  // Landing restores both jumps. Keep this here (before input is consumed) so a jump
+  // pressed on the landing frame starts the next two-jump sequence correctly.
+  if (grounded) entity.jumpsUsed = 0;
+
+  if (intent.jump && !rooted && (entity.jumpsUsed ?? 0) < 2) {
     velocity.linear[1] = JUMP_IMPULSE;
+    entity.jumpsUsed = (entity.jumpsUsed ?? 0) + 1;
   }
 };
 

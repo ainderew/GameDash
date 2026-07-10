@@ -45,15 +45,26 @@ describe('applyPlayerIntent', () => {
     expect(e.velocity!.linear[0]).toBeCloseTo(PLAYER_SPEED);
   });
 
-  it('applies jump impulse only when grounded', () => {
+  it('allows exactly one mid-air double jump and resets both jumps on landing', () => {
     const e = makePlayer();
     applyPlayerIntent(e, { moveX: 0, moveZ: 0, jump: true, dodge: false, sprint: false }, 1000);
     expect(e.velocity!.linear[1]).toBeCloseTo(JUMP_IMPULSE);
+    expect(e.jumpsUsed).toBe(1);
 
     e.transform!.position[1] = 5; // airborne
     e.velocity!.linear[1] = 0;
     applyPlayerIntent(e, { moveX: 0, moveZ: 0, jump: true, dodge: false, sprint: false }, 1000);
+    expect(e.velocity!.linear[1]).toBeCloseTo(JUMP_IMPULSE);
+    expect(e.jumpsUsed).toBe(2);
+
+    e.velocity!.linear[1] = 0;
+    applyPlayerIntent(e, { moveX: 0, moveZ: 0, jump: true, dodge: false, sprint: false }, 1000);
     expect(e.velocity!.linear[1]).toBe(0);
+
+    e.transform!.position[1] = 0; // landed
+    applyPlayerIntent(e, { moveX: 0, moveZ: 0, jump: true, dodge: false, sprint: false }, 1000);
+    expect(e.velocity!.linear[1]).toBeCloseTo(JUMP_IMPULSE);
+    expect(e.jumpsUsed).toBe(1);
   });
 
   it('dodge grants i-frames for the configured window', () => {

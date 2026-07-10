@@ -27,3 +27,6 @@ export const pickups = world.with('transform', 'pickup');
 
 /** Query archetype: anything with health (damage/death resolution). */
 export const mortal = world.with('health');
+
+/** Query archetype: the (single) living Relic. */
+export const relics = world.with('transform', 'relic');

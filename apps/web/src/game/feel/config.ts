@@ -87,8 +87,10 @@ export interface FeelConfig {
     sparkCount: ByStrength<number>;
     /** Spark travel distance at full life, world units. */
     sparkRadius: ByStrength<number>;
-    /** Spark burst lifetime, ms. */
-    sparkLifetimeMs: number;
+    /** Spark burst lifetime, ms. Kept longer than hitstop so the release has a tail. */
+    sparkLifetimeMs: ByStrength<number>;
+    /** Accent colors for flying shards; the central flash stays white-hot for clarity. */
+    sparkColors: ByStrength<Array<readonly [number, number, number]>>;
     /** Shockwave ring final radius, world units. */
     ringRadius: ByStrength<number>;
     /** Shockwave ring lifetime, ms. */
@@ -159,11 +161,31 @@ export const feel: FeelConfig = {
   },
 
   vfx: {
-    sparkCount: { light: 7, heavy: 14 },
-    sparkRadius: { light: 1.1, heavy: 2.1 },
-    sparkLifetimeMs: 260,
-    ringRadius: { light: 1.4, heavy: 2.8 },
-    ringLifetimeMs: 300,
+    // A deliberately small burst: the hot central cluster, directional streaks and bloom
+    // carry the read better than throwing hundreds of transparent particles at the screen.
+    sparkCount: { light: 8, heavy: 14 },
+    sparkRadius: { light: 1.25, heavy: 2.35 },
+    sparkLifetimeMs: { light: 340, heavy: 440 },
+    // Cyan/violet keep light cuts arcane; the heavier palette adds magenta and hotter gold.
+    // Values are linear RGB and are written straight into the pooled vertex-color buffer.
+    sparkColors: {
+      light: [
+        [0.3, 0.95, 1],
+        [0.65, 0.4, 1],
+        [1, 0.42, 0.82],
+        [1, 0.82, 0.2],
+      ],
+      heavy: [
+        [0.12, 1, 0.95],
+        [0.55, 0.18, 1],
+        [1, 0.16, 0.52],
+        [1, 0.62, 0.08],
+      ],
+    },
+    // This is a camera-facing contact halo, not a large ground decal. Keeping it compact
+    // prevents a rapid combo from covering the play space in transparent overdraw.
+    ringRadius: { light: 0.78, heavy: 1.35 },
+    ringLifetimeMs: 260,
     colorLight: '#fff4c2',
     colorHeavy: '#ffb03a',
   },

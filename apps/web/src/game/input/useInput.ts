@@ -17,6 +17,10 @@ export interface InputState {
   ranged: boolean;
   /** One-shot: opens the parry/block window; consumed each tick. */
   parry: boolean;
+  /** HELD: the Relic pass button (E). Tap = quick pass, hold = aim mode, release = throw. */
+  pass: boolean;
+  /** One-shot: intentionally drop the Relic as a short lob (G); consumed each tick. */
+  drop: boolean;
 }
 
 const KEY_MAP: Record<string, keyof InputState> = {
@@ -37,10 +41,12 @@ const KEY_MAP: Record<string, keyof InputState> = {
   KeyK: 'ranged',
   KeyF: 'parry',
   KeyL: 'parry',
+  KeyE: 'pass',
+  KeyG: 'drop',
 };
 
 /** One-shot edge-triggered actions — cleared by their consumer, not on keyup. */
-const ONE_SHOT: ReadonlySet<keyof InputState> = new Set(['melee', 'ranged', 'parry']);
+const ONE_SHOT: ReadonlySet<keyof InputState> = new Set(['melee', 'ranged', 'parry', 'drop']);
 
 const initial = (): InputState => ({
   forward: false,
@@ -53,6 +59,8 @@ const initial = (): InputState => ({
   melee: false,
   ranged: false,
   parry: false,
+  pass: false,
+  drop: false,
 });
 
 /**
@@ -70,6 +78,9 @@ export const useInput = (): MutableRefObject<InputState> => {
     };
     const onDown = (e: KeyboardEvent) => {
       resumeAudio(); // first keypress is a valid gesture to unlock WebAudio
+      // Jump is consumed by the simulation each frame; key-repeat must not turn a
+      // held Space bar into an unintended second jump.
+      if (e.code === 'Space' && e.repeat) return;
       set(e.code, true);
     };
     const onUp = (e: KeyboardEvent) => {

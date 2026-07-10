@@ -16,6 +16,17 @@ type Ctx = AudioContext;
 let ctx: Ctx | null = null;
 let master: GainNode | null = null;
 
+const FOOTSTEP_URLS = [
+  '/audio/footsteps/step-1.wav',
+  '/audio/footsteps/step-2.wav',
+  '/audio/footsteps/step-3.wav',
+  '/audio/footsteps/step-4.wav',
+  '/audio/footsteps/step-5.wav',
+] as const;
+let footstepBuffers: readonly AudioBuffer[] = [];
+let footstepLoad: Promise<void> | null = null;
+let nextFootstepVariation = 0;
+
 const supported = (): boolean =>
   typeof window !== 'undefined' &&
   (typeof AudioContext !== 'undefined' ||
@@ -37,13 +48,70 @@ const engine = (): Ctx | null => {
   return ctx;
 };
 
+/** Fetch/decode the five user-supplied variations once. Failure is safely retriable. */
+const loadFootsteps = (c: Ctx): void => {
+  if (footstepBuffers.length > 0 || footstepLoad) return;
+  footstepLoad = Promise.all(
+    FOOTSTEP_URLS.map(async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Unable to load footstep sample: ${url}`);
+      return c.decodeAudioData(await response.arrayBuffer());
+    }),
+  )
+    .then((buffers) => {
+      footstepBuffers = buffers;
+    })
+    .catch(() => {
+      // Audio must never interfere with movement if an asset is missing or decoding fails.
+      footstepLoad = null;
+    });
+};
+
 /**
  * Resume the audio context — call from a user-gesture handler (mousedown/keydown).
  * No-op until the browser allows it.
  */
 export const resumeAudio = (): void => {
   const c = engine();
-  if (c && c.state === 'suspended') void c.resume();
+  if (!c) return;
+  if (c.state === 'suspended') void c.resume();
+  loadFootsteps(c);
+};
+
+/**
+ * Play the next supplied footstep variation. The movement layer provides the cadence; this
+ * only shapes the short transient, small pitch variation, and run/walk weight. Returns false
+ * while samples are still loading so callers can retry the first step instead of dropping it.
+ */
+export const playFootstep = (running: boolean): boolean => {
+  if (!feel.audio.enabled) return false;
+  const c = engine();
+  if (!c || !master) return false;
+  loadFootsteps(c);
+  const buffer = footstepBuffers[nextFootstepVariation % footstepBuffers.length];
+  if (!buffer) return false;
+  nextFootstepVariation += 1;
+
+  master.gain.value = feel.audio.masterVolume;
+  const t = now(c);
+  const source = c.createBufferSource();
+  const gain = c.createGain();
+  source.buffer = buffer;
+  source.playbackRate.value = (running ? 1.08 : 0.94) + (Math.random() - 0.5) * 0.08;
+  source.connect(gain);
+  gain.connect(master);
+  const tail = running ? 0.3 : 0.4;
+  const peak = running ? 0.23 : 0.17;
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(peak, t + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + tail);
+  source.start(t);
+  source.stop(t + tail);
+  source.onended = () => {
+    source.disconnect();
+    gain.disconnect();
+  };
+  return true;
 };
 
 /** Short reusable white-noise buffer for transients + whooshes. */
@@ -156,4 +224,61 @@ export const playParry = (): void => {
     osc.start(t);
     osc.stop(t + 0.5);
   }
+};
+
+/**
+ * Soft directional chime — the receiver's "incoming pass" warning. Panned toward the
+ * thrower's side of the screen (see stereoPanFor). Deliberately gentle: it fires every
+ * few seconds during normal relay play.
+ */
+export const playPassChime = (pan: number): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  const t = now(c);
+
+  const panner = c.createStereoPanner();
+  panner.pan.value = Math.min(1, Math.max(-1, pan));
+  panner.connect(master);
+
+  const g = c.createGain();
+  g.connect(panner);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+
+  // A soft fifth (two sine partials) reads as "friendly incoming", not an alarm.
+  for (const [hz, at] of [
+    [880, 0],
+    [1320, 0.05],
+  ] as const) {
+    const osc = c.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = hz;
+    osc.connect(g);
+    osc.start(t + at);
+    osc.stop(t + 0.35);
+  }
+};
+
+/** Low, short error tone — a confirmed pass failed (receiver downed or escaped). */
+export const playPassFail = (): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  const t = now(c);
+
+  const g = c.createGain();
+  g.connect(master);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.22, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+
+  const osc = c.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(220, t);
+  osc.frequency.exponentialRampToValueAtTime(150, t + 0.22); // downward = "denied"
+  osc.connect(g);
+  osc.start(t);
+  osc.stop(t + 0.3);
 };

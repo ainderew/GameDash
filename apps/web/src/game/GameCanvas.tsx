@@ -8,15 +8,21 @@ import { Zone } from '@/game/world/Zone';
 import { PostFX } from '@/game/fx/PostFX';
 import { Player } from '@/game/entities/Player';
 import { SlashFX } from '@/game/fx/SlashFX';
+import { BladeTrail } from '@/game/fx/BladeTrail';
 import { AttackArcIndicator } from '@/game/fx/AttackArcIndicator';
 import { ImpactFX } from '@/game/fx/ImpactFX';
 import { MonsterModels } from '@/game/entities/MonsterModels';
 import { MonsterHealthBars } from '@/game/entities/MonsterHealthBars';
 import { Projectiles } from '@/game/entities/Projectiles';
+import { Relic } from '@/game/entities/Relic';
+import { Teammates } from '@/game/entities/Teammates';
+import { PassAimUI } from '@/game/fx/PassAimUI';
 import { Pickups } from '@/game/entities/Pickups';
 import { DamageNumbers } from '@/game/entities/DamageNumbers';
 import { SystemRunner } from '@/game/ecs/SystemRunner';
 import { ThirdPersonCamera } from '@/game/camera/ThirdPersonCamera';
+import { SocialHub } from '@/game/world/SocialHub';
+import { useUIStore } from '@/ui/store';
 
 const DEV = import.meta.env.DEV;
 
@@ -24,15 +30,17 @@ const DEV = import.meta.env.DEV;
 export const GameCanvas = () => {
   const playerRef = useRef<Object3D | null>(null);
   const obstacles = useRef<Object3D[]>([]);
+  const scene = useUIStore((state) => state.scene);
 
   return (
     <Canvas
-      shadows
+      shadows="soft"
+      flat
       dpr={[1, 1.5]}
       // far must exceed the Sky dome radius (500) or the sky gets clipped and never draws;
       // fog hides everything past ~300 anyway, so the big far plane costs nothing visually.
       camera={{ fov: 55, near: 0.1, far: 2000, position: [0, 3, 7] }}
-      gl={{ powerPreference: 'high-performance', antialias: true }}
+      gl={{ powerPreference: 'high-performance', antialias: false }}
       // Dev-only scene handle for console/tooling inspection (e.g. measuring placement).
       onCreated={(state) => {
         if (DEV) {
@@ -43,24 +51,32 @@ export const GameCanvas = () => {
       }}
     >
       {/* Bottom-left so it doesn't cover the leva panel (top-right). */}
-      {DEV && <Perf position="bottom-left" />}
+      {DEV && scene === 'expedition' && <Perf position="bottom-left" />}
 
       <Suspense fallback={null}>
         <SkyAndLight />
         <Physics>
-          <Zone obstacles={obstacles} />
+          {scene === 'hub' ? <SocialHub obstacles={obstacles} /> : <Zone obstacles={obstacles} />}
           <Player playerRef={playerRef} />
-          <SlashFX />
-          <AttackArcIndicator />
-          <ImpactFX />
-          <MonsterModels />
-          <MonsterHealthBars />
-          <Projectiles />
-          <Pickups />
-          <DamageNumbers />
+          {scene === 'expedition' && (
+            <>
+              <Teammates />
+              <Relic />
+              <PassAimUI />
+              <SlashFX />
+              <BladeTrail />
+              <AttackArcIndicator />
+              <ImpactFX />
+              <MonsterModels />
+              <MonsterHealthBars />
+              <Projectiles />
+              <Pickups />
+              <DamageNumbers />
+            </>
+          )}
           {/* Ticks BEFORE all renderer useFrames via negative priority (see SIM_PRIORITY) —
               same-frame input → ECS → animation, no one-frame lag. */}
-          <SystemRunner />
+          <SystemRunner mode={scene} />
           <ThirdPersonCamera target={playerRef} obstacles={obstacles} />
         </Physics>
         <PostFX />

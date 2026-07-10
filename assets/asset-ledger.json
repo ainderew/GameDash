@@ -151,6 +151,23 @@
       "rigged": false,
       "forward_axis": "+X",
       "notes": "Static (unrigged) low-poly stone-golem. Instanced, faceOffset=-PI/2, displayHeight 2.7."
+    },
+    {
+      "id": "heartwood-haven-hub-set",
+      "files": [
+        "apps/web/public/models/hub/roster-lodge.glb",
+        "apps/web/public/models/hub/summoning-shrine.glb",
+        "apps/web/public/models/hub/expedition-gate.glb",
+        "apps/web/public/models/hub/lantern-curved.glb",
+        "apps/web/public/models/hub/lantern-straight.glb"
+      ],
+      "source": "user-provided Tripo3D exports",
+      "license": "Commercial rights not yet recorded; verify the user's Tripo plan and generation ownership before shipping",
+      "commercial_ok": false,
+      "maps_to": "Heartwood Haven social hub landmarks",
+      "created_at": "2026-07-11",
+      "optimized": false,
+      "notes": "MVP source files copied from C:/Users/Andrew/Downloads/world_assets. Runtime normalizes scale and pivot. Optimize geometry/textures after layout approval; both lantern variants are intentionally used."
     }
   ]
 }

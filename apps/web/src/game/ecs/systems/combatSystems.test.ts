@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { World } from 'miniplex';
 import type { Entity } from '@/game/ecs/components';
 import { startMelee, weaponSystem } from '@/game/ecs/systems/weaponSystem';
-import { comboAt, moveAnimMs } from '@/game/combat/combo';
+import { comboAt, moveActiveWindow, moveAnimMs } from '@/game/combat/combo';
 import { aiSystem } from '@/game/ecs/systems/aiSystem';
 import { knockbackSystem } from '@/game/ecs/systems/knockbackSystem';
 import { healthSystem } from '@/game/ecs/systems/healthSystem';
@@ -41,6 +41,9 @@ describe('weaponSystem melee', () => {
     weaponSystem(world, 1100); // active frame 1
     weaponSystem(world, 1130); // active frame 2 (same swing → no double hit)
 
+    const { start } = moveActiveWindow(comboAt(0));
+    weaponSystem(world, 1000 + start + 1);
+    weaponSystem(world, 1000 + start + 30);
     expect(monster.health!.current).toBe(hpStart - MELEE_DAMAGE);
   });
 
@@ -57,6 +60,16 @@ describe('weaponSystem melee', () => {
     const player = addPlayer(world); // at origin, facing +Z
     startMelee(world, player, 1000, [5, 0]); // cursor ground point at +X
     expect(player.transform!.rotationY).toBeCloseTo(Math.PI / 2);
+  });
+
+  it('does not let a monster behind the player steal the swing', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world); // facing +Z
+    world.add(createMonster('chaser', [0, 0, -1.5]));
+
+    startMelee(world, player, 1000);
+
+    expect(player.transform!.rotationY).toBeCloseTo(0);
   });
 
   it('a dodge mid-swing kills the hitbox before it can land', () => {

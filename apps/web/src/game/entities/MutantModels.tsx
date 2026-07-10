@@ -1,5 +1,5 @@
 import { useFrame } from '@react-three/fiber';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimationMixer, Box3, LoopOnce, Vector3 } from 'three';
 import type { AnimationAction, AnimationClip, Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -7,6 +7,7 @@ import { monsters } from '@/game/ecs/world';
 import type { Entity } from '@/game/ecs/components';
 import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
+import { deMetalize } from '@/lib/materials';
 import { hitSquash } from '@/game/entities/hitSquash';
 import { gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
@@ -46,11 +47,13 @@ const WALK_THRESHOLD = 0.3;
 const ATTACK_TIMESCALE = 1.4;
 const FADE = 0.15;
 const FADE_FAST = 0.06;
+/** The export holds its upright pose through the opening beats; begin at the collapse. */
+const DEATH_START_AT = 0.7;
 /** Corpse lingers this long after the dying clip finishes, then unmounts. */
 const CORPSE_LINGER_MS = 1500;
 const MAX_CORPSES = 8;
 
-type MutantState = 'idle' | 'walk' | 'attack-l1' | 'attack-l2';
+type MutantState = 'idle' | 'walk' | 'attack-l1' | 'attack-l2' | 'death';
 type MutantClips = Record<'idle' | 'walk' | 'attackL1' | 'attackL2' | 'death', AnimationClip>;
 
 interface Norm {
@@ -131,6 +134,7 @@ const buildRig = (srcScene: Object3D): Rig => {
       if (m.isMeshStandardMaterial) flashMats.push({ mat: m, base: [m.emissive.r, m.emissive.g, m.emissive.b] });
     }
   });
+  deMetalize(root); // Tripo bakes metalness 0.4 — blackens diffuse (see helper)
   return { root, mixer: new AnimationMixer(root), flashMats };
 };
 
@@ -157,12 +161,14 @@ const Mutant = ({ entity, scene, clips, norm }: MutantProps) => {
       walk: rig.mixer.clipAction(clips.walk),
       'attack-l1': rig.mixer.clipAction(clips.attackL1),
       'attack-l2': rig.mixer.clipAction(clips.attackL2),
+      death: rig.mixer.clipAction(clips.death),
     };
-    for (const attack of [a['attack-l1'], a['attack-l2']]) {
+    for (const attack of [a['attack-l1'], a['attack-l2'], a.death]) {
       attack.setLoop(LoopOnce, 1);
       attack.clampWhenFinished = true;
-      attack.timeScale = ATTACK_TIMESCALE;
     }
+    a['attack-l1'].timeScale = ATTACK_TIMESCALE;
+    a['attack-l2'].timeScale = ATTACK_TIMESCALE;
     return a;
   }, [rig, clips]);
 
@@ -199,16 +205,31 @@ const Mutant = ({ entity, scene, clips, norm }: MutantProps) => {
 
     const [vx, , vz] = e.velocity?.linear ?? [0, 0, 0];
     const speed = Math.hypot(vx, vz);
-    const next: MutantState =
-      now < attackAnimUntil.current
+    // healthSystem removes dead entities before this renderer ticks, but React does not
+    // unmount the old visual until reconciliation. Switch that residual frame to death
+    // immediately, rather than letting it show another walking/idle pose.
+    const dead = (e.health?.current ?? 1) <= 0;
+    const next: MutantState = dead
+      ? 'death'
+      : now < attackAnimUntil.current
         ? attackVariant.current
         : speed > WALK_THRESHOLD
           ? 'walk'
           : 'idle';
     if (next !== current.current) {
-      const fade = next.startsWith('attack') ? FADE_FAST : FADE;
-      actions[current.current].fadeOut(fade);
-      actions[next].reset().fadeIn(fade).play();
+      if (next === 'death') {
+        // Do not crossfade out of walk/idle: even a short blend leaves a visible standing
+        // beat. Apply the death clip at full weight in this same render frame.
+        actions[current.current].stop();
+        actions.death.reset().setEffectiveWeight(1);
+        actions.death.time = DEATH_START_AT;
+        actions.death.play();
+        rig.mixer.update(0);
+      } else {
+        const fade = next.startsWith('attack') ? FADE_FAST : FADE;
+        actions[current.current].fadeOut(fade);
+        actions[next].reset().fadeIn(fade).play();
+      }
       current.current = next;
     }
 
@@ -254,12 +275,17 @@ interface CorpseProps {
 const MutantCorpse = ({ corpse, scene, clips, norm, onDone }: CorpseProps) => {
   const rig = useMemo(() => buildRig(scene), [scene]);
 
-  useEffect(() => {
+  // Layout effects run before the next paint. Starting in useEffect left one visible frame
+  // of the bind/standing pose between the HP reaching zero and the death clip beginning.
+  useLayoutEffect(() => {
     const action = rig.mixer.clipAction(clips.death);
     action.setLoop(LoopOnce, 1);
     action.clampWhenFinished = true;
-    action.reset().play();
-    const timer = setTimeout(() => onDone(corpse.id), clips.death.duration * 1000 + CORPSE_LINGER_MS);
+    action.reset();
+    action.time = DEATH_START_AT;
+    action.play();
+    const remainingMs = Math.max(0, clips.death.duration - DEATH_START_AT) * 1000;
+    const timer = setTimeout(() => onDone(corpse.id), remainingMs + CORPSE_LINGER_MS);
     return () => {
       clearTimeout(timer);
       disposeRig(rig);
