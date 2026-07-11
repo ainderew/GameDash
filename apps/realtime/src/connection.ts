@@ -192,6 +192,7 @@ export class ClientConnection implements PeerLink {
       resumeToken: player.resumeToken,
       session: { code: session.code, members: session.memberInfos() },
       serverTime: this.now(),
+      relic: session.relicWelcome(),
     });
   }
 

@@ -74,6 +74,42 @@ export interface SessionMemberInfo {
   connected: boolean;
 }
 
+/**
+ * A relic flight fully described by its launch params (Phase 5). Identical shape to sim's
+ * `RelicFlightParams` (structural match — shared must not depend on sim). Every client
+ * reconstructs the IDENTICAL arc from these alone.
+ */
+export interface RelicFlightWire {
+  mode: 'pass' | 'lob';
+  from: [number, number, number];
+  control: [number, number, number];
+  to: [number, number, number];
+  arcHeight: number;
+  /** Sim-time (ms) the flight started — the shared clock clients sample against. */
+  startedAt: number;
+  flightMs: number;
+  /** Receiver avatar entity id (pass only; 0/absent for lobs). */
+  targetId?: number;
+  /** Thrower avatar entity id. */
+  throwerId?: number;
+}
+
+/**
+ * The relic's live state for a joining/reconnecting client (Phase 5, Task 5): enough to
+ * reconstruct it from scratch — its entity id + phase, its grounded/carrier position, the
+ * carrier (if carried), and the active flight params (if inFlight) so a mid-flight joiner
+ * rebuilds the arc.
+ */
+export interface RelicWelcomeState {
+  entityId: number;
+  phase: 'carried' | 'inFlight' | 'grounded';
+  pos: [number, number, number];
+  /** Carrier avatar entity id (carried only). */
+  carrierId?: number;
+  /** Active flight params (inFlight only). */
+  flight?: RelicFlightWire;
+}
+
 export interface WelcomeMessage {
   type: 'welcome';
   playerId: PlayerId;
@@ -81,6 +117,8 @@ export interface WelcomeMessage {
   session: { code: string; members: SessionMemberInfo[] };
   /** Server wall-clock ms — seeds the client's serverTimeOffset estimate. */
   serverTime: number;
+  /** Present in expedition: the live relic so a joiner/reconnector reconstructs it. */
+  relic?: RelicWelcomeState;
 }
 
 export interface PlayerJoinedMessage {
@@ -234,6 +272,64 @@ export interface MaterialTallyMessage {
   total: number;
 }
 
+// ── Phase 5: relic relay (reliable events) ────────────────────────────────────
+// The server OWNS the relic state machine; clients only react. Every event carries the
+// `serverTick` it happened at (ordered vs snapshots, like Phase 4's combat events). The
+// receiver-feedback plan routes all juice through these events, so once they arrive over the
+// wire every feedback effect (arc, ring, chime, catch shockwave VFX) comes along for free.
+
+/**
+ * A relic flight began — a targeted pass, an intentional lob, a failed-pass bounce, or a
+ * disconnect drop. Carries the full deterministic flight so every client plays the identical
+ * arc. `RelicPassFailed`/`RelicDropped` may accompany it to drive the matching feedback.
+ */
+export interface RelicLaunchedMessage {
+  type: 'relicLaunched';
+  serverTick: number;
+  flight: RelicFlightWire;
+}
+
+/** The server resolved a catch — drives attach + shockwave VFX + catcher-side catch juice. */
+export interface RelicCaughtMessage {
+  type: 'relicCaught';
+  serverTick: number;
+  carrierId: number;
+  pos: [number, number, number];
+}
+
+/** A targeted pass failed at arrival (receiver downed/escaped) — drives the fail feedback. */
+export interface RelicPassFailedMessage {
+  type: 'relicPassFailed';
+  serverTick: number;
+  reason: 'receiver_downed' | 'receiver_escaped';
+  pos: [number, number, number];
+}
+
+/** The relic was dropped as a lob (intentional G, or a carrier disconnect). */
+export interface RelicDroppedMessage {
+  type: 'relicDropped';
+  serverTick: number;
+  reason: 'intentional' | 'disconnect';
+  pos: [number, number, number];
+}
+
+/** A flight ended on the ground (no catch) — clients settle the relic to its hover. */
+export interface RelicGroundedMessage {
+  type: 'relicGrounded';
+  serverTick: number;
+  pos: [number, number, number];
+}
+
+/**
+ * The server refused a pass intent (not the carrier, target invalid, out of range/cone, or
+ * the rotation rule) — the thrower snaps the relic back to the shoulder with fail feedback.
+ */
+export interface PassRejectedMessage {
+  type: 'passRejected';
+  serverTick: number;
+  reason: 'not_carrier' | 'target_invalid' | 'out_of_range' | 'rotation';
+}
+
 export type NetErrorCode =
   | 'version_mismatch'
   | 'bad_message'
@@ -266,4 +362,10 @@ export type ServerMessage =
   | PlayerRevivedMessage
   | HuntFailedMessage
   | MaterialTallyMessage
+  | RelicLaunchedMessage
+  | RelicCaughtMessage
+  | RelicPassFailedMessage
+  | RelicDroppedMessage
+  | RelicGroundedMessage
+  | PassRejectedMessage
   | ErrorMessage;

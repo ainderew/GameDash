@@ -130,6 +130,43 @@ export const carriedRelicOf = (world: World<Entity>, carrier: Entity): Entity | 
 };
 
 /**
+ * Spawn THE session relic, grounded at `pos` (netcode: the server does this on expedition
+ * entry — Task 1 — replacing the single-player client-side spawn). One per world; the
+ * caller owns the returned entity for snapshot/event wiring.
+ */
+export const spawnRelic = (world: World<Entity>, pos: Vector3Tuple): Entity =>
+  world.add({
+    transform: { position: [pos[0], heightAt(pos[0], pos[2]) + RELIC_GROUND_HOVER, pos[2]], rotationY: 0 },
+    relic: { phase: 'grounded' },
+  });
+
+/**
+ * The server's single-source-of-truth invariant (Phase 5 acceptance): there is exactly ONE
+ * relic and its state machine is internally consistent — exactly one of carried / inFlight /
+ * grounded, with the fields that phase requires present and the others absent. Returns null
+ * when the invariant holds, else a description of the first violation (tests assert null).
+ */
+export const relicInvariantViolation = (world: World<Entity>): string | null => {
+  const found = [...world.with('relic')];
+  if (found.length !== 1) return `expected exactly 1 relic, found ${found.length}`;
+  const s = found[0]!.relic;
+  if (s.phase === 'carried') {
+    if (!s.carrier) return 'carried relic has no carrier';
+    if (s.mode !== undefined) return 'carried relic still has a flight mode';
+  } else if (s.phase === 'inFlight') {
+    if (s.carrier) return 'in-flight relic still bound to a carrier';
+    if (!s.from || !s.to) return 'in-flight relic missing from/to endpoints';
+    if (s.mode !== 'pass' && s.mode !== 'lob') return `in-flight relic has bad mode ${String(s.mode)}`;
+  } else if (s.phase === 'grounded') {
+    if (s.carrier) return 'grounded relic still bound to a carrier';
+    if (s.mode !== undefined) return 'grounded relic still has a flight mode';
+  } else {
+    return `unknown relic phase ${String(s.phase)}`;
+  }
+  return null;
+};
+
+/**
  * Targeted pass: deterministic Bézier from the Relic to the receiver's predicted catch
  * socket. Auto-caught on arrival; the thrower enters the rotation cooldown so the pair
  * can't ping-pong it. Returns false if this entity isn't carrying the Relic.
@@ -231,6 +268,7 @@ const failPass = (
   // Refund the thrower's rotation cooldown — see the failure-behavior plan, Q1.
   if (s.thrower) s.thrower.relicRecatchUntil = 0;
   s.failedAt = now;
+  s.failReason = reason;
   events.emit({ type: 'RelicPassFailed', position: [pos[0], pos[1], pos[2]], reason });
 
   // Exit tangent of the quadratic Bézier at t=1 is P2 − P1; fall back to the chord.

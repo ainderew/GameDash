@@ -1,5 +1,11 @@
 import type { PlayerId, Vector3Tuple } from '@shared/types';
-import type { ImpulseMessage, ServerMessage, SessionMemberInfo } from '@shared/net/messages';
+import type {
+  ImpulseMessage,
+  RelicFlightWire,
+  RelicWelcomeState,
+  ServerMessage,
+  SessionMemberInfo,
+} from '@shared/net/messages';
 import type { CharacterId } from '@shared/net/character';
 import { generatePlayerId, generateResumeToken, generateSessionCode } from '@shared/net/ids';
 import {
@@ -11,12 +17,19 @@ import {
   MON_FLAG_STAGGER,
   MS_PER_TICK,
   POSITION_HISTORY_TICKS,
+  RELIC_PHASE_FLAG,
   RESUME_WINDOW_MS,
   SESSION_GC_GRACE_MS,
   SESSION_MAX_PLAYERS,
   SNAPSHOT_KEYFRAME_INTERVAL_MS,
 } from '@shared/net/constants';
-import { MATERIAL_PER_PICKUP, NET_MELEE_PAD } from '@shared/balance';
+import {
+  MATERIAL_PER_PICKUP,
+  NET_MELEE_PAD,
+  RELIC_GROUND_HOVER,
+  RELIC_PASS_RANGE,
+  RELIC_RELEASE_CONE_DEG,
+} from '@shared/balance';
 import {
   ACK_FLAG_DOWNED,
   ENTITY_KIND,
@@ -30,8 +43,10 @@ import { createGameWorld, type GameWorld } from '@sim/world';
 import { EventQueue, type GameEvent } from '@sim/events';
 import { stepSim, type IntentsByPlayer, type PlayerIntent, type SimMode } from '@sim/step';
 import { applyImpulse } from '@sim/prediction';
+import { dropRelic, spawnRelic } from '@sim/systems/relicSystem';
 import { combatFromCmd } from '@shared/net/input';
 import { heightAt } from '@sim/terrain/terrainHeight';
+import { rewindPos } from './lagComp';
 import { PlayerInputQueue } from './inputQueue';
 import { makeServerCombatHooks, type CapturedHit } from './combatHooks';
 import { makeMeleeRewind, viewTickFromMs, NET_LAGCOMP_MAX_TICKS, type HistorySample } from './lagComp';
@@ -39,6 +54,9 @@ import { logger, type Logger } from './log';
 
 /** Where players spawn when the party enters the expedition (ring around the arena origin). */
 const EXPEDITION_ORIGIN: Vector3Tuple = [0, 0, 0];
+
+/** Where THE relic waits at expedition start (offset from the origin, ahead of the spawn ring). */
+const RELIC_SPAWN: Vector3Tuple = [1.5, 0, -4];
 
 /**
  * Session model (Phase 3): a party of ≤4 players behind a 6-char join code, each session
@@ -163,6 +181,18 @@ export class Session {
   /** Wave index observed last tick — a change emits WaveStarted. */
   private lastWave = -1;
 
+  // ── Relic (Phase 5): server-authoritative state machine, one per session ────
+  /** THE relic entity in the world (expedition only; null in the hub). */
+  private relicEntity: Entity | null = null;
+  /**
+   * Last relic state we broadcast, so `syncRelicEvents` diffs the sim's relic each tick and
+   * emits reliable events on transitions — flight starts (new `startedAt`), catches (new
+   * carrier), fails, grounds. State-diffing keeps the sim itself untouched (solo byte-identical).
+   */
+  private relicWire = { phase: '' as string, startedAt: -1, carrierId: -1, failedAt: -1 };
+  /** Reason to attach to the NEXT lob launch the diff detects (intentional G vs disconnect). */
+  private pendingLobReason: 'intentional' | 'disconnect' | null = null;
+
   // ── Snapshot baseline (keyframe the deltas diff against) ────────────────────
   private baseline = new Map<number, QuantEntityState>();
   private baselineTick = 0;
@@ -250,10 +280,14 @@ export class Session {
     if (zone === this.zone) return;
     this.zone = zone;
 
-    // Purge all expedition entities (monsters, projectiles, pickups) and combat bookkeeping.
+    // Purge all expedition entities (monsters, projectiles, pickups, relic) and bookkeeping.
     for (const m of [...this.world.with('monster')]) this.world.remove(m);
     for (const p of [...this.world.with('projectile')]) this.world.remove(p);
     for (const pk of [...this.world.with('pickup')]) this.world.remove(pk);
+    for (const r of [...this.world.with('relic')]) this.world.remove(r);
+    this.relicEntity = null;
+    this.relicWire = { phase: '', startedAt: -1, carrierId: -1, failedAt: -1 };
+    this.pendingLobReason = null;
     this.knownMonsters.clear();
     this.monsterHistory.clear();
     this.monsterDeathTick.clear();
@@ -290,6 +324,20 @@ export class Session {
       };
       player.posHistory = [];
     }
+    // Spawn THE relic, grounded, when entering the expedition (Task 1). Its EXISTENCE and
+    // grounded phase ride the snapshot (kind=relic, phase in the flags byte) + the welcome
+    // block for late joiners — no separate spawn broadcast, so the combat/relay send stream
+    // isn't perturbed by an extra reliable frame. Carrier binding + flight arcs are events.
+    if (zone === 'expedition') {
+      this.relicEntity = spawnRelic(this.world, RELIC_SPAWN);
+      this.relicWire = {
+        phase: 'grounded',
+        startedAt: -1,
+        carrierId: -1,
+        failedAt: -1,
+      };
+    }
+
     this.keyframeRequested = true;
     this.broadcast({ type: 'zoneChanged', zone, serverTick: this.tick });
     logger.info('zone_changed', { code: this.code, zone, players: this.players.size });
@@ -358,6 +406,8 @@ export class Session {
         intent.parry = c.parry;
         intent.drop = c.drop;
         intent.revive = c.revive;
+        // Holding pass-aim steadies the carried relic anchor (cosmetic; matches solo feel).
+        intent.passAiming = c.passHold;
         // Position-independent yaw → the sim faces exactly the same on server, client, and
         // every reconciliation replay (an aimAt world point would drift the lunge on rewind).
         intent.aimYaw = c.aimYaw;
@@ -367,6 +417,18 @@ export class Session {
           const view = Math.max(this.tick - NET_LAGCOMP_MAX_TICKS, Math.min(this.tick, viewTickFromMs(c.viewServerTimeMs)));
           this.attackerViewTick.set(player.entity.id!, view);
         }
+        // Relic pass release: a non-zero passTargetId is "throw to this receiver THIS tick".
+        // The server validates (carrier / target alive / range+cone vs the target's lag-comp
+        // rewound position / rotation rule) and only then hands the sim a passTo intent; an
+        // invalid attempt is rejected back to the thrower (Task 2). The flight itself is
+        // computed inside stepSim's passRelic using the SERVER-predicted live catch position.
+        if (c.passTargetId !== 0) {
+          const target = this.validatePass(player, c.passTargetId, c.aimYaw, c.viewServerTimeMs);
+          if (target) intent.passTo = target;
+        }
+        // Intentional G-drop by the current carrier → tag the lob so syncRelicEvents can
+        // announce it as a RelicDropped (the sim lobs it inside stepSim).
+        if (c.drop && this.carriedRelic(player.entity)) this.pendingLobReason = 'intentional';
       }
       this.intents.set(player.entity, intent);
       consumed.push({ player, seq: result.seq });
@@ -402,6 +464,7 @@ export class Session {
     this.recordMonsterHistory();
     this.emitCombatEvents(drained);
     this.detectSpawnsAndWaves();
+    this.syncRelicEvents(now);
     this.checkHuntFailed();
   }
 
@@ -568,6 +631,153 @@ export class Session {
     this.enterZone('hub');
   }
 
+  // ── Relic relay (Phase 5) ────────────────────────────────────────────────────
+
+  /** The relic held by `carrier` right now, or null. */
+  private carriedRelic(carrier: Entity): Entity | null {
+    const r = this.relicEntity;
+    return r?.relic?.phase === 'carried' && r.relic.carrier === carrier ? r : null;
+  }
+
+  /**
+   * Validate a pass intent server-side (Task 2). The thrower must be the carrier; the target
+   * must be a living OTHER player, eligible (rotation rule), and within range + release cone
+   * of the thrower's aim — checked against the target's LAG-COMP rewound position (what the
+   * thrower saw). Returns the target entity to hand the sim, or null after rejecting the
+   * attempt back to the thrower. Favor-the-thrower: the wider release cone + a rewound target.
+   */
+  private validatePass(
+    thrower: SessionPlayer,
+    targetId: number,
+    aimYaw: number,
+    viewServerTimeMs: number,
+  ): Entity | null {
+    const reject = (reason: 'not_carrier' | 'target_invalid' | 'out_of_range' | 'rotation'): null => {
+      thrower.link.send({ type: 'passRejected', serverTick: this.tick, reason });
+      return null;
+    };
+
+    const carrier = thrower.entity;
+    if (!this.carriedRelic(carrier) || !carrier.transform) return reject('not_carrier');
+    if (targetId === carrier.id) return reject('target_invalid');
+
+    const targetPlayer = [...this.players.values()].find((p) => p.entity.id === targetId);
+    const target = targetPlayer?.entity;
+    if (!target?.transform) return reject('target_invalid');
+    if (target.downed || (target.health?.current ?? 0) <= 0) return reject('target_invalid');
+    // Rotation rule: a receiver still inside their post-pass re-catch cooldown is ineligible.
+    if (this.simNowMs < (target.relicRecatchUntil ?? 0)) return reject('rotation');
+
+    // Rewind the target to what the thrower saw (their interp view time), clamped to the ring.
+    const viewTick = Math.max(
+      this.tick - NET_LAGCOMP_MAX_TICKS,
+      Math.min(this.tick, viewTickFromMs(viewServerTimeMs)),
+    );
+    const seen = rewindPos(targetPlayer!.posHistory, viewTick) ?? target.transform.position;
+
+    const cp = carrier.transform.position;
+    const dx = seen[0] - cp[0];
+    const dz = seen[2] - cp[2];
+    const dist = Math.hypot(dx, dz);
+    if (dist > RELIC_PASS_RANGE) return reject('out_of_range');
+    if (dist > 1e-3) {
+      // Cone: angle between the thrower's aim (yaw → forward = [sin, cos]) and the target dir.
+      const dot = (Math.sin(aimYaw) * dx + Math.cos(aimYaw) * dz) / dist;
+      const angleDeg = (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+      if (angleDeg > RELIC_RELEASE_CONE_DEG) return reject('out_of_range');
+    }
+    return target;
+  }
+
+  /** Full flight description read straight off the relic's live state (Task 2 broadcast). */
+  private flightWire(s: NonNullable<Entity['relic']>): RelicFlightWire {
+    const from = s.from ?? [0, 0, 0];
+    const to = s.to ?? [0, 0, 0];
+    const control = s.control ?? [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2];
+    return {
+      mode: s.mode === 'pass' ? 'pass' : 'lob',
+      from: [from[0], from[1], from[2]],
+      control: [control[0], control[1], control[2]],
+      to: [to[0], to[1], to[2]],
+      arcHeight: s.arcHeight ?? 1.5,
+      startedAt: s.startedAt ?? this.simNowMs,
+      flightMs: s.flightMs ?? 1,
+      targetId: s.target?.id,
+      throwerId: s.thrower?.id,
+    };
+  }
+
+  /**
+   * Diff the sim's relic against what we last broadcast and emit reliable relic events on each
+   * transition (Task 4). State-diffing (not sim events) keeps the sim untouched — solo play is
+   * byte-identical. A new flight `startedAt` = a launch; a new carrier = a catch; a fresh
+   * `failedAt` accompanies a failed pass; the first grounded tick settles it.
+   */
+  private syncRelicEvents(now: number): void {
+    const r = this.relicEntity;
+    if (!r?.relic || !r.transform) return;
+    const s = r.relic;
+    const pos = r.transform.position;
+    const at = (): [number, number, number] => [pos[0], pos[1], pos[2]];
+
+    if (s.phase === 'inFlight' && s.startedAt !== undefined && s.startedAt !== this.relicWire.startedAt) {
+      this.relicWire.startedAt = s.startedAt;
+      this.broadcast({ type: 'relicLaunched', serverTick: this.tick, flight: this.flightWire(s) });
+      // A failed pass bounces as a lob — announce the failure (reason drives the fail feedback).
+      if (s.failedAt === now && s.failedAt !== this.relicWire.failedAt) {
+        this.relicWire.failedAt = s.failedAt;
+        this.broadcast({
+          type: 'relicPassFailed',
+          serverTick: this.tick,
+          reason: s.failReason ?? 'receiver_escaped',
+          pos: at(),
+        });
+      } else if (s.mode === 'lob' && this.pendingLobReason) {
+        // An intentional G-drop or a carrier-disconnect lob — carries its own reason.
+        this.broadcast({ type: 'relicDropped', serverTick: this.tick, reason: this.pendingLobReason, pos: at() });
+      }
+      this.pendingLobReason = null;
+    }
+
+    if (s.phase === 'carried' && s.carrier?.id !== undefined && s.carrier.id !== this.relicWire.carrierId) {
+      this.relicWire.carrierId = s.carrier.id;
+      this.broadcast({ type: 'relicCaught', serverTick: this.tick, carrierId: s.carrier.id, pos: at() });
+    }
+    if (s.phase !== 'carried') this.relicWire.carrierId = -1;
+
+    if (s.phase === 'grounded' && this.relicWire.phase !== 'grounded') {
+      this.broadcast({ type: 'relicGrounded', serverTick: this.tick, pos: at() });
+    }
+    this.relicWire.phase = s.phase;
+  }
+
+  /** The relic's live state for a joining/reconnecting client's welcome (Task 5). */
+  relicWelcome(): RelicWelcomeState | undefined {
+    const r = this.relicEntity;
+    if (this.zone !== 'expedition' || !r?.relic || !r.transform) return undefined;
+    const s = r.relic;
+    const p = r.transform.position;
+    return {
+      entityId: r.id!,
+      phase: s.phase,
+      pos: [p[0], p[1], p[2]],
+      carrierId: s.phase === 'carried' ? s.carrier?.id : undefined,
+      flight: s.phase === 'inFlight' ? this.flightWire(s) : undefined,
+    };
+  }
+
+  /**
+   * A carrier is leaving: drop the relic as a lob at their last position (Task 5), reusing the
+   * intentional-drop path, so it lands walk-in catchable within one grace tick. Called BEFORE
+   * the avatar is detached (dropRelic reads the carrier transform).
+   */
+  handleCarrierDisconnect(entity: Entity): void {
+    if (this.carriedRelic(entity)) {
+      this.pendingLobReason = 'disconnect';
+      dropRelic(this.world, entity, this.simNowMs);
+    }
+  }
+
   /** Encode + send one snapshot per connected player (20 Hz, keyframe every 2 s). */
   broadcastSnapshots(): void {
     if (this.players.size === 0) return;
@@ -630,6 +840,23 @@ export class Session {
             hp: 0,
             vel: [0, 0, 0],
             flags: 0,
+          }),
+        );
+      }
+      // The relic replicates as COARSE truth: phase in the flags byte + its position (for
+      // grounded drift + late-join reconcile). Its carrier binding + flight arc ride the
+      // reliable relic events, so the snapshot needs neither.
+      const relic = this.relicEntity;
+      if (relic?.transform && relic.relic) {
+        states.push(
+          quantizeEntity({
+            id: relic.id!,
+            kind: ENTITY_KIND.relic,
+            pos: relic.transform.position,
+            rotY: 0,
+            hp: 0,
+            vel: [0, 0, 0],
+            flags: RELIC_PHASE_FLAG[relic.relic.phase],
           }),
         );
       }
@@ -783,6 +1010,9 @@ export class SessionManager {
   removePlayer(session: Session, playerId: PlayerId, reason: 'left' | 'disconnected'): void {
     const player = session.players.get(playerId);
     if (!player) return;
+    // If they were carrying the relic, lob it out at their last position BEFORE the avatar
+    // is detached (the drop reads the carrier transform) — Phase 5 Task 5.
+    session.handleCarrierDisconnect(player.entity);
     session.detachAvatar(player);
     session.players.delete(playerId);
     session.departed.set(player.resumeToken, {

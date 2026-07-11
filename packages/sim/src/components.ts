@@ -63,6 +63,8 @@ export interface RelicState {
   thrower?: Entity;
   /** gameNow() of the last failed pass — drives the "hot" grounded marker pulse. */
   failedAt?: number;
+  /** Why the last pass failed (netcode: surfaced as the RelicPassFailed wire reason). */
+  failReason?: 'receiver_downed' | 'receiver_escaped';
   /** Flight start/end points in world space (inFlight only). `to` is the live endpoint. */
   from?: Vector3Tuple;
   to?: Vector3Tuple;

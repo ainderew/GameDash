@@ -9,7 +9,8 @@ import {
   type InputCmd,
 } from '@shared/net/input';
 import { ACK_FLAG_DOWNED, decodeSnapshot, ENTITY_KIND, type DecodedEntityRecord } from '@shared/net/snapshot';
-import type { ServerMessage } from '@shared/net/messages';
+import type { RelicFlightWire, ServerMessage } from '@shared/net/messages';
+import { RELIC_PASS_RECATCH_MS } from '@shared/balance';
 import type { Entity } from '@sim/components';
 import type { SimMode } from '@sim/step';
 import { createGameWorld, type GameWorld } from '@sim/world';
@@ -95,6 +96,12 @@ export interface BotClientOptions {
    * 2-bot expedition integration test.
    */
   combat?: boolean;
+  /**
+   * Relic-relay AI (Phase 5): walk onto the grounded relic to claim it, then hold past the
+   * rotation cooldown and pass it to the other player — a self-healing back-and-forth relay.
+   * Used by the 2-bot relic integration test.
+   */
+  relay?: boolean;
 }
 
 /** The bot's snapshot-derived view of one replicated entity (server truth it renders). */
@@ -124,6 +131,22 @@ export class BotClient {
   private readonly hacked: boolean;
   private readonly intentFn: (tick: number) => RawIntent;
   private readonly combat: boolean;
+  private readonly relay: boolean;
+
+  // ── Relic relay state (snapshot + event derived) ────────────────────────────
+  /** Session roster entity ids (welcome + playerJoined) — the relay's pass targets. */
+  private readonly memberEntityIds = new Set<number>();
+  relicPhase: 'carried' | 'inFlight' | 'grounded' | 'absent' = 'absent';
+  relicCarrierId: number | null = null;
+  private relicEntityId: number | null = null;
+  /** Sim-time (ms) we became the carrier — hold past the rotation cooldown before passing. */
+  private carriedSince = 0;
+  /** Sim-time (ms) of our last pass attempt — retried on loss until the relic actually leaves. */
+  private lastPassAttemptMs = 0;
+  /** Every flight this bot was told about (identical across clients — the replication probe). */
+  readonly launches: RelicFlightWire[] = [];
+  /** How many catches this bot observed. */
+  catches = 0;
 
   // ── Replicated world view (snapshot-derived server truth) ───────────────────
   /** Keyframe baselines keyed by keyframe tick — the last two, exactly like the browser. */
@@ -141,6 +164,7 @@ export class BotClient {
   constructor(opts: BotClientOptions = {}) {
     this.hacked = opts.hacked ?? false;
     this.combat = opts.combat ?? false;
+    this.relay = opts.relay ?? false;
     this.brain = new BotBrain(opts.seed ?? 1);
     this.intentFn = opts.intentFn ?? ((tick) => this.brain.intentAt(tick));
     this.entity = this.world.add({
@@ -172,6 +196,7 @@ export class BotClient {
     const raw = this.intentFn(this.seq);
     const cmdIntent: CmdIntent = { ...raw };
     if (this.combat) this.combatIntent(cmdIntent);
+    if (this.relay) this.relayIntent(cmdIntent);
     const cmd = makeInputCmd(this.seq, this.seq, cmdIntent);
     if (this.hacked) {
       // Inflate the wire move vector past any legal magnitude.
@@ -243,6 +268,74 @@ export class BotClient {
     intent.viewServerTimeMs = Math.max(0, this.latestServerTimeMs - INTERP_DELAY_MS);
   }
 
+  /** The relic's position in the replicated snapshot view (any phase), or null. */
+  private relicPos(): Vector3Tuple | null {
+    for (const [id, e] of this.view) {
+      if (e.kind === ENTITY_KIND.relic && (this.relicEntityId === null || id === this.relicEntityId)) return e.pos;
+    }
+    return null;
+  }
+
+  /** A pass target: the OTHER roster member's replicated position (2-bot relay), or null. */
+  private otherPlayer(): { id: number; pos: Vector3Tuple } | null {
+    for (const id of this.memberEntityIds) {
+      if (id === this.ownEntityId) continue;
+      const e = this.view.get(id);
+      if (e && e.kind === ENTITY_KIND.player) return { id, pos: e.pos };
+    }
+    return null;
+  }
+
+  /**
+   * Relic-relay brain: claim the grounded relic by walking onto it, then hold past the rotation
+   * cooldown and pass it to the other player — a self-healing back-and-forth. Position + aim
+   * come from the replicated snapshot view; the throw is a single passTargetId per carry.
+   */
+  private relayIntent(intent: CmdIntent): void {
+    intent.moveX = 0;
+    intent.moveZ = 0;
+    intent.jump = false;
+    intent.dodge = false;
+    intent.sprint = false;
+    intent.melee = false;
+    intent.viewServerTimeMs = Math.max(0, this.latestServerTimeMs - INTERP_DELAY_MS);
+    const me = this.entity.transform!.position;
+
+    if (this.relicPhase === 'grounded') {
+      const relic = this.relicPos();
+      if (relic) {
+        const dx = relic[0] - me[0];
+        const dz = relic[2] - me[2];
+        const len = Math.hypot(dx, dz);
+        // Stop a comfortable margin INSIDE the catch radius (1.3) so the bot has been sending
+        // zero-move cmds for several ticks before the server's catch tick — otherwise the
+        // server's catch-plant (zeroed velocity) diverges from a still-moving prediction for a
+        // tick (the catch-plant becomes presentation-only client-side in Phase 6).
+        if (len > 1.25) {
+          intent.moveX = dx / len;
+          intent.moveZ = dz / len;
+        }
+      }
+      return;
+    }
+
+    if (this.relicPhase === 'carried' && this.relicCarrierId === this.ownEntityId) {
+      const other = this.otherPlayer();
+      if (!other) return;
+      const dx = other.pos[0] - me[0];
+      const dz = other.pos[2] - me[2];
+      intent.aimYaw = Math.atan2(dx, dz);
+      intent.passHold = true;
+      // Hold past the rotation cooldown so the receiver is eligible, then throw — retried every
+      // 500 ms until the relic actually leaves (a lost pass packet must not stall the relay).
+      const heldMs = this.latestServerTimeMs - this.carriedSince;
+      if (heldMs > RELIC_PASS_RECATCH_MS + 200 && this.latestServerTimeMs - this.lastPassAttemptMs > 500) {
+        intent.passTargetId = other.id;
+        this.lastPassAttemptMs = this.latestServerTimeMs;
+      }
+    }
+  }
+
   /** Authoritative snapshot arrived. Returns the reconcile outcome (null = stale). */
   onSnapshot(buf: ArrayBufferLike): ReconcileResult | null {
     const snap = decodeSnapshot(buf);
@@ -278,6 +371,14 @@ export class BotClient {
     if (msg.type === 'welcome') {
       const me = msg.session.members.find((m) => m.id === msg.playerId);
       if (me) this.ownEntityId = me.entityId;
+      for (const m of msg.session.members) this.memberEntityIds.add(m.entityId);
+      if (msg.relic) {
+        this.relicEntityId = msg.relic.entityId;
+        this.relicPhase = msg.relic.phase;
+        this.relicCarrierId = msg.relic.carrierId ?? null;
+      }
+    } else if (msg.type === 'playerJoined') {
+      this.memberEntityIds.add(msg.member.entityId);
     } else if (msg.type === 'materialTally') {
       this.materials = msg.total;
     } else if (msg.type === 'monsterDespawned') {
@@ -288,6 +389,21 @@ export class BotClient {
       this.engine.setMode(msg.zone);
       this.view.clear();
       this.baselines.clear();
+    } else if (msg.type === 'relicLaunched') {
+      this.relicPhase = 'inFlight';
+      this.relicCarrierId = null;
+      this.launches.push(msg.flight);
+    } else if (msg.type === 'relicCaught') {
+      this.relicPhase = 'carried';
+      this.relicCarrierId = msg.carrierId;
+      this.catches += 1;
+      if (msg.carrierId === this.ownEntityId) {
+        this.carriedSince = this.latestServerTimeMs;
+        this.lastPassAttemptMs = 0;
+      }
+    } else if (msg.type === 'relicGrounded') {
+      this.relicPhase = 'grounded';
+      this.relicCarrierId = null;
     }
   }
 
@@ -316,6 +432,12 @@ export class BotClient {
         pos: r?.pos ?? b.pos,
         hp: r?.hp ?? b.hp,
       });
+      // Seed the relic from the snapshot (its existence + grounded phase ride kind=relic,
+      // not a spawn event). Events own every transition after this initial 'grounded' seed.
+      if (b.kind === ENTITY_KIND.relic && this.relicPhase === 'absent') {
+        this.relicEntityId = id;
+        this.relicPhase = 'grounded';
+      }
     }
   }
 

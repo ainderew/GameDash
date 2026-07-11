@@ -147,3 +147,45 @@ export const sampleBezier = (
   out[2] = a * p0[2] + b * p1[2] + c * p2[2];
   return out;
 };
+
+/**
+ * The complete, self-contained description of one relic flight (Phase 5 netcode). The
+ * server computes these at release from its own predicted catch position and broadcasts
+ * them in `RelicPassLaunched`; every client reconstructs the IDENTICAL arc from the params
+ * alone — no per-client state, so two screens sample the same path bit-for-bit. The server
+ * remains the sole arbiter of arrival (it homes + resolves the catch against LIVE positions;
+ * the broadcast params are the release-time arc, and the ≤ RELIC_HOMING_MAX_CORRECTION budget
+ * bounds the visual gap, folded away when `RelicCaught` snaps the relic to the catcher).
+ */
+export interface RelicFlightParams {
+  /** 'pass' = quadratic Bézier to a receiver socket; 'lob' = parabola to a ground point. */
+  mode: 'pass' | 'lob';
+  from: Vector3Tuple;
+  /** Bézier control point (pass); ignored for lobs. */
+  control: Vector3Tuple;
+  to: Vector3Tuple;
+  /** Parabola peak above the from→to chord (lob); ignored for passes. */
+  arcHeight: number;
+  /** Sim-time (ms) the flight started — the shared clock every client samples against. */
+  startedAt: number;
+  flightMs: number;
+}
+
+/**
+ * Position of a relic flight at sim-time `now`, written into `out`. Pure function of the
+ * launch params — the single source of truth both the server's arrival check and every
+ * client's render share, so a pass "looks identical on both screens" by construction.
+ */
+export const sampleRelicFlight = (
+  p: RelicFlightParams,
+  now: number,
+  out: Vector3Tuple,
+): Vector3Tuple => {
+  const t = Math.min(1, Math.max(0, (now - p.startedAt) / (p.flightMs || 1)));
+  if (p.mode === 'pass') return sampleBezier(p.from, p.control, p.to, t, out);
+  // Untargeted lob: straight XZ line with a parabolic lift (matches relicSystem's lob branch).
+  out[0] = p.from[0] + (p.to[0] - p.from[0]) * t;
+  out[2] = p.from[2] + (p.to[2] - p.from[2]) * t;
+  out[1] = p.from[1] + (p.to[1] - p.from[1]) * t + p.arcHeight * 4 * t * (1 - t);
+  return out;
+};

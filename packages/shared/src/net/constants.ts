@@ -99,3 +99,18 @@ export const MON_AISTATE = { idle: 0, chase: 1, attack: 2, cooldown: 3 } as cons
 export const MON_FLAG_STAGGER = 1 << 2;
 /** Began an attack this window — drives the lunge animation. */
 export const MON_FLAG_ATTACK = 1 << 3;
+
+// ── Relic snapshot flags (Phase 5) ────────────────────────────────────────────
+/**
+ * The relic's phase packed into its snapshot record's anim-flags byte (a record's `kind`
+ * = relic disambiguates the reading). Snapshots are the COARSE truth (phase + grounded
+ * pos, for drift + late-join reconciliation); the carrier binding and flight arc arrive as
+ * reliable relic EVENTS, so the snapshot needs no carrier id or flight fields. */
+export const RELIC_PHASE_FLAG = { carried: 0, inFlight: 1, grounded: 2 } as const;
+export type RelicPhaseFlag = (typeof RELIC_PHASE_FLAG)[keyof typeof RELIC_PHASE_FLAG];
+/** Reverse lookup for decoders (flag byte → phase name). */
+export const RELIC_PHASE_OF: Record<number, 'carried' | 'inFlight' | 'grounded'> = {
+  0: 'carried',
+  1: 'inFlight',
+  2: 'grounded',
+};

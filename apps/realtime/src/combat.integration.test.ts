@@ -32,6 +32,12 @@ describe('two-bot expedition combat @ 150 ms', () => {
       ],
       rngSeed: 0xc0ffee,
     });
+    // This test measures COMBAT replication, not the relay (that has its own integration test).
+    // The expedition now spawns a relic (Phase 5); keep it un-catchable so a wandering combat
+    // bot can't walk-in-grab it — a walk-in catch's server-side plant (a movement lock that is
+    // presentation-only client-side in Phase 6) would inject an unrelated correction fold.
+    const relic = h.session.world.with('relic').first;
+    if (relic?.relic) relic.relic.noCatchUntil = Number.POSITIVE_INFINITY;
     h.run(RUN_MS);
     // Let the last snapshots (incl. a trailing keyframe) land so views converge on the server.
     h.run(RUN_MS + 2500);

@@ -13,6 +13,7 @@ import { useUIStore, type SessionMemberUI } from '@/ui/store';
 import { realtimeUrl, createTransport, type Transport } from '@/net/transport';
 import { netGame } from '@/net/netGame';
 import { netStats } from '@/net/netStats';
+import { relicNet } from '@/net/relicNet';
 
 /**
  * THE session client: connection state machine (idle → connecting → joined), message
@@ -105,6 +106,8 @@ class NetClient {
     this.remoteBuffers.clear();
     this.tickTimeOffset = null;
     this.wallOffset = null;
+    relicNet.setOwnEntity(null);
+    relicNet.reset();
     const store = useUIStore.getState();
     store.setSession(undefined);
     store.setConnectionState('offline');
@@ -283,6 +286,9 @@ class NetClient {
         this.joined = { code: msg.session.code, resumeToken: msg.resumeToken };
         this.ownPlayerId = msg.playerId;
         this.syncEntityMap(msg.session.members);
+        relicNet.setOwnEntity(this.ownEntityId);
+        // Late join / reconnect: reconstruct the live relic (incl. an active flight arc).
+        relicNet.fromWelcome(msg.relic);
         // Seed the wall-clock offset; snapshots take over with tick time.
         if (this.wallOffset === null) {
           this.wallOffset = msg.serverTime - performance.now();
@@ -374,6 +380,31 @@ class NetClient {
       case 'monsterDespawned':
       case 'damageDealt':
       case 'parrySuccess':
+        return;
+
+      // ── Phase 5: relic relay (server-authoritative state machine) ─────────────
+      // Maintain the network relic state + re-emit feedback events onto the client bus.
+      // The relic's EXISTENCE + grounded phase arrive via the welcome block and the snapshot
+      // (kind=relic); these reliable events carry the carrier binding + flight arcs. The 3D
+      // relic render + expedition networked loop that CONSUME them land in Phase 6 (WebGL/R3F).
+      case 'relicLaunched':
+        relicNet.onLaunched(msg);
+        return;
+      case 'relicCaught':
+        relicNet.onCaught(msg);
+        return;
+      case 'relicPassFailed':
+        relicNet.onPassFailed(msg);
+        return;
+      case 'relicDropped':
+        relicNet.onDropped(msg);
+        return;
+      case 'relicGrounded':
+        relicNet.onGrounded(msg);
+        return;
+      case 'passRejected':
+        // The thrower's provisional local flight snaps back with the existing fail feedback.
+        // Wired to the throw-prediction UI in Phase 6; the reason is the server's word.
         return;
 
       case 'ping': {
