@@ -1,6 +1,6 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
-import { feel } from '@/game/feel/config';
+import type { Entity } from '../components';
+import { BODY_TUNING } from '@shared/balance';
 
 /**
  * SOLID BODY COLLISION — resolve circle overlaps in the XZ plane so the player and monsters
@@ -27,12 +27,12 @@ const cancelClosing = (e: Entity, nx: number, nz: number): void => {
 };
 
 export const separationSystem = (world: World<Entity>): void => {
-  const scale = feel.bodyRadiusScale;
-  const player = world.with('playerControlled', 'transform').first;
+  const scale = BODY_TUNING.radiusScale;
   const monsters = [...world.with('monster', 'transform')];
 
   // Monster vs player: push the monster out and stop it grinding into the player.
-  if (player?.transform) {
+  // Every player-controlled entity is authoritative over monsters, not just ours.
+  for (const player of world.with('playerControlled', 'transform')) {
     const pr = (player.radius ?? 0.4) * scale;
     const pp = player.transform.position;
     for (const m of monsters) {

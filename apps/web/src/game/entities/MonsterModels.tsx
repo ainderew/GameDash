@@ -10,7 +10,7 @@ import {
 import type { BufferGeometry, InstancedMesh, Material, Mesh } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { monsters } from '@/game/ecs/world';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import { useGameModel } from '@/lib/loaders';
 import { MutantMonsters } from '@/game/entities/MutantModels';
 import { hitSquash } from '@/game/entities/hitSquash';

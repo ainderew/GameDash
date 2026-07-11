@@ -1,13 +1,10 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '../components';
 import type { Vector3Tuple } from '@shared/types';
-import { spawnImpactVfx } from '@/game/feel/onHit';
-import { addTrauma } from '@/game/feel/screenShake';
-import { requestHitstop } from '@/game/feel/time';
-import { emit } from '@/game/events';
-import { heightAt } from '@/game/world/terrainHeight';
-import { passAim } from '@/game/combat/passAim';
-import { bezierControl, passDurationMs, predictCatchPos, sampleBezier } from '@/game/combat/passTargeting';
+import type { EventQueue } from '../events';
+import { NOOP_HOOKS, type SimHooks } from '../hooks';
+import { heightAt } from '../terrain/terrainHeight';
+import { bezierControl, passDurationMs, predictCatchPos, sampleBezier } from '../combat/passTargeting';
 import {
   RELIC_AIM_OFFSET,
   RELIC_CARRY_OFFSET,
@@ -15,7 +12,6 @@ import {
   RELIC_FAIL_BOUNCE_DIST,
   RELIC_FAIL_BOUNCE_MS,
   RELIC_CATCH_HEIGHT,
-  RELIC_CATCH_HITSTOP_MS,
   RELIC_CATCH_RADIUS,
   RELIC_CATCH_ROOT_MS,
   RELIC_CATCH_SOCKET_Y,
@@ -33,9 +29,6 @@ import {
   RELIC_THROW_SPEED,
 } from '@shared/balance';
 
-/** The Relic's glow color — catch shockwave ring matches the crystal. */
-const RELIC_FX_COLOR = '#2dd4bf';
-
 /** How fast the homing endpoint chases the receiver, 1/s (exponential smoothing). */
 const HOMING_RATE = 10;
 
@@ -45,34 +38,19 @@ const ARRIVAL_TOLERANCE = 2;
 const isDead = (e: Entity): boolean => (e.health?.current ?? 1) <= 0;
 
 /**
- * A wide white-hot "claim" bloom, layered over the teal shockwave spark+ring so a catch
- * reads bigger and brighter than a combat hit. Colour values exceed 1 to cross the Bloom
- * threshold for a hard flash; aged on real time so it erupts through the catch hitstop.
- */
-const spawnCatchBloom = (world: World<Entity>, point: Vector3Tuple): void => {
-  world.add({
-    transform: { position: [...point], rotationY: 0 },
-    impactFx: {
-      kind: 'ring',
-      strength: 'heavy',
-      spawnedAtReal: performance.now(),
-      lifetimeMs: 340,
-      color: [1.6, 1.6, 1.45],
-      count: 0,
-      radius: RELIC_SHOCKWAVE_RADIUS * 0.75,
-      dirX: 0,
-      dirZ: 0,
-    },
-  });
-};
-
-/**
  * A successful catch: attach to the new carrier and release the defensive shockwave —
  * a visual ring plus a short shove/stagger on monsters near the catch point. No damage;
  * the reward for a clean catch is space, not kills. The receiver also gets a brief
  * handoff shield so an enemy hit landing on the exact catch frame never feels unfair.
  */
-const catchRelic = (world: World<Entity>, relic: Entity, catcher: Entity, now: number): void => {
+const catchRelic = (
+  world: World<Entity>,
+  relic: Entity,
+  catcher: Entity,
+  now: number,
+  events: EventQueue,
+  hooks: SimHooks,
+): void => {
   const s = relic.relic!;
   s.phase = 'carried';
   s.carrier = catcher;
@@ -88,20 +66,18 @@ const catchRelic = (world: World<Entity>, relic: Entity, catcher: Entity, now: n
   if (catcher.teammate) catcher.relicHeldSince = now;
 
   const point = relic.transform!.position;
-  emit({
+  events.emit({
     type: 'RelicCaught',
-    byLocalPlayer: catcher.playerControlled === true,
+    byLocalPlayer: catcher.localPlayer === true,
     position: [point[0], point[1], point[2]],
   });
-  spawnImpactVfx(world, [point[0], point[1], point[2]], 'heavy', RELIC_FX_COLOR);
-  spawnCatchBloom(world, [point[0], point[1], point[2]]);
-  addTrauma(0.25);
+  // Catch juice (teal shockwave VFX, catch bloom, shake, local-player hitstop) is the
+  // client's business — see simHooks.onRelicCaught in apps/web.
+  hooks.onRelicCaught?.(world, relic, catcher, [point[0], point[1], point[2]]);
 
-  // Local-player catch juice: a brief whole-scene "thunk" freeze plus a plant that keeps the
-  // catch clip from gliding on residual run momentum. Teammate catches skip this — freezing
-  // the fight every time an AI receives a relay pass would feel like a stutter, not a beat.
+  // Plant the catcher so the catch clip doesn't glide on residual run momentum — sim
+  // state, because movementSystem enforces it. AI teammates skip it (they hold anyway).
   if (catcher.playerControlled) {
-    requestHitstop(RELIC_CATCH_HITSTOP_MS);
     catcher.catchRootUntil = now + RELIC_CATCH_ROOT_MS;
   }
 
@@ -130,10 +106,16 @@ const canCatch = (relic: Entity, player: Entity, now: number): boolean => {
   return Math.abs(rp[1] - (pp[1] + 1.0)) < RELIC_CATCH_HEIGHT;
 };
 
-const tryCatch = (world: World<Entity>, relic: Entity, now: number): void => {
+const tryCatch = (
+  world: World<Entity>,
+  relic: Entity,
+  now: number,
+  events: EventQueue,
+  hooks: SimHooks,
+): void => {
   for (const player of world.with('transform', 'playerControlled')) {
     if (canCatch(relic, player, now)) {
-      catchRelic(world, relic, player, now);
+      catchRelic(world, relic, player, now, events, hooks);
       return;
     }
   }
@@ -157,6 +139,7 @@ export const passRelic = (
   carrier: Entity,
   target: Entity,
   now: number,
+  events: EventQueue,
 ): boolean => {
   const relic = carriedRelicOf(world, carrier);
   const s = relic?.relic;
@@ -178,7 +161,7 @@ export const passRelic = (
   s.startedAt = now;
   s.flightMs = passDurationMs(dist);
   s.noCatchUntil = 0;
-  emit({ type: 'RelicPassLaunched', toLocalPlayer: target.playerControlled === true, from });
+  events.emit({ type: 'RelicPassLaunched', toLocalPlayer: target.localPlayer === true, from });
 
   // Face the receiver — the throw animation and the pass read as one motion.
   if (carrier.transform) {
@@ -240,6 +223,7 @@ const failPass = (
   relic: Entity,
   now: number,
   reason: 'receiver_downed' | 'receiver_escaped',
+  events: EventQueue,
 ): void => {
   const s = relic.relic!;
   const pos = relic.transform!.position;
@@ -247,7 +231,7 @@ const failPass = (
   // Refund the thrower's rotation cooldown — see the failure-behavior plan, Q1.
   if (s.thrower) s.thrower.relicRecatchUntil = 0;
   s.failedAt = now;
-  emit({ type: 'RelicPassFailed', position: [pos[0], pos[1], pos[2]], reason });
+  events.emit({ type: 'RelicPassFailed', position: [pos[0], pos[1], pos[2]], reason });
 
   // Exit tangent of the quadratic Bézier at t=1 is P2 − P1; fall back to the chord.
   let dx = (s.to?.[0] ?? pos[0]) - (s.control?.[0] ?? pos[0]);
@@ -280,7 +264,13 @@ const failPass = (
  * Per-frame Relic state machine. Runs AFTER movement/separation so the carried position
  * follows the carrier's final transform for the frame (no one-frame trailing).
  */
-export const relicSystem = (world: World<Entity>, dt: number, now: number): void => {
+export const relicSystem = (
+  world: World<Entity>,
+  dt: number,
+  now: number,
+  events: EventQueue,
+  hooks: SimHooks = NOOP_HOOKS,
+): void => {
   for (const relic of world.with('transform', 'relic')) {
     const s = relic.relic;
     const pos = relic.transform.position;
@@ -294,8 +284,9 @@ export const relicSystem = (world: World<Entity>, dt: number, now: number): void
         continue;
       }
       // Float at the carrier's left shoulder; while aiming it steadies forward-left so
-      // the throw reads without hiding the character or the receiver.
-      const aimingThis = passAim.aiming && c.playerControlled === true;
+      // the throw reads without hiding the character or the receiver. Aim state is fed
+      // in as part of the carrier's intent (entity.passAiming), not read from client UI.
+      const aimingThis = c.passAiming === true && c.playerControlled === true;
       const [ox, oy, oz] = aimingThis ? RELIC_AIM_OFFSET : RELIC_CARRY_OFFSET;
       const cr = c.transform.rotationY;
       const cp = c.transform.position;
@@ -338,14 +329,14 @@ export const relicSystem = (world: World<Entity>, dt: number, now: number): void
           tp !== undefined &&
           Math.hypot(tp[0] - pos[0], tp[2] - pos[2]) <= ARRIVAL_TOLERANCE;
         if (target && tp && !isDead(target) && near) {
-          catchRelic(world, relic, target, now);
+          catchRelic(world, relic, target, now, events, hooks);
         } else {
           // Receiver died or outran the correction budget — the pass FAILS. The relic
           // keeps its remaining momentum (the Bézier's exit tangent) and bounces once
           // as a mini-lob before settling; lob flights are walk-in catchable, so the
           // bounce itself is already recoverable. The thrower's rotation cooldown is
           // refunded — failure shouldn't strand them next to their own relic.
-          failPass(relic, now, target && !isDead(target) ? 'receiver_escaped' : 'receiver_downed');
+          failPass(relic, now, target && !isDead(target) ? 'receiver_escaped' : 'receiver_downed', events);
         }
       }
     } else if (s.phase === 'inFlight') {
@@ -357,11 +348,11 @@ export const relicSystem = (world: World<Entity>, dt: number, now: number): void
       pos[2] = from[2] + (to[2] - from[2]) * t;
       pos[1] = from[1] + (to[1] - from[1]) * t + (s.arcHeight ?? 1.5) * 4 * t * (1 - t);
       if (t >= 1) ground(s, pos);
-      else tryCatch(world, relic, now);
+      else tryCatch(world, relic, now, events, hooks);
     } else {
       // grounded: hold the hover height (terrain may differ from where the throw aimed).
       pos[1] = heightAt(pos[0], pos[2]) + RELIC_GROUND_HOVER;
-      tryCatch(world, relic, now);
+      tryCatch(world, relic, now, events, hooks);
     }
   }
 };

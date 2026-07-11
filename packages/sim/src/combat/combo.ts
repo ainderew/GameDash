@@ -1,4 +1,4 @@
-import { feel, type AttackPhaseTuning, type HitStrength } from '@/game/feel/config';
+import type { HitStrength } from '@shared/combat';
 
 /**
  * Melee combo chain. Spamming melee advances through these moves in order and then
@@ -6,8 +6,8 @@ import { feel, type AttackPhaseTuning, type HitStrength } from '@/game/feel/conf
  * (timing/arc/damage) and the renderer (which procedural animation + VFX to play).
  *
  * PHASES: each move plays out as windup (anticipation) → active (hitbox live) → recovery
- * (commitment lockout). Windup/active timings live in the tunable feel config, keyed by the
- * move's `weight`. The move's TOTAL duration is NOT phase-derived: it is the actual mocap
+ * (commitment lockout), carved out of the clip by `hitWindow` below.
+ * The move's TOTAL duration is NOT phase-derived: it is the actual mocap
  * clip length at its playback speed (see moveAnimMs), so the attack state, the rooting, and
  * the animation always end on the same frame — the swing visually completes, never cut off.
  */
@@ -80,10 +80,7 @@ export const ATTACK_TIMESCALE: Record<ComboClip, number> = {
   finisher: 1.25,
 };
 
-// ── Phase timing helpers (read the tunable config live) ─────────────────────
-
-/** The live windup/active timing for a move, from the feel config. */
-export const movePhase = (m: ComboMove): AttackPhaseTuning => feel.phases[m.weight];
+// ── Phase timing helpers ─────────────────────────────────────────────────────
 
 /**
  * Total swing duration = the actual clip length at its playback speed, ms. The attack state,

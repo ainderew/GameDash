@@ -1,5 +1,5 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '../components';
 
 /**
  * Age out impact VFX (spark bursts / shockwave rings). Driven by REAL time so they play

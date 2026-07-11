@@ -18,7 +18,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["apps/web/src/*"],
-      "@shared/*": ["packages/shared/src/*"]
+      "@shared/*": ["packages/shared/src/*"],
+      "@sim/*": ["packages/sim/src/*"]
     }
   }
 }

@@ -53,21 +53,28 @@ export type GameEvent =
   | RelicCaught
   | RelicPassFailed;
 
-let queue: GameEvent[] = [];
+/**
+ * Per-world event queue (was a module-level queue in single-player). The room server runs
+ * one world per session — each needs an isolated queue, so the queue is an instance that
+ * travels alongside its world through stepSim.
+ */
+export class EventQueue {
+  private queue: GameEvent[] = [];
 
-export const emit = (event: GameEvent): void => {
-  queue.push(event);
-};
+  emit(event: GameEvent): void {
+    this.queue.push(event);
+  }
 
-/** Drain all queued events. Call once per tick after systems run. */
-export const drainEvents = (): GameEvent[] => {
-  if (queue.length === 0) return [];
-  const drained = queue;
-  queue = [];
-  return drained;
-};
+  /** Drain all queued events. Called once per tick after systems run (see stepSim). */
+  drain(): GameEvent[] {
+    if (this.queue.length === 0) return [];
+    const drained = this.queue;
+    this.queue = [];
+    return drained;
+  }
 
-/** Test helper — clear without draining. */
-export const resetEvents = (): void => {
-  queue = [];
-};
+  /** Test helper — clear without draining. */
+  reset(): void {
+    this.queue = [];
+  }
+}

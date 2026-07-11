@@ -8,7 +8,7 @@ import { collectNodeNames, prepareClip } from '@/lib/animClips';
 import { deMetalize } from '@/lib/materials';
 import { CHARACTER_FILL_LAYER } from '@/game/entities/characters';
 import { heroTransform } from '@/game/entities/heroConfig';
-import { ATTACK_CLIP_S, ATTACK_TIMESCALE, type ComboClip } from '@/game/combat/combo';
+import { ATTACK_CLIP_S, ATTACK_TIMESCALE, type ComboClip } from '@sim/combat/combo';
 
 /** Player animation states. Attacks are split by which mocap clip plays. */
 export type CharState =

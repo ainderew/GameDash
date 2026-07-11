@@ -1,4 +1,4 @@
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '../components';
 import type { Vector3Tuple } from '@shared/types';
 import {
   RELIC_LEAD_S,

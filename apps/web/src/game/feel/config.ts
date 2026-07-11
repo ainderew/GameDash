@@ -9,15 +9,22 @@
  * Default tuning comes from the design brief's table. Two archetypes drive most values:
  *   - `light`  — a jab: crisp, immediate, low commitment.
  *   - `heavy`  — a committed strike: slower windup, big payoff (freeze + shake + launch).
+ *
+ * SIM SPLIT (multiplayer Phase 1): values the headless sim consumes in gameplay math —
+ * knockback, hitstun, parry rules, body radii — LIVE in @shared/balance now (they're
+ * balance, not juice). This object ALIASES those (same object identity / passthrough
+ * accessors), so the leva panel keeps live-tuning them exactly as before.
  */
 
-export type HitStrength = 'light' | 'heavy';
+import {
+  BODY_TUNING,
+  HITSTUN_MS,
+  KNOCKBACK_TUNING,
+  PARRY_TUNING,
+} from '@shared/balance';
 
-/** A value that differs for light vs heavy hits. */
-export interface ByStrength<T> {
-  light: T;
-  heavy: T;
-}
+export type { ByStrength, HitStrength } from '@shared/combat';
+import type { ByStrength, HitStrength } from '@shared/combat';
 
 export interface AttackPhaseTuning {
   /** Anticipation before the hitbox goes live, ms. The telegraph that makes the strike snap. */
@@ -131,13 +138,14 @@ export interface FeelConfig {
 export const feel: FeelConfig = {
   hitstopMs: { light: 110, heavy: 240 },
 
-  knockback: {
-    speed: { light: 20, heavy: 16 },
-    launch: { light: 0.5, heavy: 4.5 },
-    friction: 9,
-    playerScale: 0.6,
+  // ALIASED into @shared/balance (same object) — the sim reads it there, leva tunes here.
+  knockback: KNOCKBACK_TUNING,
+  get bodyRadiusScale() {
+    return BODY_TUNING.radiusScale;
   },
-  bodyRadiusScale: 1,
+  set bodyRadiusScale(v: number) {
+    BODY_TUNING.radiusScale = v;
+  },
 
   screenShake: {
     enabled: true,
@@ -148,7 +156,8 @@ export const feel: FeelConfig = {
     frequency: 26,
   },
 
-  hitstunMs: { light: 280, heavy: 500 },
+  // ALIASED into @shared/balance (same object) — hitstun is sim math now.
+  hitstunMs: HITSTUN_MS,
   flash: {
     durationMs: { light: 120, heavy: 180 },
     colorLight: '#ffffff',
@@ -200,12 +209,29 @@ export const feel: FeelConfig = {
     heavy: { windupMs: 300, activeMs: 100, recoveryMs: 400 },
   },
 
+  // enabled/windowMs/attackerStunMs pass through to @shared/balance (sim rules);
+  // the slow-mo flourish stays purely client feel.
   parry: {
-    enabled: true,
-    windowMs: 150,
+    get enabled() {
+      return PARRY_TUNING.enabled;
+    },
+    set enabled(v: boolean) {
+      PARRY_TUNING.enabled = v;
+    },
+    get windowMs() {
+      return PARRY_TUNING.windowMs;
+    },
+    set windowMs(v: number) {
+      PARRY_TUNING.windowMs = v;
+    },
     slowmoScale: 0.15,
     slowmoMs: 260,
-    attackerStunMs: 700,
+    get attackerStunMs() {
+      return PARRY_TUNING.attackerStunMs;
+    },
+    set attackerStunMs(v: number) {
+      PARRY_TUNING.attackerStunMs = v;
+    },
   },
 };
 

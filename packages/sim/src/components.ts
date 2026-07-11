@@ -1,7 +1,6 @@
-import type { Vector3Tuple } from '@shared/types';
-import type { Faction } from '@shared/combat';
+import type { PlayerId, Vector3Tuple } from '@shared/types';
+import type { Faction, HitStrength } from '@shared/combat';
 import type { MonsterArchetype } from '@shared/monsters';
-import type { HitStrength } from '@/game/feel/config';
 
 /**
  * ECS component definitions. Entities are plain objects holding a subset of these.
@@ -82,11 +81,32 @@ export interface RelicState {
 }
 
 export interface Entity {
+  /**
+   * Stable numeric id, stamped by GameWorld.add (per-world counter). Object refs can't
+   * cross the wire — every networked message addresses entities by this id.
+   */
+  id?: number;
+  /** Which player owns/controls this entity (player avatars, their projectiles later). */
+  ownerId?: PlayerId;
   transform?: Transform;
   velocity?: Velocity;
   health?: Health;
-  /** Marks the single player-controlled entity. */
+  /** Marks a player-controlled entity — ANY human's avatar, local or remote. */
   playerControlled?: true;
+  /**
+   * Marks THE entity the local client owns (prediction, HUD, camera). Client-only marker:
+   * the server never sets it; sim systems must not branch on it for gameplay outcomes.
+   */
+  localPlayer?: true;
+  /** Reach multiplier of the wielded weapon (loadout data, synced by the client adapter). */
+  weaponReachMul?: number;
+  /**
+   * gameNow() of the last melee press, kept while it stays buffered (input buffering lives
+   * on the entity so the identical logic runs during server-side replay). See stepSim.
+   */
+  meleeBufferedAt?: number;
+  /** True while this carrier is aiming a pass — steadies the carried Relic's anchor. */
+  passAiming?: boolean;
   /** Number of jumps used since the player last touched the ground (maximum two). */
   jumpsUsed?: number;
   /** Timestamp (ms, performance.now) until which the entity has i-frames. */

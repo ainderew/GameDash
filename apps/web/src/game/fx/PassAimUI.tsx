@@ -12,7 +12,7 @@ import {
 } from 'three';
 import type { Group, InstancedMesh, Mesh, MeshBasicMaterial } from 'three';
 import { passAim } from '@/game/combat/passAim';
-import { sampleBezier } from '@/game/combat/passTargeting';
+import { sampleBezier } from '@sim/combat/passTargeting';
 import { relics } from '@/game/ecs/world';
 import { gameNow } from '@/game/feel/time';
 import {

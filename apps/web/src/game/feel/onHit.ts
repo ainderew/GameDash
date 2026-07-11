@@ -1,40 +1,26 @@
 /**
- * THE "ON HIT LANDED" SEAM.
+ * THE "ON HIT LANDED" SEAM — client half.
  *
  * One function that fires EVERY feedback system for a confirmed hit. Any attack in the
- * game — melee, projectile, a future new weapon — routes through `dealDamage`, which calls
- * this. Change the feel of the whole game in one place; add a new attack and it inherits
- * all the juice for free.
+ * game — melee, projectile, a future new weapon — routes through the sim's `dealDamage`,
+ * which invokes this through the injected SimHooks (see simHooks.ts). Change the feel of
+ * the whole game in one place; add a new attack and it inherits all the juice for free.
  *
- * Order of operations on a hit:
- *   hitstop (freeze) → screen shake → audio → knockback+stagger → flash+squash → impact VFX
+ * The GAMEPLAY consequences of a hit (knockback, launch, stagger, hit-reaction stamps)
+ * moved INTO the sim (@sim/systems/combatHelpers) — the server must simulate them.
+ * This file owns only what a server never runs:
+ *   hitstop (freeze) → screen shake → audio → flash+squash timing → impact VFX → damage numbers
  */
 
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
+import type { HitContext } from '@sim/hooks';
 import type { Vector3Tuple } from '@shared/types';
 import { feel, type HitStrength } from '@/game/feel/config';
 import { requestHitstop, requestSlowmo } from '@/game/feel/time';
 import { addTrauma } from '@/game/feel/screenShake';
 import { playHit, playParry } from '@/game/feel/audio';
 import { useUIStore } from '@/ui/store';
-
-export interface HitContext {
-  world: World<Entity>;
-  /** Who dealt the hit (for knockback direction). Optional (e.g. a stray projectile). */
-  attacker?: Entity;
-  target: Entity;
-  amount: number;
-  strength: HitStrength;
-  crit: boolean;
-  /** Contact point in world space — where sparks + shockwave spawn. */
-  point: Vector3Tuple;
-  /** Unit knockback direction in XZ (away from the attacker). */
-  dirX: number;
-  dirZ: number;
-  /** gameNow() of the hit. */
-  now: number;
-}
 
 /** hex `#rrggbb` → linear-ish RGB tuple in 0..1. */
 export const hexToRgb = (hex: string): Vector3Tuple => {
@@ -84,10 +70,11 @@ export const spawnImpactVfx = (
 };
 
 /**
- * Fire all feedback for a landed hit. Modular by design — this is the reusable event.
+ * Fire all client feedback for a landed hit. Modular by design — this is the reusable
+ * event. Knockback/stagger already happened inside the sim before this fires.
  */
 export const onHitLanded = (ctx: HitContext): void => {
-  const { world, target, strength, crit, point, dirX, dirZ, now } = ctx;
+  const { world, target, amount, strength, crit, point, dirX, dirZ, now } = ctx;
 
   // 1. HITSTOP — freeze the whole fight for a few frames. The primary impact read.
   requestHitstop(feel.hitstopMs[strength]);
@@ -98,23 +85,8 @@ export const onHitLanded = (ctx: HitContext): void => {
   // 7. AUDIO — the layered punch (half the feel).
   playHit(strength, crit);
 
-  // 3. KNOCKBACK + 5. HITSTUN — everyone gets shoved away from the blow. The player takes a
-  //    SCALED shove (playerScale) that plays under the hurt anim: knockbackSystem owns their
-  //    horizontal velocity until the impulse settles, then control returns. A dodge breaks
-  //    out of it early (see applyPlayerIntent) so it never feels like a cutscene.
-  const kbScale = target.playerControlled ? feel.knockback.playerScale : 1;
-  if (kbScale > 0) {
-    const speed = feel.knockback.speed[strength] * kbScale;
-    target.knockback = [dirX * speed, 0, dirZ * speed];
-    if (target.velocity) {
-      target.velocity.linear[1] = feel.knockback.launch[strength] * kbScale;
-    }
-    target.staggerUntil = now + feel.hitstunMs[strength];
-  }
-
-  // 5. HIT REACTION — flash (white light / red heavy) + squash & stretch timeline.
-  target.hitReactionAt = now;
-  target.hitReactionStrength = strength;
+  // 5. HIT REACTION — flash (white light / red heavy); the squash timeline reads the
+  //    hitReaction stamps the sim already wrote.
   target.hitFlashUntil = now + feel.flash.durationMs[strength];
   // The player always flashes red (damage-taken readout); enemies stay white/red by strength.
   const flashHex =
@@ -131,6 +103,21 @@ export const onHitLanded = (ctx: HitContext): void => {
     dirZ,
   );
 
+  // Floating damage number — a render-only entity, spawned client-side (never by the sim).
+  if (target.transform) {
+    world.add({
+      transform: {
+        position: [
+          target.transform.position[0] + (((now % 7) - 3) / 6) * 0.4,
+          target.transform.position[1] + 1.4,
+          target.transform.position[2],
+        ],
+        rotationY: 0,
+      },
+      floatingNumber: { amount, spawnedAt: now, crit },
+    });
+  }
+
   // HUD juice: a player hit on an enemy feeds the combo counter.
   if (ctx.attacker?.playerControlled && !target.playerControlled) {
     useUIStore.getState().registerComboHit(now);
@@ -139,10 +126,11 @@ export const onHitLanded = (ctx: HitContext): void => {
 
 /**
  * A successful parry: the incoming hit is negated and turned back on the attacker.
- * Bright spark, hard shake, a snap of slow-motion, and the attacker is staggered.
+ * Bright spark, hard shake, a snap of slow-motion. (The attacker's stagger/shove and
+ * hit-reaction stamps are sim consequences, applied in dealDamage before this fires.)
  */
 export const onParry = (ctx: HitContext): void => {
-  const { world, attacker, point, dirX, dirZ, now } = ctx;
+  const { world, attacker, point, now } = ctx;
 
   playParry();
   addTrauma(feel.screenShake.traumaPerHit.heavy);
@@ -150,13 +138,8 @@ export const onParry = (ctx: HitContext): void => {
   // A bright spark at the clash — always heavy + white-hot.
   spawnImpactVfx(world, point, 'heavy', '#ffffff');
 
-  // Stagger + shove the attacker back (dir points attacker→target, so push them the other way).
+  // White flash on the punished attacker (its knockback/stagger came from the sim).
   if (attacker && !attacker.playerControlled) {
-    const speed = feel.knockback.speed.heavy;
-    attacker.knockback = [-dirX * speed, 0, -dirZ * speed];
-    attacker.staggerUntil = now + feel.parry.attackerStunMs;
-    attacker.hitReactionAt = now;
-    attacker.hitReactionStrength = 'heavy';
     attacker.hitFlashUntil = now + feel.flash.durationMs.heavy;
     attacker.hitFlashColor = hexToRgb('#ffffff');
   }

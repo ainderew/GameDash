@@ -1,5 +1,5 @@
-import type { Entity } from '@/game/ecs/components';
-import type { Candidate } from '@/game/combat/passTargeting';
+import type { Entity } from '@sim/components';
+import type { Candidate } from '@sim/combat/passTargeting';
 import type { Vector3Tuple } from '@shared/types';
 
 /**

@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
-import { startMelee, weaponSystem } from '@/game/ecs/systems/weaponSystem';
-import { comboAt, moveActiveWindow, moveAnimMs } from '@/game/combat/combo';
-import { aiSystem } from '@/game/ecs/systems/aiSystem';
-import { knockbackSystem } from '@/game/ecs/systems/knockbackSystem';
-import { healthSystem } from '@/game/ecs/systems/healthSystem';
-import { applyDamage } from '@/game/ecs/systems/combatHelpers';
-import { createMonster } from '@/game/ecs/systems/spawnSystem';
-import { drainEvents, resetEvents } from '@/game/events';
+import type { Entity } from '../components';
+import { startMelee, weaponSystem } from './weaponSystem';
+import { comboAt, moveActiveWindow, moveAnimMs } from '../combat/combo';
+import { aiSystem } from './aiSystem';
+import { knockbackSystem } from './knockbackSystem';
+import { healthSystem } from './healthSystem';
+import { applyDamage } from './combatHelpers';
+import { createMonster } from './spawnSystem';
+import { EventQueue } from '../events';
 import { MELEE_DAMAGE } from '@shared/balance';
 
 const addPlayer = (world: World<Entity>): Entity =>
@@ -20,7 +20,10 @@ const addPlayer = (world: World<Entity>): Entity =>
     playerControlled: true,
   });
 
-beforeEach(() => resetEvents());
+let events = new EventQueue();
+beforeEach(() => {
+  events = new EventQueue();
+});
 
 describe('weaponSystem melee', () => {
   it('damages a monster in the arc at most once per swing', () => {
@@ -166,10 +169,10 @@ describe('healthSystem death + loot', () => {
     const m = world.add(createMonster('brute', [3, 0, 0]));
     m.health!.current = 0;
 
-    healthSystem(world);
+    healthSystem(world, events);
 
-    const events = drainEvents();
-    const loot = events.filter((e) => e.type === 'LootDropped');
+    const drained = events.drain();
+    const loot = drained.filter((e) => e.type === 'LootDropped');
     expect(loot).toHaveLength(1);
     expect(loot[0]).toMatchObject({ tableId: 'rare' });
     expect(world.with('monster').entities).toHaveLength(0);
@@ -180,10 +183,10 @@ describe('healthSystem death + loot', () => {
     const player = addPlayer(world);
     player.health!.current = 0;
 
-    healthSystem(world);
+    healthSystem(world, events);
 
-    const events = drainEvents();
-    expect(events.some((e) => e.type === 'PlayerDowned')).toBe(true);
+    const drained = events.drain();
+    expect(drained.some((e) => e.type === 'PlayerDowned')).toBe(true);
     expect(world.with('playerControlled').entities).toHaveLength(1);
   });
 });

@@ -10,10 +10,10 @@ import {
 } from 'three';
 import type { Mesh } from 'three';
 import { world } from '@/game/ecs/world';
-import { COMBO_MOVES, comboAt, moveActiveWindow } from '@/game/combat/combo';
+import { COMBO_MOVES, comboAt, moveActiveWindow } from '@sim/combat/combo';
 import { currentWeapon } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';
-import { heightAt } from '@/game/world/terrainHeight';
+import { heightAt } from '@sim/terrain/terrainHeight';
 import { MELEE_RANGE } from '@shared/balance';
 
 const players = world.with('playerControlled', 'transform');

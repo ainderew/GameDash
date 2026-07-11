@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '../components';
 import {
   bezierControl,
   passDurationMs,
@@ -9,7 +9,7 @@ import {
   selectPassTarget,
   stereoPanFor,
   type Candidate,
-} from '@/game/combat/passTargeting';
+} from './passTargeting';
 import {
   RELIC_CATCH_SOCKET_Y,
   RELIC_PASS_ARC_MAX,

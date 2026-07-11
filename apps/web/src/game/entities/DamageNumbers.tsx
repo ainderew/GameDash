@@ -2,8 +2,8 @@ import { Text } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useRef } from 'react';
 import { world } from '@/game/ecs/world';
-import type { Entity } from '@/game/ecs/components';
-import { DAMAGE_NUMBER_LIFETIME_MS } from '@/game/ecs/systems/combatHelpers';
+import type { Entity } from '@sim/components';
+import { DAMAGE_NUMBER_LIFETIME_MS } from '@sim/systems/combatHelpers';
 import { gameNow } from '@/game/feel/time';
 
 const POOL = 24;

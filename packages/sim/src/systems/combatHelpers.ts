@@ -1,9 +1,9 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '../components';
 import type { Vector3Tuple } from '@shared/types';
-import { isInIFrames } from '@shared/combat';
-import { feel, type HitStrength } from '@/game/feel/config';
-import { onHitLanded, onParry, type HitContext } from '@/game/feel/onHit';
+import { isInIFrames, type HitStrength } from '@shared/combat';
+import { HITSTUN_MS, KNOCKBACK_TUNING, PARRY_TUNING } from '@shared/balance';
+import { NOOP_HOOKS, type HitContext, type SimHooks } from '../hooks';
 
 const HIT_FLASH_MS = 120;
 const DAMAGE_NUMBER_MS = 750;
@@ -75,8 +75,10 @@ export const applyDamage = (target: Entity, amount: number, now: number): boolea
 };
 
 /**
- * Apply damage, fire ALL the hit feedback (via the onHitLanded seam), and spawn a floating
- * damage number if it landed. Use this from systems (which have world access); keep the pure
+ * Apply damage plus its GAMEPLAY consequences (knockback, launch, stagger, hit-reaction
+ * stamps), then hand the rich context to the feel layer via `hooks.onHitLanded` — the
+ * client fires hitstop/shake/audio/VFX/damage numbers there; the server passes no hooks
+ * and the hit is silent. Use this from systems (which have world access); keep the pure
  * `applyDamage` for unit tests.
  *
  * Pass `opts` (attacker, strength, contact point) so the feel layer can shape the impact.
@@ -89,36 +91,54 @@ export const dealDamage = (
   now: number,
   crit = false,
   opts: HitOptions = {},
+  hooks: SimHooks = NOOP_HOOKS,
 ): boolean => {
   // Parry seam: an open block window on the player turns the hit back on the attacker.
   if (
-    feel.parry.enabled &&
+    PARRY_TUNING.enabled &&
     target.playerControlled &&
     (target.blockingUntil ?? 0) > now &&
     !isInIFrames(target, now)
   ) {
-    onParry(buildHitContext(world, target, amount, now, crit, opts));
+    const ctx = buildHitContext(world, target, amount, now, crit, opts);
+    // Stagger + shove the attacker back (dir points attacker→target, push the other way).
+    const attacker = ctx.attacker;
+    if (attacker && !attacker.playerControlled) {
+      const speed = KNOCKBACK_TUNING.speed.heavy;
+      attacker.knockback = [-ctx.dirX * speed, 0, -ctx.dirZ * speed];
+      attacker.staggerUntil = now + PARRY_TUNING.attackerStunMs;
+      attacker.hitReactionAt = now;
+      attacker.hitReactionStrength = 'heavy';
+    }
+    hooks.onParry?.(ctx);
     return false;
   }
 
   const landed = applyDamage(target, amount, now);
   if (!landed) return false;
 
-  if (target.transform) {
-    world.add({
-      transform: {
-        position: [
-          target.transform.position[0] + (((now % 7) - 3) / 6) * 0.4,
-          target.transform.position[1] + 1.4,
-          target.transform.position[2],
-        ],
-        rotationY: 0,
-      },
-      floatingNumber: { amount, spawnedAt: now, crit },
-    });
+  const ctx = buildHitContext(world, target, amount, now, crit, opts);
+
+  // KNOCKBACK + HITSTUN — everyone gets shoved away from the blow. Players take a SCALED
+  // shove (playerScale) that plays under the hurt anim: knockbackSystem owns their
+  // horizontal velocity until the impulse settles, then control returns. A dodge breaks
+  // out of it early (see applyPlayerIntent) so it never feels like a cutscene.
+  const kbScale = target.playerControlled ? KNOCKBACK_TUNING.playerScale : 1;
+  if (kbScale > 0) {
+    const speed = KNOCKBACK_TUNING.speed[ctx.strength] * kbScale;
+    target.knockback = [ctx.dirX * speed, 0, ctx.dirZ * speed];
+    if (target.velocity) {
+      target.velocity.linear[1] = KNOCKBACK_TUNING.launch[ctx.strength] * kbScale;
+    }
+    target.staggerUntil = now + HITSTUN_MS[ctx.strength];
   }
 
-  onHitLanded(buildHitContext(world, target, amount, now, crit, opts));
+  // Hit-reaction stamp: deterministic sim data (passControl gates pass interruption on the
+  // strength) that the renderer also reads for squash & stretch timing.
+  target.hitReactionAt = now;
+  target.hitReactionStrength = ctx.strength;
+
+  hooks.onHitLanded?.(ctx);
   return true;
 };
 

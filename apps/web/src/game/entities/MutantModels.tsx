@@ -4,7 +4,7 @@ import { AnimationMixer, Box3, LoopOnce, Vector3 } from 'three';
 import type { AnimationAction, AnimationClip, Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { monsters } from '@/game/ecs/world';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
 import { deMetalize } from '@/lib/materials';

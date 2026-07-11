@@ -3,7 +3,7 @@ import { useMemo, useRef } from 'react';
 import { AdditiveBlending, BufferGeometry, Float32BufferAttribute, MeshBasicMaterial, Vector3 } from 'three';
 import type { Mesh } from 'three';
 import { world } from '@/game/ecs/world';
-import { comboAt, moveActiveWindow } from '@/game/combat/combo';
+import { comboAt, moveActiveWindow } from '@sim/combat/combo';
 import { weaponSockets } from '@/game/combat/weaponSockets';
 import { currentWeapon } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';

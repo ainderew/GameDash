@@ -1,4 +1,4 @@
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import { feel } from '@/game/feel/config';
 
 /**

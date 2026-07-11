@@ -8,6 +8,7 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       '@shared': fileURLToPath(new URL('../../packages/shared/src', import.meta.url)),
+      '@sim': fileURLToPath(new URL('../../packages/sim/src', import.meta.url)),
     },
   },
 });

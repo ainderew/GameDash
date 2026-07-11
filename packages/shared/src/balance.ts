@@ -3,6 +3,8 @@
  * ANTI-PATTERN: never hardcode these numbers in components — import from here.
  */
 
+import type { ByStrength } from './combat';
+
 /** Horizontal move speed while sprinting (Shift held), world units per second. */
 export const PLAYER_SPEED = 6;
 
@@ -35,6 +37,46 @@ export const CAMERA_HEIGHT = 10.5;
 
 /** Camera smoothing factor (higher = snappier). */
 export const CAMERA_DAMPING = 6;
+
+// ── Combat: reaction tuning (used INSIDE sim math — balance, not juice) ────
+// Moved value-identical from apps/web feel/config so the headless sim can apply
+// knockback/hitstun/parry without importing the client feel layer. These stay
+// MUTABLE objects: the client feel config aliases them, so the leva panel keeps
+// live-tuning them in single-player. Presentation-only values (hitstop, shake,
+// flash, VFX, audio, slow-mo) remain in apps/web/src/game/feel/config.ts.
+
+export interface KnockbackTuning {
+  /** Initial launch speed away from the attacker, world units/sec. */
+  speed: ByStrength<number>;
+  /** Slight upward pop on impact, world units/sec (heavier hits launch more). */
+  launch: ByStrength<number>;
+  /** Velocity decay per second (higher = knockback dies faster). Ground "friction". */
+  friction: number;
+  /** Multiplier on speed/launch when a PLAYER is the one shoved (0 = no knockback). */
+  playerScale: number;
+}
+
+export const KNOCKBACK_TUNING: KnockbackTuning = {
+  speed: { light: 20, heavy: 16 },
+  launch: { light: 0.5, heavy: 4.5 },
+  friction: 9,
+  playerScale: 0.6,
+};
+
+/** How long a hit target is staggered (can't act while knockback plays), ms. */
+export const HITSTUN_MS: ByStrength<number> = { light: 280, heavy: 500 };
+
+/** Parry rules the sim enforces (the flourish — slow-mo/audio/VFX — stays client feel). */
+export const PARRY_TUNING = {
+  enabled: true,
+  /** Block window at attack startup that negates the incoming hit, ms. */
+  windowMs: 150,
+  /** How long the parried attacker is staggered, ms. */
+  attackerStunMs: 700,
+};
+
+/** Solid-body separation tuning. radiusScale multiplies body radii (1 = touch exactly). */
+export const BODY_TUNING = { radiusScale: 1 };
 
 // ── Combat: player weapons ────────────────────────────────────────────────
 /** Base melee damage per swing. */

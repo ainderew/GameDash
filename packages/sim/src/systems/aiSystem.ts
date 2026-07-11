@@ -1,22 +1,30 @@
-import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
-import { dealDamage } from '@/game/ecs/systems/combatHelpers';
+import type { With, World } from 'miniplex';
+import type { Entity } from '../components';
+import { dealDamage } from './combatHelpers';
+import { NOOP_HOOKS, type SimHooks } from '../hooks';
 import { computeDamage } from '@shared/combat';
 import { PROJECTILE_SPEED } from '@shared/balance';
 
-/** Base wake radius — a monster idles in place until the player comes this close. */
+/** Base wake radius — a monster idles in place until a player comes this close. */
 const AGGRO_RANGE = 12;
 /** Extra distance beyond the wake radius before an engaged monster gives up (hysteresis). */
 const LEASH_MARGIN = 8;
 
+const isDead = (e: Entity): boolean => (e.health?.current ?? 1) <= 0;
+
 /**
  * Monster FSM: idle → chase → attack → cooldown. Pure over (world, dt, now)
  * apart from mutating monster/player entities. The transition logic is unit-tested.
+ * N-player: each monster targets its NEAREST LIVING player-controlled entity; with
+ * nobody left alive the field stands down (the hunt has already failed by then).
  */
-export const aiSystem = (world: World<Entity>, dt: number, now: number): void => {
-  const player = world.with('playerControlled', 'transform', 'health').first;
-  if (!player?.transform) return;
-  const pp = player.transform.position;
+export const aiSystem = (
+  world: World<Entity>,
+  dt: number,
+  now: number,
+  hooks: SimHooks = NOOP_HOOKS,
+): void => {
+  const players = world.with('playerControlled', 'transform', 'health');
 
   for (const m of world.with('transform', 'aiBrain', 'monster', 'velocity')) {
     const brain = m.aiBrain;
@@ -24,9 +32,27 @@ export const aiSystem = (world: World<Entity>, dt: number, now: number): void =>
     // owns its velocity this frame; skip all AI (movement + attacks).
     if ((m.staggerUntil ?? 0) > now) continue;
     const mp = m.transform.position;
+
+    // Nearest living player is this monster's target for the tick.
+    let player: With<Entity, 'playerControlled' | 'transform' | 'health'> | undefined;
+    let dist = Infinity;
+    for (const p of players) {
+      if (isDead(p)) continue;
+      const d = Math.hypot(p.transform.position[0] - mp[0], p.transform.position[2] - mp[2]);
+      if (d < dist) {
+        dist = d;
+        player = p;
+      }
+    }
+    if (!player) {
+      brain.state = 'idle';
+      m.velocity.linear[0] = 0;
+      m.velocity.linear[2] = 0;
+      continue;
+    }
+    const pp = player.transform.position;
     const dx = pp[0] - mp[0];
     const dz = pp[2] - mp[2];
-    const dist = Math.hypot(dx, dz);
     const range = m.attackRange ?? 2;
     const cooldown = m.attackCooldownMs ?? 1000;
     const speed = m.moveSpeed ?? 3;
@@ -81,10 +107,15 @@ export const aiSystem = (world: World<Entity>, dt: number, now: number): void =>
         // Brutes hit heavy; everything else jabs. Strength scales the player's knockback
         // (feel.knockback.playerScale shove under the hurt anim) + shake/flash/audio/hitstop.
         const strength = m.monster === 'brute' ? 'heavy' : 'light';
-        dealDamage(world, player, computeDamage(m.attackDamage ?? 5), now, false, {
-          attacker: m,
-          strength,
-        });
+        dealDamage(
+          world,
+          player,
+          computeDamage(m.attackDamage ?? 5),
+          now,
+          false,
+          { attacker: m, strength },
+          hooks,
+        );
       }
       brain.state = 'cooldown';
     }

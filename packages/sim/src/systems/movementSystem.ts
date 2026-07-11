@@ -1,7 +1,6 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
-import { comboAt, lungeSpeed } from '@/game/combat/combo';
-import { currentWeapon } from '@/game/combat/weaponStore';
+import type { Entity } from '../components';
+import { comboAt, lungeSpeed } from '../combat/combo';
 import {
   DODGE_COOLDOWN_MS,
   DODGE_DISTANCE,
@@ -12,7 +11,7 @@ import {
   PLAYER_SPEED,
   PLAYER_WALK_SPEED,
 } from '@shared/balance';
-import { heightAt } from '@/game/world/terrainHeight';
+import { heightAt } from '../terrain/terrainHeight';
 
 /** A per-frame snapshot of intent, produced by useInput and read here. Pure data — no React. */
 export interface InputIntent {
@@ -85,7 +84,8 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     const move = comboAt(entity.meleeCombo ?? 0);
     const age = now - (entity.meleeStartedAt ?? now);
     // Longer weapons stride further (greatsword lunges past a dagger's shuffle).
-    const v = lungeSpeed(move, age, currentWeapon().reachMul);
+    // Reach lives on the entity (loadout data the client adapter syncs), not in a store.
+    const v = lungeSpeed(move, age, entity.weaponReachMul ?? 1);
     velocity.linear[0] = Math.sin(transform.rotationY) * v;
     velocity.linear[2] = Math.cos(transform.rotationY) * v;
   } else if (catchRooted) {

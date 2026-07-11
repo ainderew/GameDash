@@ -2,7 +2,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
 import { Color, DynamicDrawUsage, InstancedBufferAttribute, Object3D, PlaneGeometry, ShaderMaterial } from 'three';
 import type { InstancedMesh } from 'three';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import { monsters } from '@/game/ecs/world';
 import { gameNow } from '@/game/feel/time';
 import {

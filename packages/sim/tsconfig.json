@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Headless doctrine: no DOM lib, no DOM globals. If a DOM type sneaks into the sim,
+    // the typecheck fails before the eslint import ban even runs.
+    "lib": ["ES2023"],
+    "types": ["vitest/globals"]
+  },
+  "include": ["src"]
+}

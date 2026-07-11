@@ -10,7 +10,7 @@ import {
 } from 'three';
 import type { Mesh } from 'three';
 import { world } from '@/game/ecs/world';
-import { comboAt } from '@/game/combat/combo';
+import { comboAt } from '@sim/combat/combo';
 import { gameNow } from '@/game/feel/time';
 import { MELEE_RANGE } from '@shared/balance';
 

@@ -6,7 +6,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@shared/*": ["../../packages/shared/src/*"]
+      "@shared/*": ["../../packages/shared/src/*"],
+      "@sim/*": ["../../packages/sim/src/*"]
     }
   },
   "include": ["src", "vite.config.ts"]

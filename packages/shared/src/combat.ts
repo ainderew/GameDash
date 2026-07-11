@@ -5,6 +5,19 @@
 
 export type Faction = 'player' | 'monster';
 
+/**
+ * Hit classification — a jab vs a committed strike. Lives here (not in the client feel
+ * config) because it is a combat property: the sim scales knockback/hitstun by it, and
+ * the feel layer scales every feedback system by it.
+ */
+export type HitStrength = 'light' | 'heavy';
+
+/** A value that differs for light vs heavy hits. */
+export interface ByStrength<T> {
+  light: T;
+  heavy: T;
+}
+
 export interface DamageModifiers {
   /** Multiplicative damage bonus, e.g. 0.2 = +20%. */
   bonusPct?: number;

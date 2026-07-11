@@ -1,5 +1,5 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import type { Vector3Tuple } from '@shared/types';
 import { cameraRig } from '@/game/camera/cameraRig';
 import { passAim, resetPassAim } from '@/game/combat/passAim';
@@ -9,8 +9,8 @@ import {
   sampleBezier,
   selectPassTarget,
   type Candidate,
-} from '@/game/combat/passTargeting';
-import { carriedRelicOf, passRelic } from '@/game/ecs/systems/relicSystem';
+} from '@sim/combat/passTargeting';
+import { carriedRelicOf } from '@sim/systems/relicSystem';
 import {
   RELIC_PASS_CONE_DEG,
   RELIC_PASS_RANGE,
@@ -50,11 +50,14 @@ const angleFromCamera = (carrier: Vector3Tuple, candidate: Vector3Tuple): number
   return (Math.acos(dot) * 180) / Math.PI;
 };
 
-/** Every teammate in range, scored against the camera's intent. */
+/** Every receiver in range — AI teammates AND other player-controlled entities —
+ * scored against the camera's intent. */
 const buildCandidates = (world: World<Entity>, carrier: Entity, now: number): Candidate[] => {
   const out: Candidate[] = [];
   const cp = carrier.transform!.position;
-  for (const mate of world.with('teammate', 'transform')) {
+  for (const mate of world.with('transform')) {
+    if (mate === carrier) continue;
+    if (!mate.teammate && !mate.playerControlled) continue;
     const mp = mate.transform.position;
     const dist = Math.hypot(mp[0] - cp[0], mp[2] - cp[2]);
     if (dist > RELIC_PASS_RANGE || isDead(mate)) continue;
@@ -89,13 +92,17 @@ const updateCurve = (relic: Entity, target: Entity): void => {
   }
 };
 
-/** Per-tick driver, called from SystemRunner for the local player. */
+/**
+ * Per-tick driver, called from SystemRunner for the local player. Pure input handling:
+ * it returns the receiver to pass to THIS tick (or null) — the launch itself is a sim
+ * intent executed inside stepSim, never a direct call from the input layer.
+ */
 export const updatePassControl = (
   world: World<Entity>,
   player: Entity,
   passHeld: boolean,
   now: number,
-): void => {
+): Entity | null => {
   const relic = carriedRelicOf(world, player);
   dbg.tick++;
   dbg.held = passHeld;
@@ -106,7 +113,7 @@ export const updatePassControl = (
     heldSince = null;
     canceled = false;
     if (passAim.aiming || passAim.target) resetPassAim();
-    return;
+    return null;
   }
 
   const interrupted =
@@ -124,9 +131,9 @@ export const updatePassControl = (
     if (interrupted) {
       canceled = true;
       resetPassAim();
-      return;
+      return null;
     }
-    if (canceled || now - heldSince <= RELIC_QUICK_TAP_MS) return;
+    if (canceled || now - heldSince <= RELIC_QUICK_TAP_MS) return null;
 
     // Aim mode: score, apply stickiness + manual cycling, publish for the UI/camera.
     passAim.aiming = true;
@@ -141,7 +148,7 @@ export const updatePassControl = (
     passAim.valid = passAim.target !== null;
     if (passAim.target) updateCurve(relic, passAim.target);
     else passAim.curve.length = 0;
-    return;
+    return null;
   }
 
   if (!passHeld && heldSince !== null) {
@@ -150,17 +157,19 @@ export const updatePassControl = (
     const wasCanceled = canceled;
     canceled = false;
 
+    let target: Entity | null = null;
     if (!wasCanceled && !interrupted) {
       if (heldMs <= RELIC_QUICK_TAP_MS) {
         // Quick pass: no preview was shown, so demand stronger evidence of intent
         // (narrower cone). No target → do nothing; NEVER dump it on the ground.
-        const target = selectPassTarget(null, buildCandidates(world, player, now), RELIC_QUICK_CONE_DEG);
-        if (target) passRelic(world, player, target, now);
+        target = selectPassTarget(null, buildCandidates(world, player, now), RELIC_QUICK_CONE_DEG);
       } else if (passAim.valid && passAim.target) {
-        passRelic(world, player, passAim.target, now);
+        target = passAim.target;
       }
       // Release without a valid target = cancel, silently.
     }
     resetPassAim();
+    return target;
   }
+  return null;
 };

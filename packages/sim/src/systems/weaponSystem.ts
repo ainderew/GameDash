@@ -1,6 +1,6 @@
 import type { World } from 'miniplex';
-import type { AttackState, Entity } from '@/game/ecs/components';
-import { dealDamage } from '@/game/ecs/systems/combatHelpers';
+import type { AttackState, Entity } from '../components';
+import { dealDamage } from './combatHelpers';
 import {
   chainReadyMs,
   COMBO_CONTINUE_MS,
@@ -8,12 +8,9 @@ import {
   comboAt,
   moveActiveWindow,
   moveAnimMs,
-} from '@/game/combat/combo';
-import { playWhoosh } from '@/game/feel/audio';
-import { currentWeapon } from '@/game/combat/weaponStore';
-import { weaponSockets } from '@/game/combat/weaponSockets';
+} from '../combat/combo';
+import { NOOP_HOOKS, type SimHooks } from '../hooks';
 import { computeDamage } from '@shared/combat';
-import { Vector3 } from 'three';
 import {
   MELEE_DAMAGE,
   MELEE_RANGE,
@@ -31,12 +28,6 @@ export interface AttackIntent {
 
 /** How long a melee press made during the swing lockout stays buffered, ms. */
 export const MELEE_BUFFER_MS = 250;
-
-// Renderer-owned sockets refine visual contact with the previous rendered blade pose. Gameplay
-// still uses the deterministic arc broad phase below, which keeps systems testable/headless.
-const bladeBase = new Vector3();
-const bladeTip = new Vector3();
-const bladeContact = new Vector3();
 
 /** Snap an entity's facing toward a world-space XZ point (cursor aim). */
 const faceToward = (e: Entity, aimAt: [number, number]): void => {
@@ -60,6 +51,7 @@ export const startMelee = (
   player: Entity,
   now: number,
   aimAt?: [number, number],
+  hooks: SimHooks = NOOP_HOOKS,
 ): boolean => {
   if (now < (player.meleeReadyAt ?? 0)) return false;
   // No swings mid-dash — a buffered press fires the moment the dodge ends instead.
@@ -84,8 +76,8 @@ export const startMelee = (
   player.meleeReadyAt = now + chainReadyMs(move);
   player.meleeComboExpiresAt = now + moveAnimMs(move) + COMBO_CONTINUE_MS;
 
-  // Whoosh on the swing itself so even a whiff feels like effort.
-  playWhoosh(move.weight);
+  // Whoosh on the swing itself so even a whiff feels like effort (client feel hook).
+  hooks.onSwing?.(player, move.weight);
   return true;
 };
 
@@ -121,7 +113,11 @@ export const fireRanged = (
  * Resolve active melee swings: during the active window, damage monsters inside the
  * arc in front of the player, at most once per target per swing.
  */
-export const weaponSystem = (world: World<Entity>, now: number): void => {
+export const weaponSystem = (
+  world: World<Entity>,
+  now: number,
+  hooks: SimHooks = NOOP_HOOKS,
+): void => {
   const expired: Entity[] = [];
 
   for (const player of world.with('attackState', 'transform', 'playerControlled')) {
@@ -146,8 +142,9 @@ export const weaponSystem = (world: World<Entity>, now: number): void => {
     const fx = Math.sin(t.rotationY);
     const fz = Math.cos(t.rotationY);
     const cosHalfArc = Math.cos(move.halfArc);
-    // The wielded weapon scales reach (greatsword > katana > dagger).
-    const range = MELEE_RANGE * currentWeapon().reachMul;
+    // The wielded weapon scales reach (greatsword > katana > dagger) — loadout data
+    // synced onto the entity by the client adapter (SystemRunner).
+    const range = MELEE_RANGE * (player.weaponReachMul ?? 1);
     const rangeSq = range * range;
 
     for (const m of world.with('transform', 'health', 'faction')) {
@@ -172,28 +169,19 @@ export const weaponSystem = (world: World<Entity>, now: number): void => {
         m.transform.position[1] + 1.0,
         m.transform.position[2] - uz * mr,
       ];
-      const baseSocket = weaponSockets.base;
-      const tipSocket = weaponSockets.tip;
-      if (baseSocket && tipSocket) {
-        baseSocket.getWorldPosition(bladeBase);
-        tipSocket.getWorldPosition(bladeTip);
-        bladeContact.set(point[0], point[1], point[2]);
-        const blade = bladeTip.sub(bladeBase);
-        const lenSq = blade.lengthSq();
-        if (lenSq > 1e-6) {
-          const fraction = Math.max(0, Math.min(1, bladeContact.sub(bladeBase).dot(blade) / lenSq));
-          bladeBase.addScaledVector(blade, fraction);
-          point[0] = bladeBase.x;
-          point[1] = bladeBase.y;
-          point[2] = bladeBase.z;
-        }
-      }
-      dealDamage(world, m, computeDamage(MELEE_DAMAGE * move.damageMul), now, false, {
-        attacker: player,
-        strength: move.weight,
-        dir: [ux, uz],
-        point,
-      });
+      // Renderer-owned weapon sockets may refine the visual contact point against the
+      // previous rendered blade pose (local play only). The deterministic arc broad phase
+      // above stays the gameplay truth — the server will never run this hook.
+      hooks.refineMeleeHit?.(player, m, point);
+      dealDamage(
+        world,
+        m,
+        computeDamage(MELEE_DAMAGE * move.damageMul),
+        now,
+        false,
+        { attacker: player, strength: move.weight, dir: [ux, uz], point },
+        hooks,
+      );
       atk.hitSet.add(m);
     }
   }

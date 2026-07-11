@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { relics, world } from '@/game/ecs/world';
 import { passAim } from '@/game/combat/passAim';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import { AnimatedCharacter } from '@/game/entities/AnimatedCharacter';
 import type { CharState } from '@/game/entities/AnimatedCharacter';
 import {
@@ -13,13 +13,13 @@ import {
 } from '@/game/entities/characters';
 import { useUIStore } from '@/ui/store';
 import { WeaponMount } from '@/game/entities/Weapon';
-import { comboAt, type ComboClip } from '@/game/combat/combo';
+import { comboAt, type ComboClip } from '@sim/combat/combo';
 import { getWeapon } from '@/game/combat/weapons';
 import { useWeaponStore } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
 import { playFootstep } from '@/game/feel/audio';
-import { heightAt } from '@/game/world/terrainHeight';
+import { heightAt } from '@sim/terrain/terrainHeight';
 import { DODGE_DURATION_MS, RELIC_CATCH_ROOT_MS } from '@shared/balance';
 
 interface Props {
@@ -34,6 +34,8 @@ const makePlayerEntity = (): Entity => ({
   faction: 'player',
   radius: 0.45,
   playerControlled: true,
+  // THE entity this client owns — HUD/camera/input select on this, never `.first`.
+  localPlayer: true,
 });
 
 /** Moving at all → at least walk. */

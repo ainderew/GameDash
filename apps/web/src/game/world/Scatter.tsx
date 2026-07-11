@@ -3,7 +3,7 @@ import { InstancedMesh, Object3D, StaticDrawUsage } from 'three';
 import type { BufferGeometry, Group, Mesh } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt } from '@/game/world/Terrain';
-import { pathMask, hubRoadMask } from '@/game/world/terrainHeight';
+import { pathMask, hubRoadMask } from '@sim/terrain/terrainHeight';
 import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
 import { PLAZA_DRESSING, inPlazaKeepout } from '@/game/world/hubLayout';
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { RigidBody, CuboidCollider } from '@react-three/rapier';
 import { useTexture } from '@react-three/drei';
 import { PlaneGeometry, Color, MeshStandardMaterial, MirroredRepeatWrapping } from 'three';
-import { heightAt, PLAY_RADIUS, HUB_ROADS } from '@/game/world/terrainHeight';
+import { heightAt, PLAY_RADIUS, HUB_ROADS } from '@sim/terrain/terrainHeight';
 import {
   createDirtTexture,
   createGrassMacroTexture,

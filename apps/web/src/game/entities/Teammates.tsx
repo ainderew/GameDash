@@ -5,12 +5,12 @@ import { Box3, Vector3 } from 'three';
 import type { Group, Mesh } from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { world } from '@/game/ecs/world';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '@sim/components';
 import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
 import { deMetalize } from '@/lib/materials';
 import { PLAYER_CHARACTERS } from '@/game/entities/characters';
-import { heightAt } from '@/game/world/terrainHeight';
+import { heightAt } from '@sim/terrain/terrainHeight';
 
 /**
  * Local stand-in teammates until real multiplayer lands: druid-model avatars driven by

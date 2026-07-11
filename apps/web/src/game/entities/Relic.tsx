@@ -5,7 +5,7 @@ import type { Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { world, relics } from '@/game/ecs/world';
 import { passAim } from '@/game/combat/passAim';
 import { useGameModel } from '@/lib/loaders';
-import { heightAt } from '@/game/world/terrainHeight';
+import { heightAt } from '@sim/terrain/terrainHeight';
 import { RELIC_GROUND_HOVER } from '@shared/balance';
 
 /**

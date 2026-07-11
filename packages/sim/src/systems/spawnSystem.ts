@@ -1,5 +1,5 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
+import type { Entity } from '../components';
 import type { MonsterArchetype } from '@shared/monsters';
 import { MONSTER_ARCHETYPES } from '@shared/monsters';
 import { MAX_MONSTERS } from '@shared/balance';
@@ -44,7 +44,7 @@ const WAVES: { archetype: MonsterArchetype; count: number }[][] = [
 const RESPAWN_DELAY_MS = 2500;
 const RING_RADIUS = 18;
 
-interface SpawnState {
+export interface SpawnState {
   wave: number;
   nextSpawnAt: number;
   started: boolean;

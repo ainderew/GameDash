@@ -1,7 +1,7 @@
 ﻿import { describe, expect, it } from 'vitest';
 import { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
-import { applyPlayerIntent, movementSystem } from '@/game/ecs/systems/movementSystem';
+import type { Entity } from '../components';
+import { applyPlayerIntent, movementSystem } from './movementSystem';
 import { DODGE_IFRAME_MS, JUMP_IMPULSE, PLAYER_SPEED, PLAYER_WALK_SPEED } from '@shared/balance';
 
 const makePlayer = (): Entity => ({

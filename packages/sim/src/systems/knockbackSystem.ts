@@ -1,11 +1,11 @@
 import type { World } from 'miniplex';
-import type { Entity } from '@/game/ecs/components';
-import { feel } from '@/game/feel/config';
+import type { Entity } from '../components';
+import { KNOCKBACK_TUNING } from '@shared/balance';
 
 /**
  * KNOCKBACK — an impulse away from the attacker that decays with friction.
  *
- * onHitLanded seeds `entity.knockback` (a velocity, world units/sec) and a `staggerUntil`
+ * dealDamage seeds `entity.knockback` (a velocity, world units/sec) and a `staggerUntil`
  * window. This system, run AFTER the AI/weapon systems and BEFORE movement, drives the
  * entity's horizontal velocity from that decaying impulse — overriding normal AI steering
  * while the stagger plays, so a hit target snaps back instead of walking through the blow.
@@ -33,7 +33,7 @@ export const knockbackSystem = (world: World<Entity>, dt: number, now: number): 
     e.velocity.linear[2] = k[2];
 
     // Friction decay (frame-rate independent). dt=0 during hitstop → no decay, no motion.
-    const decay = Math.max(0, 1 - feel.knockback.friction * dt);
+    const decay = Math.max(0, 1 - KNOCKBACK_TUNING.friction * dt);
     k[0] *= decay;
     k[2] *= decay;
   }

@@ -7,6 +7,9 @@ export type Vector3Tuple = [number, number, number];
 
 export type EntityId = number;
 
+/** Identity of a (human) player within a session — server-issued from Phase 2 on. */
+export type PlayerId = string;
+
 /** Gacha rarity tiers. */
 export type Rarity = 'R3' | 'R4' | 'R5';
 

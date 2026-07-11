@@ -5,7 +5,7 @@ import { useWeaponStore } from '@/game/combat/weaponStore';
 import { heroTransform } from '@/game/entities/heroConfig';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
 import { useUIStore } from '@/ui/store';
-import { ATTACK_TIMESCALE, COMBO_MOVES } from '@/game/combat/combo';
+import { ATTACK_TIMESCALE, COMBO_MOVES } from '@sim/combat/combo';
 
 /**
  * WEAPON picker + grip tuning (leva, dev-only). Swap the wielded weapon and dial its grip

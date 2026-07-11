@@ -15,7 +15,7 @@ import {
 } from 'three';
 import type { Mesh, MeshStandardMaterial, Texture } from 'three';
 import { useGameModel } from '@/lib/loaders';
-import { heightAt, pathMask, hubRoadMask } from '@/game/world/terrainHeight';
+import { heightAt, pathMask, hubRoadMask } from '@sim/terrain/terrainHeight';
 import { SUN_POSITION } from '@/game/world/SkyAndLight';
 import { PLAZA_DRESSING, inPlazaKeepout } from '@/game/world/hubLayout';
 
