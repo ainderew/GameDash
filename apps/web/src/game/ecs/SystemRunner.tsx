@@ -18,6 +18,7 @@ import { useInput } from '@/game/input/useInput';
 import { useUIStore, COMBO_WINDOW_MS, type GameScene } from '@/ui/store';
 import { advanceTime, gameNow, syncGameTime } from '@/game/feel/time';
 import { createSimStepper } from '@sim/loop';
+import type { CmdIntent } from '@shared/net/input';
 import { MS_PER_TICK, SIM_HZ } from '@shared/net/constants';
 import { netGame } from '@/net/netGame';
 import { netClient } from '@/net/client';
@@ -116,8 +117,11 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
     // the same stepSim. 'local': solo play keeps the exact per-frame variable-dt path
     // below — same sim, no transport.
     const session = useUIStore.getState().session;
+    // Networked in ANY scene now: the server owns the shared world in the hub AND the
+    // expedition. In the hub only movement is sent; in the expedition the full combat intent
+    // (melee/ranged/parry + aim yaw + lag-comp view time) rides the same input pipeline.
     const networked =
-      mode === 'hub' && session !== undefined && useUIStore.getState().connectionState === 'connected';
+      session !== undefined && useUIStore.getState().connectionState === 'connected';
 
     if (networked) {
       const player = localPlayers.first;
@@ -127,10 +131,30 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
         stepper.current.reset();
         wasNetworked.current = true;
       }
+      // Keep the prediction sim mode aligned with the authoritative scene (the server owns the
+      // zone; zoneChanged already flips it — this is a cheap idempotent guard on fresh starts).
+      netGame.setMode(mode === 'expedition' ? 'expedition' : 'hub');
+      player.weaponReachMul = currentWeapon().reachMul;
       const i = input.current;
       stepper.current.advance(Math.min(rawDt, 1 / 20), () => {
-        // Movement intent (camera-relative, pre-normalized) — combat verbs are hub-muted.
-        const intent = buildMoveIntent(i);
+        const intent: CmdIntent = buildMoveIntent(i);
+        if (mode === 'expedition') {
+          // Aim as a position-independent YAW (replay-stable; the server rewinds hittables to
+          // this view time for lag-comp). Falls back to current facing when the ray misses.
+          const ground = cursorGroundPoint(state, player.transform.position[1]);
+          if (ground) {
+            intent.aimYaw = Math.atan2(
+              ground[0] - player.transform.position[0],
+              ground[1] - player.transform.position[2],
+            );
+          }
+          intent.melee = i.melee;
+          intent.ranged = i.ranged;
+          intent.parry = i.parry;
+          intent.drop = i.drop;
+          intent.viewServerTimeMs = Math.max(0, netClient.serverNow() - netClient.interpDelayMs());
+        }
+        // Consume one-shot edges AFTER building the intent (they must reach the server once).
         i.jump = false;
         i.pass = false;
         i.melee = false;

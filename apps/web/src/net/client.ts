@@ -7,8 +7,9 @@ import {
   INTERP_DELAY_SHRINK_PER_S,
   PING_EWMA_ALPHA,
 } from '@shared/net/constants';
-import { decodeSnapshot, type DecodedEntityRecord } from '@shared/net/snapshot';
+import { decodeSnapshot, ENTITY_KIND, type DecodedEntityRecord, type EntityKind } from '@shared/net/snapshot';
 import { DEFAULT_CHARACTER_ID, isCharacterId, type CharacterId } from '@shared/net/character';
+import type { MonsterArchetype } from '@shared/monsters';
 import { useUIStore, type SessionMemberUI } from '@/ui/store';
 import { realtimeUrl, createTransport, type Transport } from '@/net/transport';
 import { netGame } from '@/net/netGame';
@@ -41,11 +42,21 @@ const toMemberUI = (m: SessionMemberInfo): SessionMemberUI => ({
 
 /** Full remote state per snapshot: keyframe baseline patched by stateless deltas. */
 interface RemoteEntityState {
+  /** Entity kind carried in the baseline so a delta (which omits it) can still be routed. */
+  kind: EntityKind;
   pos: [number, number, number];
   rotY: number;
   hp: number;
   vel: [number, number, number];
   flags: number;
+}
+
+/** A server-authoritative world entity (monster) replicated for networked-expedition render. */
+interface ServerEntityView {
+  kind: EntityKind;
+  buffer: InterpBuffer;
+  hp: number;
+  archetype?: MonsterArchetype;
 }
 
 class NetClient {
@@ -80,6 +91,14 @@ class NetClient {
 
   /** Per-remote-player snapshot buffers, keyed by PlayerId. */
   private readonly remoteBuffers = new Map<string, InterpBuffer>();
+
+  /** Server-owned world entities (monsters) for networked-expedition rendering, keyed by
+   * server entity id: a per-entity interp buffer + live hp + (from MonsterSpawned) archetype.
+   * Players live in remoteBuffers; the relic lives in relicNet — this is everything else. */
+  private readonly serverEntities = new Map<number, ServerEntityView>();
+  /** entityId → archetype, learned from MonsterSpawned (a monster may appear in a snapshot
+   * before/after its spawn event, so the two are reconciled). */
+  private readonly monsterArchetypes = new Map<number, MonsterArchetype>();
 
   // ── Public API (used by useSession / MainMenu / SystemRunner) ───────────────
   createSession(name: string, character: CharacterId): void {
@@ -119,6 +138,8 @@ class NetClient {
     this.lastMemberHp.clear();
     this.baselines.clear();
     this.remoteBuffers.clear();
+    this.serverEntities.clear();
+    this.monsterArchetypes.clear();
     this.tickTimeOffset = null;
     this.wallOffset = null;
     relicNet.setOwnEntity(null);
@@ -148,6 +169,11 @@ class NetClient {
   /** Current adaptive interpolation delay, ms (RemotePlayers samples serverNow − this). */
   interpDelayMs(): number {
     return this.interpDelay;
+  }
+
+  /** Server-owned world entities (monsters) — NetworkedWorld reconciles the ECS from these. */
+  remoteServerEntities(): ReadonlyMap<number, ServerEntityView> {
+    return this.serverEntities;
   }
 
   /** Interp buffer for a remote player (created lazily) — RemotePlayers samples these. */
@@ -249,33 +275,35 @@ class NetClient {
     for (const rec of entities) patched.set(rec.id, rec);
 
     for (const [id, baseState] of base) {
-      const playerId = this.entityOwners.get(id);
-      // HP → HUD (own player bar + teammate bars), gated to integer changes so a stable
-      // health never spams React. Runs for the local entity too (the ack path carries no HP).
-      if (playerId) {
-        const hp = Math.round(patched.get(id)?.hp ?? baseState.hp);
-        if (this.lastMemberHp.get(id) !== hp) {
+      const rec = patched.get(id);
+      const pos = rec?.pos ?? baseState.pos;
+      const rotY = rec?.rotY ?? baseState.rotY;
+      const hp = Math.round(rec?.hp ?? baseState.hp);
+      const flags = rec?.flags ?? baseState.flags;
+
+      if (baseState.kind === ENTITY_KIND.player) {
+        const playerId = this.entityOwners.get(id);
+        // HP → HUD (own player bar + teammate bars), gated to integer changes so a stable
+        // health never spams React. Runs for the local entity too (the ack carries no HP).
+        if (playerId && this.lastMemberHp.get(id) !== hp) {
           this.lastMemberHp.set(id, hp);
           if (playerId === this.ownPlayerId) useUIStore.getState().setHealth(hp);
           else useUIStore.getState().setMemberHp(playerId, hp);
         }
+        if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: ack path
+        if (!playerId) continue;
+        this.remoteBuffer(playerId).push({ t: header.serverTimeMs, pos: [pos[0], pos[1], pos[2]], rotY, flags });
+      } else if (baseState.kind === ENTITY_KIND.monster) {
+        // Server-authoritative monster → per-id interp buffer read by NetworkedWorld. (The
+        // relic rides relicNet's reliable events; projectiles/pickups are a later pass.)
+        let se = this.serverEntities.get(id);
+        if (!se) {
+          se = { kind: baseState.kind, buffer: new InterpBuffer(), hp, archetype: this.monsterArchetypes.get(id) };
+          this.serverEntities.set(id, se);
+        }
+        se.hp = hp;
+        se.buffer.push({ t: header.serverTimeMs, pos: [pos[0], pos[1], pos[2]], rotY, flags });
       }
-      if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: header ack path
-      if (!playerId) continue;
-      const rec = patched.get(id);
-      const state: RemoteEntityState = {
-        pos: rec?.pos ?? baseState.pos,
-        rotY: rec?.rotY ?? baseState.rotY,
-        hp: rec?.hp ?? baseState.hp,
-        vel: rec?.vel ?? baseState.vel,
-        flags: rec?.flags ?? baseState.flags,
-      };
-      this.remoteBuffer(playerId).push({
-        t: header.serverTimeMs,
-        pos: [state.pos[0], state.pos[1], state.pos[2]],
-        rotY: state.rotY,
-        flags: state.flags,
-      });
     }
   }
 
@@ -375,6 +403,10 @@ class NetClient {
         store.setSceneAuthoritative(msg.zone);
         store.setZoneCountdown(null);
         if (msg.zone === 'expedition') store.setHuntFailed(false);
+        // Expedition entities are zone-scoped — drop the replicated monster view on any
+        // transition so a stale monster can't linger into the hub or the next hunt.
+        this.serverEntities.clear();
+        this.monsterArchetypes.clear();
         return;
       }
 
@@ -410,11 +442,19 @@ class NetClient {
         return;
       }
 
-      // Monster spawn/despawn + confirmed damage drive the 3D presentation layer (meshes,
-      // hitstop, floating numbers). That renderer wiring lands in Phase 6 (needs WebGL/R3F);
-      // the server-authoritative gameplay + HUD state above is complete and bot-verified.
-      case 'monsterSpawned':
+      // Monsters are server-authoritative: spawn teaches NetworkedWorld the archetype (so it
+      // renders the right model); despawn (death) removes it immediately, even if the last
+      // delta that would have dropped it was lost. Confirmed damage/parry FX are a later pass.
+      case 'monsterSpawned': {
+        this.monsterArchetypes.set(msg.id, msg.archetype as MonsterArchetype);
+        const se = this.serverEntities.get(msg.id);
+        if (se) se.archetype = msg.archetype as MonsterArchetype;
+        return;
+      }
       case 'monsterDespawned':
+        this.serverEntities.delete(msg.id);
+        this.monsterArchetypes.delete(msg.id);
+        return;
       case 'damageDealt':
       case 'parrySuccess':
         return;
@@ -520,6 +560,7 @@ export const netClient = new NetClient();
 if (import.meta.env.DEV) (window as unknown as { __netClient?: unknown }).__netClient = netClient;
 
 const recordToState = (rec: DecodedEntityRecord): RemoteEntityState => ({
+  kind: rec.kind,
   pos: rec.pos ?? [0, 0, 0],
   rotY: rec.rotY ?? 0,
   hp: rec.hp ?? 0,

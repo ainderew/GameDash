@@ -8,6 +8,7 @@ import { Zone } from '@/game/world/Zone';
 import { PostFX } from '@/game/fx/PostFX';
 import { Player } from '@/game/entities/Player';
 import { RemotePlayers } from '@/game/entities/RemotePlayers';
+import { NetworkedWorld } from '@/game/entities/NetworkedWorld';
 import { NetGateInteraction } from '@/game/net/NetGateInteraction';
 import { SlashFX } from '@/game/fx/SlashFX';
 import { BladeTrail } from '@/game/fx/BladeTrail';
@@ -67,13 +68,16 @@ export const GameCanvas = () => {
         <Physics>
           {scene === 'hub' ? <SocialHub obstacles={obstacles} /> : <Zone obstacles={obstacles} />}
           <Player playerRef={playerRef} />
-          {/* Session peers in the shared hub (Phase 2 scope: hub presence only). */}
-          {scene === 'hub' && <RemotePlayers />}
+          {/* Session peers — rendered in BOTH the shared hub and the shared expedition. */}
+          {networked && <RemotePlayers />}
           {/* Networked expedition-gate countdown control (self-gates to a live session). */}
           {scene === 'hub' && <NetGateInteraction />}
           {scene === 'expedition' && (
             <>
-              <Teammates />
+              {/* Server-authoritative monsters (networked) replace the local sim's spawns. */}
+              {networked && <NetworkedWorld />}
+              {/* AI stand-in teammates only in solo; humans fill those slots in a session. */}
+              {!networked && <Teammates />}
               {networked ? <NetworkedRelic /> : <Relic />}
               <PassAimUI />
               <RelicDrainVFX />

@@ -1,6 +1,6 @@
 import type { Vector3Tuple } from '@shared/types';
 import { CORRECTION_SMOOTH_MS, MS_PER_TICK, RECONCILE_EPSILON_M, TELEPORT_EPSILON_M, PREDICTION_RING_SIZE } from '@shared/net/constants';
-import { makeInputCmd, intentFromCmd, encodeInputPacket, type InputCmd, type MoveIntent } from '@shared/net/input';
+import { makeInputCmd, intentFromCmd, encodeInputPacket, type CmdIntent, type InputCmd } from '@shared/net/input';
 import { ACK_FLAG_DOWNED, type SnapshotHeader } from '@shared/net/snapshot';
 import type { Entity } from '@sim/components';
 import type { GameWorld } from '@sim/world';
@@ -82,13 +82,30 @@ class NetGame {
    * One fixed client tick: quantize the intent to a wire cmd, PREDICT with the decoded
    * cmd (identical rounding to what the server will simulate — contract #1), and send
    * the redundant packet (this cmd + the previous two — contract #2).
+   *
+   * Accepts the FULL CmdIntent (movement + combat): in the hub only movement is populated;
+   * in a networked expedition the caller adds melee/ranged/parry/aim so the swing animation
+   * is predicted locally (its DAMAGE stays server-authoritative) and lag-comp gets the yaw.
    */
-  clientTick(intent: MoveIntent): void {
+  clientTick(intent: CmdIntent): void {
     const engine = this.engine;
     if (!engine || !this.send) return;
     this.seq += 1;
     const cmd = makeInputCmd(this.seq, this.seq, intent);
-    engine.predict(this.seq, intentFromCmd(cmd), this.seq * MS_PER_TICK);
+    // Predict with the DECODED movement + the combat verbs that drive the predicted swing.
+    engine.predict(
+      this.seq,
+      {
+        ...intentFromCmd(cmd),
+        melee: intent.melee,
+        ranged: intent.ranged,
+        parry: intent.parry,
+        aimYaw: intent.aimYaw,
+        passAiming: intent.passHold,
+        revive: intent.revive,
+      },
+      this.seq * MS_PER_TICK,
+    );
     this.cmdRing.push(cmd);
     if (this.cmdRing.length > 3) this.cmdRing.shift();
     this.send(encodeInputPacket(this.cmdRing));
