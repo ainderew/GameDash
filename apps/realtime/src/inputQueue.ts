@@ -32,6 +32,11 @@ export interface ConsumeResult {
   /** The consumed cmd's seq; null while coasting/idle (lastProcessedSeq unchanged). */
   seq: number | null;
   coasting: boolean;
+  /**
+   * The consumed wire cmd, for combat/aim decoding (Phase 4). Null while coasting/idle —
+   * a coast carries movement only, never a one-shot verb (melee/parry never fire on a guess).
+   */
+  cmd: InputCmd | null;
 }
 
 const IDLE_INTENT: MoveIntent = { moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false };
@@ -166,20 +171,20 @@ export class PlayerInputQueue {
     this.lastProcessedSeq = seq;
     this.lastIntent = intentFromCmd(cmd);
     this.coastTicks = 0;
-    return { intent: this.lastIntent, seq, coasting: false };
+    return { intent: this.lastIntent, seq, coasting: false, cmd };
   }
 
   private coastOrIdle(): ConsumeResult {
-    if (!this.everReceived) return { intent: IDLE_INTENT, seq: null, coasting: false };
+    if (!this.everReceived) return { intent: IDLE_INTENT, seq: null, coasting: false, cmd: null };
     this.coastTicks += 1;
     if (this.coastTicks > STARVATION_COAST_MAX_TICKS) {
       // Full stop: no movement was guessed, so there is nothing to substitute for.
-      return { intent: IDLE_INTENT, seq: null, coasting: true };
+      return { intent: IDLE_INTENT, seq: null, coasting: true, cmd: null };
     }
     const intent = stripActions(this.lastIntent);
     // Only a MOVING coast integrated guessed displacement worth substituting; an idle
     // coast moved nothing, so the (late) real cmds must still be simulated in full.
     if (intent.moveX !== 0 || intent.moveZ !== 0) this.pendingSubstitutions += 1;
-    return { intent, seq: null, coasting: true };
+    return { intent, seq: null, coasting: true, cmd: null };
   }
 }

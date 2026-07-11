@@ -84,5 +84,18 @@ export const RESUME_WINDOW_MS = 120_000;
 export const SESSION_STATE_INTERVAL_MS = 1000;
 
 // ── Anim flag bitmask carried in snapshot records ─────────────────────────────
+// Players use the low two bits; monsters repurpose the byte to pack their aiState + flags
+// (a record's `kind` disambiguates which reading applies).
 export const ANIM_FLAG_SPRINT = 1 << 0;
 export const ANIM_FLAG_AIRBORNE = 1 << 1;
+/** Player: true while downed (0 HP, awaiting revive) — drives the downed pose. */
+export const ANIM_FLAG_DOWNED = 1 << 2;
+
+// ── Monster snapshot anim flags (Phase 4) ─────────────────────────────────────
+/** aiState packed into the low two bits: 0 idle · 1 chase · 2 attack · 3 cooldown. */
+export const MON_AISTATE_MASK = 0b11;
+export const MON_AISTATE = { idle: 0, chase: 1, attack: 2, cooldown: 3 } as const;
+/** Staggered (knockback playing) — drives the hit-react pose. */
+export const MON_FLAG_STAGGER = 1 << 2;
+/** Began an attack this window — drives the lunge animation. */
+export const MON_FLAG_ATTACK = 1 << 3;

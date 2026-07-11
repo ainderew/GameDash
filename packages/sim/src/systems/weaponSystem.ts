@@ -1,4 +1,5 @@
 import type { World } from 'miniplex';
+import type { Vector3Tuple } from '@shared/types';
 import type { AttackState, Entity } from '../components';
 import { dealDamage } from './combatHelpers';
 import {
@@ -110,13 +111,62 @@ export const fireRanged = (
 };
 
 /**
+ * THE PURE MELEE ARC TEST — the gameplay truth both solo play and the room server trust.
+ * Broad-phase only (the client blade-socket refinement is presentation, never replicated).
+ * `pad` widens reach + arc for the server's lag-compensated validation (NET_MELEE_PAD),
+ * favoring the attacker. Returns the unit attacker→target direction on a hit (for the
+ * contact point + knockback), or null if the target is outside reach or the swing cone.
+ */
+export const meleeArcHit = (
+  attackerPos: Readonly<Vector3Tuple>,
+  facingX: number,
+  facingZ: number,
+  cosHalfArc: number,
+  range: number,
+  targetPos: Readonly<Vector3Tuple>,
+  targetRadius: number,
+  pad = 0,
+): { ux: number; uz: number } | null => {
+  const dx = targetPos[0] - attackerPos[0];
+  const dz = targetPos[2] - attackerPos[2];
+  const distSq = dx * dx + dz * dz;
+  const reach = range + targetRadius + pad;
+  if (distSq > reach * reach) return null;
+  const len = Math.hypot(dx, dz) || 1;
+  const ux = dx / len;
+  const uz = dz / len;
+  const dot = ux * facingX + uz * facingZ;
+  // Pad the cone slightly too (converts a small reach pad into an angular one at contact).
+  const cone = pad > 0 ? Math.max(-1, cosHalfArc - 0.12) : cosHalfArc;
+  if (dot < cone) return null;
+  return { ux, uz };
+};
+
+/**
+ * Server lag-comp seam: resolve a melee swing's targets against REWOUND positions instead
+ * of live ones. Given the target entity, returns the XZ+Y position to test the arc against
+ * (what the attacker saw at their view time), or null to SKIP this target — a monster that
+ * died more than one tick before the attacker's view can no longer be hit (plan Task 3).
+ * Solo/default play passes no resolver and tests live positions.
+ */
+export type MeleeRewind = (target: Entity, attacker: Entity, now: number) => Vector3Tuple | null;
+
+export interface MeleeResolveOptions {
+  rewind?: MeleeRewind;
+  /** Extra reach/arc tolerance for arc-only server validation, world units. */
+  pad?: number;
+}
+
+/**
  * Resolve active melee swings: during the active window, damage monsters inside the
- * arc in front of the player, at most once per target per swing.
+ * arc in front of the player, at most once per target per swing. On the room server,
+ * `opts.rewind` rewinds each candidate to the attacker's view time (lag compensation).
  */
 export const weaponSystem = (
   world: World<Entity>,
   now: number,
   hooks: SimHooks = NOOP_HOOKS,
+  opts: MeleeResolveOptions = {},
 ): void => {
   const expired: Entity[] = [];
 
@@ -145,24 +195,20 @@ export const weaponSystem = (
     // The wielded weapon scales reach (greatsword > katana > dagger) — loadout data
     // synced onto the entity by the client adapter (SystemRunner).
     const range = MELEE_RANGE * (player.weaponReachMul ?? 1);
-    const rangeSq = range * range;
+    const pad = opts.pad ?? 0;
 
     for (const m of world.with('transform', 'health', 'faction')) {
       if (m.faction !== 'monster') continue;
       if (atk.hitSet.has(m)) continue;
-      const dx = m.transform.position[0] - t.position[0];
-      const dz = m.transform.position[2] - t.position[2];
-      const distSq = dx * dx + dz * dz;
-      const reach = range + (m.radius ?? 0);
-      if (distSq > reach * reach && distSq > rangeSq) continue;
-
-      const len = Math.hypot(dx, dz) || 1;
-      const ux = dx / len;
-      const uz = dz / len;
-      const dot = ux * fx + uz * fz;
-      if (dot < cosHalfArc) continue; // outside the swing arc
+      // Lag-comp: test against what the attacker SAW (rewound), or skip a too-dead target.
+      const testPos = opts.rewind ? opts.rewind(m, player, now) : m.transform.position;
+      if (!testPos) continue;
+      const hit = meleeArcHit(t.position, fx, fz, cosHalfArc, range, testPos, m.radius ?? 0, pad);
+      if (!hit) continue;
+      const { ux, uz } = hit;
 
       // Contact point on the near edge of the target, chest height — where sparks land.
+      // (Uses the target's LIVE position; the rewind only decides whether the hit lands.)
       const mr = m.radius ?? 0.5;
       const point: [number, number, number] = [
         m.transform.position[0] - ux * mr,

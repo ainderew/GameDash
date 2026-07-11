@@ -50,7 +50,7 @@ const main = async () => {
   const fromServer = makePipe((data) => {
     if (typeof data === 'string') {
       const msg = JSON.parse(data) as ServerMessage;
-      if (msg.type === 'impulse') bot.onImpulse(msg.seq, msg.impulse);
+      if (msg.type === 'impulse') bot.onImpulse(msg.seq, msg.impulse, msg.staggerMs);
       else if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong', t: msg.t }));
       else if (msg.type === 'welcome') {
         console.log(JSON.stringify({ event: 'bot_joined', code: msg.session.code, playerId: msg.playerId }));

@@ -128,6 +128,8 @@ export interface HarnessOptions {
   conditions: WireConditions;
   bots: BotClientOptions[];
   rngSeed?: number;
+  /** Move the session into the expedition zone right after setup (combat integration). */
+  zone?: 'hub' | 'expedition';
 }
 
 /**
@@ -154,7 +156,9 @@ export class NetHarness {
           const msg = JSON.parse(payload) as ServerMessage;
           if (msg.type === 'impulse') {
             entry.impulses.push({ tick: msg.tick, seq: msg.seq });
-            bot.onImpulse(msg.seq, msg.impulse);
+            bot.onImpulse(msg.seq, msg.impulse, msg.staggerMs);
+          } else {
+            bot.onServerMessage(msg); // combat events: loot tally, monster despawns…
           }
           return;
         }
@@ -197,6 +201,10 @@ export class NetHarness {
       this.bots.push(entry);
     }
     this.session = session!;
+
+    // Enter the expedition zone (party-wide) before the loops run, so the very first server
+    // step is authoritative combat and bots (which predict in expedition mode) stay aligned.
+    if (opts.zone === 'expedition') this.session.enterZone('expedition');
 
     // Server loops.
     this.clock.every(MS_PER_TICK, () => this.manager.stepAll(MS_PER_TICK / 1000));

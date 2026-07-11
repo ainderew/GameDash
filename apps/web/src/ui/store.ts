@@ -59,6 +59,8 @@ interface UIState {
   wave: number;
   /** True once the player is downed — shows the "hunt failed" overlay. */
   huntFailed: boolean;
+  /** Local player is DOWNED (co-op): awaiting a teammate revive. Server-driven in MP. */
+  downed: boolean;
   menuOpen: boolean;
   /** Which playable model the avatar uses (all share the hero clip set). */
   playerCharacter: PlayerCharacterId;
@@ -98,8 +100,11 @@ interface UIState {
   setScene: (scene: GameScene) => void;
   setHubStation: (station?: HubStationId) => void;
   addMaterials: (n: number) => void;
+  /** Set the material tally to an absolute value (server-authoritative shared pool, MP). */
+  setMaterials: (total: number) => void;
   setWaveInfo: (wave: number, monstersAlive: number) => void;
   setHuntFailed: (v: boolean) => void;
+  setDowned: (v: boolean) => void;
   setPlayerCharacter: (id: PlayerCharacterId) => void;
   /** Enter the intro cinematic; `returnTo` is where finishing/skipping lands. */
   startIntro: (returnTo: AppScreen) => void;
@@ -122,6 +127,7 @@ export const useUIStore = create<UIState>((set) => ({
   monstersAlive: 0,
   wave: 1,
   huntFailed: false,
+  downed: false,
   menuOpen: false,
   playerCharacter: 'hero',
   hasSeenIntro: readIntroSeen(),
@@ -164,8 +170,10 @@ export const useUIStore = create<UIState>((set) => ({
   setScene: (scene) => set({ scene, hubStation: undefined }),
   setHubStation: (hubStation) => set({ hubStation }),
   addMaterials: (n) => set((s) => ({ materials: s.materials + n })),
+  setMaterials: (total) => set({ materials: total }),
   setWaveInfo: (wave, monstersAlive) => set({ wave, monstersAlive }),
   setHuntFailed: (v) => set({ huntFailed: v }),
+  setDowned: (v) => set({ downed: v }),
   setPlayerCharacter: (id) => set({ playerCharacter: id }),
   startIntro: (returnTo) => set({ screen: 'intro', introReturnTo: returnTo }),
   finishIntro: () =>
@@ -194,6 +202,7 @@ export const useUIStore = create<UIState>((set) => ({
       monstersAlive: 0,
       wave: 1,
       huntFailed: false,
+      downed: false,
       comboCount: 0,
       comboLastAt: 0,
       comboBumpId: 0,

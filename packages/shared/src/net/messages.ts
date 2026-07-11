@@ -123,11 +123,115 @@ export interface ImpulseMessage {
   /** World units/sec: XZ enters the knockback decay, Y adds to vertical velocity. */
   impulse: [number, number, number];
   /**
+   * Hitstun window length, ms (Phase 4). A monster hit's shove carries the stagger so the
+   * client freezes for the same number of ticks the server does; 0/absent = pure knockback.
+   */
+  staggerMs?: number;
+  /**
    * Present ONLY on the copy sent to the entity's owner: the input seq the impulse is
    * applied before (server-known, so the client keys its replay stream without
    * tick↔seq estimation error).
    */
   seq?: number;
+}
+
+// ── Phase 4: authoritative expedition combat (reliable events) ────────────────
+// Discrete gameplay outcomes the server decides and the client only reacts to. Every
+// event carries the `serverTick` it happened at so the client can apply it AT/AFTER that
+// tick in interpolation time — a death event never lands before the snapshot showing the
+// corpse (plan Risk: "Event ordering vs snapshots").
+
+/** The session moved the whole party between the hub and an expedition zone. */
+export interface ZoneChangedMessage {
+  type: 'zoneChanged';
+  zone: 'hub' | 'expedition';
+  serverTick: number;
+}
+
+/** A monster entered the world — clients create its render entity + play spawn FX. */
+export interface MonsterSpawnedMessage {
+  type: 'monsterSpawned';
+  serverTick: number;
+  id: number;
+  archetype: string;
+  pos: [number, number, number];
+}
+
+/** A monster left the world (killed or culled) — clients destroy it + play death FX. */
+export interface MonsterDespawnedMessage {
+  type: 'monsterDespawned';
+  serverTick: number;
+  id: number;
+  reason: 'killed' | 'cull';
+  /** Death position (FX). */
+  pos: [number, number, number];
+}
+
+/** A new wave began — drives the HUD wave/count. */
+export interface WaveStartedMessage {
+  type: 'waveStarted';
+  serverTick: number;
+  wave: number;
+  count: number;
+}
+
+/**
+ * A hit the server CONFIRMED. Drives every client feel system on the receiving end:
+ * floating numbers, hitstop, screenshake, flash, knockback visuals. Fires for hits on
+ * monsters AND players (a player taking damage). `targetKind` lets the client route it.
+ */
+export interface DamageDealtMessage {
+  type: 'damageDealt';
+  serverTick: number;
+  targetId: number;
+  targetKind: 'player' | 'monster';
+  /** Entity id of the attacker (0 = none/environment). */
+  sourceId: number;
+  amount: number;
+  strength: 'light' | 'heavy';
+  crit: boolean;
+  /** Contact point (sparks + shockwave). */
+  point: [number, number, number];
+  /** Unit knockback direction on XZ. */
+  dir: [number, number];
+}
+
+/** A player's parry negated an incoming hit — drives the reward flourish. */
+export interface ParrySuccessMessage {
+  type: 'parrySuccess';
+  serverTick: number;
+  playerId: PlayerId;
+}
+
+/** A player was downed (0 HP; NOT despawned — awaits a co-op revive). */
+export interface PlayerDownedMessage {
+  type: 'playerDowned';
+  serverTick: number;
+  playerId: PlayerId;
+}
+
+/** A downed player was revived by a teammate. */
+export interface PlayerRevivedMessage {
+  type: 'playerRevived';
+  serverTick: number;
+  playerId: PlayerId;
+}
+
+/** Every party member is downed — the hunt failed; the session returns to the hub. */
+export interface HuntFailedMessage {
+  type: 'huntFailed';
+  serverTick: number;
+}
+
+/**
+ * SHARED-POOL loot tally: a pickup was collected and every member's material count is now
+ * `total`. Server-authoritative — the client's `materials` mirrors this, never local pickups.
+ */
+export interface MaterialTallyMessage {
+  type: 'materialTally';
+  serverTick: number;
+  tableId: string;
+  total: number;
 }
 
 export type NetErrorCode =
@@ -152,4 +256,14 @@ export type ServerMessage =
   | SessionStateMessage
   | PingMessage
   | ImpulseMessage
+  | ZoneChangedMessage
+  | MonsterSpawnedMessage
+  | MonsterDespawnedMessage
+  | WaveStartedMessage
+  | DamageDealtMessage
+  | ParrySuccessMessage
+  | PlayerDownedMessage
+  | PlayerRevivedMessage
+  | HuntFailedMessage
+  | MaterialTallyMessage
   | ErrorMessage;

@@ -3,6 +3,7 @@ import type { ServerMessage } from '@shared/net/messages';
 import { MS_PER_TICK, POSITION_HISTORY_TICKS, SESSION_GC_GRACE_MS } from '@shared/net/constants';
 import { decodeSnapshot } from '@shared/net/snapshot';
 import { makeInputCmd } from '@shared/net/input';
+import { createMonster } from '@sim/systems/spawnSystem';
 import { SessionManager, type PeerLink, type PlayerProfile } from './session';
 import { silentLogger } from './log';
 
@@ -211,5 +212,120 @@ describe('Session authoritative sim (Phase 3)', () => {
     const before = ana.entity.transform!.position[0];
     session.step(dt);
     expect(ana.entity.transform!.position[0]).toBeGreaterThan(before);
+  });
+});
+
+describe('Session authoritative combat (Phase 4)', () => {
+  const dt = MS_PER_TICK / 1000;
+
+  it('entering the expedition seeds a wave and announces zone + spawns + wave (with serverTick)', () => {
+    const { manager } = makeManager();
+    const link = new FakeLink();
+    const { session } = manager.createSession(profile('Ana'), link);
+    session.enterZone('expedition');
+    expect(session.zone).toBe('expedition');
+    expect(link.ofType('zoneChanged')[0]).toMatchObject({ zone: 'expedition' });
+
+    session.step(dt); // spawnSystem seeds wave 1
+    expect(session.world.with('monster').entities.length).toBeGreaterThan(0);
+    const spawned = link.ofType('monsterSpawned');
+    expect(spawned.length).toBeGreaterThan(0);
+    expect(spawned[0]!.serverTick).toBe(session.tick);
+    expect(spawned[0]!.archetype).toBe('chaser');
+    const waves = link.ofType('waveStarted');
+    expect(waves).toHaveLength(1);
+    expect(waves[0]!.wave).toBe(1);
+  });
+
+  it('a lag-compensated melee CONFIRMS DamageDealt (stamped with serverTick), kills → despawn + SHARED loot tally', () => {
+    const { manager } = makeManager();
+    const aLink = new FakeLink();
+    const bLink = new FakeLink();
+    const { session, player: ana } = manager.createSession(profile('Ana'), aLink);
+    manager.joinSession(session.code, profile('Ben'), bLink);
+    session.enterZone('expedition');
+
+    // Drop a lone stationary monster right in front of Ana (in melee reach + pickup range),
+    // and remove the seeded wave so only this monster exists.
+    session.step(dt);
+    for (const m of [...session.world.with('monster')]) session.world.remove(m);
+    const p = ana.entity.transform!.position;
+    ana.entity.transform!.rotationY = 0; // face +Z
+    const monster = session.world.add(createMonster('chaser', [p[0], 0, p[2] + 1.2]));
+    monster.health!.current = 20; // one committed swing (34 dmg) finishes it deterministically
+    const aimYaw = 0; // toward +Z, at the monster
+
+    // Ana mashes melee (a real client input stream) with a fresh view time each tick.
+    for (let s = 1; s <= 60; s += 1) {
+      const cmd = makeInputCmd(s, s, {
+        moveX: 0,
+        moveZ: 0,
+        jump: false,
+        dodge: false,
+        sprint: false,
+        melee: true,
+        aimYaw,
+        viewServerTimeMs: s * MS_PER_TICK,
+      });
+      ana.input.offer(cmd);
+    }
+    const startHp = monster.health!.current;
+    for (let t = 0; t < 60; t += 1) session.step(dt);
+
+    // DamageDealt confirmed on the wire, stamped with the tick it happened (ordering vs snapshots).
+    const dmg = aLink.ofType('damageDealt');
+    expect(dmg.length).toBeGreaterThan(0);
+    expect(dmg[0]!.targetKind).toBe('monster');
+    expect(dmg[0]!.targetId).toBe(monster.id);
+    expect(dmg[0]!.amount).toBeGreaterThan(0);
+    expect(dmg[0]!.serverTick).toBeGreaterThan(0);
+    // Both party members receive the same DamageDealt (it's a broadcast).
+    expect(bLink.ofType('damageDealt').length).toBe(dmg.length);
+
+    // The monster died → despawn event + it's gone from the world.
+    expect(monster.health!.current).toBeLessThan(startHp);
+    expect(monster.health!.current).toBe(0);
+    const despawn = aLink.ofType('monsterDespawned');
+    expect(despawn.length).toBe(1);
+    expect(despawn[0]!).toMatchObject({ id: monster.id, reason: 'killed' });
+  });
+
+  it('SHARED-POOL loot: a collected pickup tallies to EVERY member from server events', () => {
+    const { manager } = makeManager();
+    const aLink = new FakeLink();
+    const bLink = new FakeLink();
+    const { session, player: ana } = manager.createSession(profile('Ana'), aLink);
+    manager.joinSession(session.code, profile('Ben'), bLink);
+    session.enterZone('expedition');
+    for (const m of [...session.world.with('monster')]) session.world.remove(m);
+
+    // A material lying on Ana's feet — the sim auto-collects it next tick.
+    const before = session.materials;
+    const p = ana.entity.transform!.position;
+    session.world.add({ transform: { position: [p[0], 0.5, p[2]], rotationY: 0 }, pickup: { tableId: 'common' } });
+    for (let t = 0; t < 3; t += 1) session.step(dt);
+
+    const tallyA = aLink.ofType('materialTally');
+    const tallyB = bLink.ofType('materialTally');
+    expect(tallyA).toHaveLength(1);
+    expect(tallyB).toHaveLength(1); // Ben's pool rises too, though Ana walked over it
+    expect(tallyA[0]!.total).toBe(before + 1);
+    expect(tallyA[0]!.total).toBe(session.materials);
+  });
+
+  it('all players downed → HuntFailed then auto-return to the hub', () => {
+    const { manager } = makeManager();
+    const link = new FakeLink();
+    const { session, player } = manager.createSession(profile('Ana'), link);
+    session.enterZone('expedition');
+    // Force the down state and run a step so the all-downed check fires.
+    player.entity.health!.current = 0;
+    player.entity.downed = true;
+    session.step(dt);
+    expect(link.ofType('huntFailed')).toHaveLength(1);
+    expect(session.zone).toBe('hub');
+    // Returning to the hub full-heals + clears downed (the party respawns at the campfire).
+    expect(player.entity.downed).toBe(false);
+    expect(player.entity.health!.current).toBe(player.entity.health!.max);
   });
 });

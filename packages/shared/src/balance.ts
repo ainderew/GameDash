@@ -117,6 +117,36 @@ export const MAX_MONSTERS = 60;
 /** Radius within which a pickup is auto-collected, world units. */
 export const PICKUP_RANGE = 1.4;
 
+// ── Netcode combat (Phase 4) ──────────────────────────────────────────────
+/**
+ * Server melee tolerance pad, world units. The server validates a lag-compensated melee
+ * hit with arc-broad-phase ONLY (the client-only blade-socket refinement is never
+ * replicated), so it grants a small reach + arc pad to favor the attacker: too generous
+ * invites cheating-adjacent hits, too tight causes whiffs on visually-clean swings.
+ * Tuned against the latency harness (Risk: "Server blade-socket gap").
+ */
+export const NET_MELEE_PAD = 0.35;
+/**
+ * Max lag-comp rewind, ms. A swing whose viewServerTimeMs is staler than this is clamped
+ * to this bound (a 250 ms-stale swing at 150 ms history depth can no longer resurrect the
+ * exact frame the attacker saw and legitimately misses).
+ */
+export const NET_LAGCOMP_MAX_MS = 200;
+
+// ── Co-op: downed + revive (Phase 4, NEW mechanic) ────────────────────────
+/**
+ * Hold-E duration to revive a downed teammate, ms. A player brought to 0 HP is DOWNED
+ * (not despawned); a living teammate standing within REVIVE_RANGE and holding the revive
+ * input accumulates progress; REVIVE_MS of contiguous contact brings them back.
+ */
+export const REVIVE_MS = 2200;
+/** XZ radius within which a standing player can revive a downed teammate, world units. */
+export const REVIVE_RANGE = 2.2;
+/** HP a revived player returns with (fraction of max). */
+export const REVIVE_HP_FRACTION = 0.5;
+/** Materials granted per collected pickup — a SHARED POOL: every member's tally rises. */
+export const MATERIAL_PER_PICKUP = 1;
+
 // ── Relic (RELIC RELAY core object) ───────────────────────────────────────
 /** Carried Relic float anchor: behind and above the LEFT shoulder (local to facing). */
 export const RELIC_CARRY_OFFSET: readonly [number, number, number] = [-0.85, 1.7, -0.35];

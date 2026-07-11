@@ -4,7 +4,11 @@ import type { CharacterId } from '@shared/net/character';
 import { generatePlayerId, generateResumeToken, generateSessionCode } from '@shared/net/ids';
 import {
   ANIM_FLAG_AIRBORNE,
+  ANIM_FLAG_DOWNED,
   ANIM_FLAG_SPRINT,
+  MON_AISTATE,
+  MON_FLAG_ATTACK,
+  MON_FLAG_STAGGER,
   MS_PER_TICK,
   POSITION_HISTORY_TICKS,
   RESUME_WINDOW_MS,
@@ -12,21 +16,29 @@ import {
   SESSION_MAX_PLAYERS,
   SNAPSHOT_KEYFRAME_INTERVAL_MS,
 } from '@shared/net/constants';
+import { MATERIAL_PER_PICKUP, NET_MELEE_PAD } from '@shared/balance';
 import {
+  ACK_FLAG_DOWNED,
   ENTITY_KIND,
   encodeSnapshot,
   patchSnapshotAck,
   quantizeEntity,
   type QuantEntityState,
 } from '@shared/net/snapshot';
-import type { Entity } from '@sim/components';
+import type { AiState, Entity } from '@sim/components';
 import { createGameWorld, type GameWorld } from '@sim/world';
-import { EventQueue } from '@sim/events';
-import { stepSim, type IntentsByPlayer, type PlayerIntent } from '@sim/step';
+import { EventQueue, type GameEvent } from '@sim/events';
+import { stepSim, type IntentsByPlayer, type PlayerIntent, type SimMode } from '@sim/step';
 import { applyImpulse } from '@sim/prediction';
+import { combatFromCmd } from '@shared/net/input';
 import { heightAt } from '@sim/terrain/terrainHeight';
 import { PlayerInputQueue } from './inputQueue';
+import { makeServerCombatHooks, type CapturedHit } from './combatHooks';
+import { makeMeleeRewind, viewTickFromMs, NET_LAGCOMP_MAX_TICKS, type HistorySample } from './lagComp';
 import { logger, type Logger } from './log';
+
+/** Where players spawn when the party enters the expedition (ring around the arena origin). */
+const EXPEDITION_ORIGIN: Vector3Tuple = [0, 0, 0];
 
 /**
  * Session model (Phase 3): a party of ≤4 players behind a 6-char join code, each session
@@ -84,6 +96,8 @@ interface PendingImpulse {
   tick: number;
   entity: Entity;
   impulse: Vector3Tuple;
+  /** Hitstun window length, ms (monster-hit shoves; 0 for pure server knockback). */
+  staggerMs: number;
 }
 
 /** Spawn ring around the hub campfire — one slot per join order. */
@@ -99,6 +113,17 @@ const animFlagsFor = (e: Entity): number => {
   let flags = 0;
   if (speed > 4.4) flags |= ANIM_FLAG_SPRINT;
   if (y > heightAt(x, z) + 0.06) flags |= ANIM_FLAG_AIRBORNE;
+  if (e.downed) flags |= ANIM_FLAG_DOWNED;
+  return flags;
+};
+
+/** Pack a monster's aiState + stagger/attack into the snapshot anim-flags byte (Phase 4). */
+const monsterFlagsFor = (e: Entity, now: number): number => {
+  const state: AiState = e.aiBrain?.state ?? 'idle';
+  let flags = MON_AISTATE[state] ?? MON_AISTATE.idle;
+  if ((e.staggerUntil ?? 0) > now) flags |= MON_FLAG_STAGGER;
+  // A recent attack start drives the client lunge anim (window ≈ one attack cooldown-ish).
+  if ((e.attackStartedAt ?? -Infinity) > now - 300) flags |= MON_FLAG_ATTACK;
   return flags;
 };
 
@@ -116,6 +141,27 @@ export class Session {
   tick = 0;
   private spawnCounter = 0;
   private readonly pendingImpulses: PendingImpulse[] = [];
+
+  // ── Expedition combat state (Phase 4) ────────────────────────────────────────
+  /** Party-wide zone. Hub = safe social space (movement only); expedition = full combat. */
+  zone: SimMode = 'hub';
+  /** SHARED-POOL material tally — everyone's count. Server-authoritative (loot events only). */
+  materials = 0;
+  /** Confirmed hits captured from the sim this tick → DamageDealt/ParrySuccess wire events. */
+  private readonly hitSink: CapturedHit[] = [];
+  private readonly combatHooks = makeServerCombatHooks(this.hitSink, (target, impulse, staggerMs) =>
+    this.queuePlayerImpulse(target, impulse, staggerMs),
+  );
+  /** Monster ids currently live in the world (spawn/despawn detection). */
+  private readonly knownMonsters = new Set<number>();
+  /** entityId → position-history ring for LIVING monsters (lag-comp rewind target). */
+  private readonly monsterHistory = new Map<number, HistorySample[]>();
+  /** entityId → server tick a monster died at (kept briefly so a stale swing can't revive it). */
+  private readonly monsterDeathTick = new Map<number, number>();
+  /** attacker entityId → view tick recorded when its current swing started (lag-comp). */
+  private readonly attackerViewTick = new Map<number, number>();
+  /** Wave index observed last tick — a change emits WaveStarted. */
+  private lastWave = -1;
 
   // ── Snapshot baseline (keyframe the deltas diff against) ────────────────────
   private baseline = new Map<number, QuantEntityState>();
@@ -152,9 +198,9 @@ export class Session {
     }
   }
 
-  /** Spawn a player avatar into the session world. */
+  /** Spawn a player avatar into the session world (at the current zone's origin ring). */
   attachAvatar(player: Omit<SessionPlayer, 'entity' | 'input' | 'ackState' | 'posHistory'>): SessionPlayer {
-    const pos = spawnPos(this.spawnCounter++);
+    const pos = this.playerSpawnPos(this.spawnCounter++);
     const entity = this.world.add({
       transform: { position: [...pos] as Vector3Tuple, rotationY: Math.PI },
       velocity: { linear: [0, 0, 0] },
@@ -181,7 +227,72 @@ export class Session {
 
   detachAvatar(player: SessionPlayer): void {
     this.world.remove(player.entity);
+    this.attackerViewTick.delete(player.entity.id!);
     this.keyframeRequested = true;
+  }
+
+  /** A spawn slot in the current zone: the hub campfire ring, or the expedition origin ring. */
+  private playerSpawnPos(index: number): Vector3Tuple {
+    if (this.zone === 'expedition') {
+      const angle = (index % SESSION_MAX_PLAYERS) * (Math.PI / 2) + Math.PI / 4;
+      return [EXPEDITION_ORIGIN[0] + Math.sin(angle) * 2.5, 0, EXPEDITION_ORIGIN[2] + Math.cos(angle) * 2.5];
+    }
+    return spawnPos(index);
+  }
+
+  /**
+   * Move the WHOLE party between the hub and an expedition (Phase 4, Task 1). On entry the
+   * server resets combat state, reseeds the deterministic spawner, and teleports every
+   * player to the zone origin; the next snapshot is a keyframe (existence + a hard teleport)
+   * and a reliable `zoneChanged` announces it. No-op if already in the target zone.
+   */
+  enterZone(zone: SimMode): void {
+    if (zone === this.zone) return;
+    this.zone = zone;
+
+    // Purge all expedition entities (monsters, projectiles, pickups) and combat bookkeeping.
+    for (const m of [...this.world.with('monster')]) this.world.remove(m);
+    for (const p of [...this.world.with('projectile')]) this.world.remove(p);
+    for (const pk of [...this.world.with('pickup')]) this.world.remove(pk);
+    this.knownMonsters.clear();
+    this.monsterHistory.clear();
+    this.monsterDeathTick.clear();
+    this.attackerViewTick.clear();
+    this.hitSink.length = 0;
+    this.lastWave = -1;
+    // Reseed the wave progression so each expedition starts at wave 1.
+    this.world.spawn.wave = 0;
+    this.world.spawn.nextSpawnAt = 0;
+    this.world.spawn.started = false;
+
+    // Reset + reposition every player at the zone origin (full heal on entry).
+    let i = 0;
+    for (const player of this.players.values()) {
+      const e = player.entity;
+      const pos = this.playerSpawnPos(i++);
+      if (e.transform) {
+        e.transform.position = [...pos] as Vector3Tuple;
+        e.transform.rotationY = Math.PI;
+      }
+      if (e.velocity) e.velocity.linear = [0, 0, 0];
+      if (e.health) e.health.current = e.health.max;
+      e.downed = false;
+      e.reviveProgressMs = 0;
+      e.knockback = undefined;
+      e.staggerUntil = 0;
+      // The reconciliation anchor must jump with the avatar or the client would "correct"
+      // back to the old zone; a >TELEPORT_EPSILON delta is the one sanctioned hard snap.
+      player.ackState = {
+        seq: player.ackState.seq,
+        pos: [...pos] as Vector3Tuple,
+        vel: [0, 0, 0],
+        rotY: Math.PI,
+      };
+      player.posHistory = [];
+    }
+    this.keyframeRequested = true;
+    this.broadcast({ type: 'zoneChanged', zone, serverTick: this.tick });
+    logger.info('zone_changed', { code: this.code, zone, players: this.players.size });
   }
 
   /**
@@ -189,11 +300,11 @@ export class Session {
    * next tick and broadcast as a sequenced ImpulseMessage stamped with that tick, so the
    * owning client can inject it into its prediction replay stream (contract #3).
    */
-  queueImpulse(playerId: PlayerId, impulse: Vector3Tuple): void {
+  queueImpulse(playerId: PlayerId, impulse: Vector3Tuple, staggerMs = 0): void {
     const player = this.players.get(playerId);
     if (!player) return;
     const tick = this.tick + 1;
-    this.pendingImpulses.push({ tick, entity: player.entity, impulse });
+    this.pendingImpulses.push({ tick, entity: player.entity, impulse, staggerMs });
     // The owner's copy carries the replay seq (applied BEFORE that cmd's step); everyone
     // else just observes the shove through snapshots.
     for (const p of this.players.values()) {
@@ -202,13 +313,24 @@ export class Session {
         tick,
         entityId: player.entity.id!,
         impulse: [impulse[0], impulse[1], impulse[2]],
+        staggerMs,
       };
       if (p.id === playerId) msg.seq = player.input.lastProcessedSeq + 1;
       p.link.send(msg);
     }
   }
 
-  /** One fixed 30 Hz step: consume inputs → stepSim → capture ack states + history. */
+  /** Route a deferred monster-hit shove on a player into the sequenced impulse pipeline. */
+  private queuePlayerImpulse(target: Entity, impulse: Vector3Tuple, staggerMs: number): void {
+    for (const p of this.players.values()) {
+      if (p.entity === target) {
+        this.queueImpulse(p.id, impulse, staggerMs);
+        return;
+      }
+    }
+  }
+
+  /** One fixed 30 Hz step: consume inputs → stepSim (zone-scoped, lag-comp) → wire events. */
   step(fixedDtSec: number): void {
     this.tick += 1;
     const now = this.simNowMs;
@@ -217,26 +339,78 @@ export class Session {
     for (let i = this.pendingImpulses.length - 1; i >= 0; i -= 1) {
       const p = this.pendingImpulses[i]!;
       if (p.tick <= this.tick) {
-        applyImpulse(p.entity, p.impulse);
+        applyImpulse(p.entity, p.impulse, p.staggerMs > 0 ? now + p.staggerMs : undefined);
         this.pendingImpulses.splice(i, 1);
       }
     }
 
+    // Build intents from the jitter buffer; in expedition, decode combat verbs + record the
+    // attacker's view tick for lag comp (the swing's rewind target).
     this.intents.clear();
     const consumed: { player: SessionPlayer; seq: number | null }[] = [];
     for (const player of this.players.values()) {
       const result = player.input.consume();
-      this.intents.set(player.entity, result.intent);
+      const intent: PlayerIntent = { ...result.intent };
+      if (this.zone === 'expedition' && result.cmd) {
+        const c = combatFromCmd(result.cmd);
+        intent.melee = c.melee;
+        intent.ranged = c.ranged;
+        intent.parry = c.parry;
+        intent.drop = c.drop;
+        intent.revive = c.revive;
+        // Position-independent yaw → the sim faces exactly the same on server, client, and
+        // every reconciliation replay (an aimAt world point would drift the lunge on rewind).
+        intent.aimYaw = c.aimYaw;
+        // Record the view tick at each melee PRESS — the whole swing rewinds to what the
+        // attacker saw when they pressed (clamped to the ≤200 ms policy window on read).
+        if (c.melee) {
+          const view = Math.max(this.tick - NET_LAGCOMP_MAX_TICKS, Math.min(this.tick, viewTickFromMs(c.viewServerTimeMs)));
+          this.attackerViewTick.set(player.entity.id!, view);
+        }
+      }
+      this.intents.set(player.entity, intent);
       consumed.push({ player, seq: result.seq });
     }
 
-    stepSim(this.world, this.events, this.intents as IntentsByPlayer, fixedDtSec, now, 'hub');
+    if (this.zone === 'hub') {
+      stepSim(this.world, this.events, this.intents as IntentsByPlayer, fixedDtSec, now, 'hub');
+      this.captureAckStatesAndHistory(consumed);
+      this.events.reset(); // hub emits no events today; drain defensively
+      return;
+    }
 
+    // ── Expedition: full authoritative combat with lag-compensated melee. ────────
+    this.hitSink.length = 0;
+    const rewind = makeMeleeRewind({
+      currentTick: this.tick,
+      history: this.monsterHistory,
+      deathTick: this.monsterDeathTick,
+      viewTickOf: (id) => this.attackerViewTick.get(id),
+    });
+    const drained = stepSim(
+      this.world,
+      this.events,
+      this.intents as IntentsByPlayer,
+      fixedDtSec,
+      now,
+      'expedition',
+      this.combatHooks,
+      { authority: 'server', melee: { rewind, pad: NET_MELEE_PAD } },
+    );
+
+    this.captureAckStatesAndHistory(consumed);
+    this.recordMonsterHistory();
+    this.emitCombatEvents(drained);
+    this.detectSpawnsAndWaves();
+    this.checkHuntFailed();
+  }
+
+  /** Capture per-player reconciliation anchors + the position-history ring (Phase 3 seam). */
+  private captureAckStatesAndHistory(consumed: { player: SessionPlayer; seq: number | null }[]): void {
     for (const { player, seq } of consumed) {
       const e = player.entity;
       if (!e.transform || !e.velocity) continue;
       if (seq !== null) {
-        // Capture the post-cmd state — the reconciliation anchor for this player.
         player.ackState = {
           seq,
           pos: [...e.transform.position] as Vector3Tuple,
@@ -247,9 +421,151 @@ export class Session {
       player.posHistory.push({ tick: this.tick, pos: [...e.transform.position] as Vector3Tuple });
       if (player.posHistory.length > POSITION_HISTORY_TICKS) player.posHistory.shift();
     }
+  }
 
-    // Hub mode emits no events today; drain defensively so nothing accumulates.
-    this.events.reset();
+  /** Record every living monster's position into its lag-comp ring; GC stale death ticks. */
+  private recordMonsterHistory(): void {
+    for (const m of this.world.with('monster', 'transform')) {
+      if (m.id === undefined) continue;
+      let ring = this.monsterHistory.get(m.id);
+      if (!ring) {
+        ring = [];
+        this.monsterHistory.set(m.id, ring);
+      }
+      ring.push({ tick: this.tick, pos: [...m.transform.position] as Vector3Tuple });
+      if (ring.length > POSITION_HISTORY_TICKS) ring.shift();
+    }
+    // Forget deaths older than the rewind window (their corpses can no longer be hit).
+    for (const [id, tick] of this.monsterDeathTick) {
+      if (this.tick - tick > NET_LAGCOMP_MAX_TICKS + 2) {
+        this.monsterDeathTick.delete(id);
+        this.monsterHistory.delete(id);
+        this.attackerViewTick.delete(id);
+      }
+    }
+  }
+
+  /** Translate the tick's captured hits + drained sim events into reliable wire events. */
+  private emitCombatEvents(drained: readonly GameEvent[]): void {
+    const ownerOf = (entityId: number | undefined): PlayerId | undefined => {
+      if (entityId === undefined) return undefined;
+      for (const p of this.players.values()) if (p.entity.id === entityId) return p.id;
+      return undefined;
+    };
+
+    // Confirmed hits/parries (from the sim's feel hooks the server captured).
+    for (const h of this.hitSink) {
+      const { ctx } = h;
+      if (h.kind === 'parry') {
+        const pid = ownerOf(ctx.target.id);
+        if (pid) this.broadcast({ type: 'parrySuccess', serverTick: this.tick, playerId: pid });
+        continue;
+      }
+      this.broadcast({
+        type: 'damageDealt',
+        serverTick: this.tick,
+        targetId: ctx.target.id ?? 0,
+        targetKind: ctx.target.playerControlled ? 'player' : 'monster',
+        sourceId: ctx.attacker?.id ?? 0,
+        amount: ctx.amount,
+        strength: ctx.strength,
+        crit: ctx.crit,
+        point: [ctx.point[0], ctx.point[1], ctx.point[2]],
+        dir: [ctx.dirX, ctx.dirZ],
+      });
+    }
+
+    // Discrete sim events → wire.
+    for (const ev of drained) {
+      switch (ev.type) {
+        case 'MonsterKilled': {
+          if (ev.id !== undefined) {
+            this.monsterDeathTick.set(ev.id, this.tick);
+            this.knownMonsters.delete(ev.id);
+          }
+          this.broadcast({
+            type: 'monsterDespawned',
+            serverTick: this.tick,
+            id: ev.id ?? 0,
+            reason: 'killed',
+            pos: [ev.position[0], ev.position[1], ev.position[2]],
+          });
+          this.keyframeRequested = true; // existence changed — resync the baseline
+          break;
+        }
+        case 'PlayerDowned': {
+          const pid = ownerOf(ev.id);
+          if (pid) this.broadcast({ type: 'playerDowned', serverTick: this.tick, playerId: pid });
+          break;
+        }
+        case 'PlayerRevived': {
+          const pid = ownerOf(ev.id);
+          if (pid) this.broadcast({ type: 'playerRevived', serverTick: this.tick, playerId: pid });
+          break;
+        }
+        case 'MaterialCollected': {
+          this.materials += MATERIAL_PER_PICKUP;
+          this.broadcast({
+            type: 'materialTally',
+            serverTick: this.tick,
+            tableId: ev.tableId,
+            total: this.materials,
+          });
+          this.keyframeRequested = true; // the pickup entity was removed
+          break;
+        }
+        default:
+          break; // LootDropped is internal (spawns a pickup entity, replicated by snapshot)
+      }
+    }
+  }
+
+  /** Detect monsters that spawned this tick + wave rollovers → MonsterSpawned / WaveStarted. */
+  private detectSpawnsAndWaves(): void {
+    let spawnedThisTick = 0;
+    for (const m of this.world.with('monster', 'transform')) {
+      if (m.id === undefined || this.knownMonsters.has(m.id)) continue;
+      this.knownMonsters.add(m.id);
+      this.monsterDeathTick.delete(m.id);
+      spawnedThisTick += 1;
+      this.broadcast({
+        type: 'monsterSpawned',
+        serverTick: this.tick,
+        id: m.id,
+        archetype: m.monster ?? 'chaser',
+        pos: [m.transform.position[0], m.transform.position[1], m.transform.position[2]],
+      });
+    }
+    if (spawnedThisTick > 0) {
+      this.keyframeRequested = true; // existence changed
+      // spawnSystem bumps world.spawn.wave AFTER placing a wave, so the wave that just
+      // spawned is the prior index; display it 1-indexed.
+      const displayWave = Math.max(1, this.world.spawn.wave);
+      if (displayWave !== this.lastWave) {
+        this.lastWave = displayWave;
+        this.broadcast({
+          type: 'waveStarted',
+          serverTick: this.tick,
+          wave: displayWave,
+          count: this.knownMonsters.size,
+        });
+      }
+    }
+  }
+
+  /** All party members downed → the hunt failed; announce it and return the party to the hub. */
+  private checkHuntFailed(): void {
+    if (this.players.size === 0) return;
+    let anyAlive = false;
+    for (const p of this.players.values()) {
+      if (!p.entity.downed) {
+        anyAlive = true;
+        break;
+      }
+    }
+    if (anyAlive) return;
+    this.broadcast({ type: 'huntFailed', serverTick: this.tick });
+    this.enterZone('hub');
   }
 
   /** Encode + send one snapshot per connected player (20 Hz, keyframe every 2 s). */
@@ -273,6 +589,50 @@ export class Session {
           flags: animFlagsFor(e),
         }),
       );
+    }
+
+    // Expedition entities replicate too. Monsters carry aiState/stagger in flags; projectiles
+    // carry velocity so clients dead-reckon fast movers between snapshots; pickups are static.
+    if (this.zone === 'expedition') {
+      for (const m of this.world.with('monster', 'transform')) {
+        states.push(
+          quantizeEntity({
+            id: m.id!,
+            kind: ENTITY_KIND.monster,
+            pos: m.transform.position,
+            rotY: m.transform.rotationY,
+            hp: m.health?.current ?? 0,
+            vel: [0, 0, 0],
+            flags: monsterFlagsFor(m, now),
+          }),
+        );
+      }
+      for (const p of this.world.with('projectile', 'transform', 'velocity')) {
+        states.push(
+          quantizeEntity({
+            id: p.id!,
+            kind: ENTITY_KIND.projectile,
+            pos: p.transform.position,
+            rotY: p.transform.rotationY,
+            hp: 0,
+            vel: p.velocity.linear,
+            flags: 0,
+          }),
+        );
+      }
+      for (const pk of this.world.with('pickup', 'transform')) {
+        states.push(
+          quantizeEntity({
+            id: pk.id!,
+            kind: ENTITY_KIND.pickup,
+            pos: pk.transform.position,
+            rotY: pk.transform.rotationY,
+            hp: 0,
+            vel: [0, 0, 0],
+            flags: 0,
+          }),
+        );
+      }
     }
 
     if (keyframe) {
@@ -306,6 +666,7 @@ export class Session {
         player.ackState.pos,
         player.ackState.vel,
         player.ackState.rotY,
+        player.entity.downed ? ACK_FLAG_DOWNED : 0,
       );
       player.link.sendBinary(per);
     }

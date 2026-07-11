@@ -2,7 +2,7 @@ import type { Vector3Tuple } from '@shared/types';
 import type { Entity } from './components';
 import type { GameWorld } from './world';
 import type { EventQueue } from './events';
-import type { PlayerIntent, SimMode } from './step';
+import type { PlayerIntent, SimAuthority, SimMode } from './step';
 import { stepSim } from './step';
 
 /**
@@ -52,6 +52,19 @@ interface PredictedEntry {
   iframeUntil?: number;
   dodgeDir?: Vector3Tuple;
   jumpsUsed?: number;
+  /** Hitstun window from a server impulse — replay must restore it or the shove diverges. */
+  staggerUntil?: number;
+  // Melee swing timers — drive the predicted LUNGE + rooting. Without restoring these, a
+  // reconciliation replay re-derives the swing from stale timers and the lunge drifts,
+  // spraying corrections through every fight (Phase 4).
+  meleeStartedAt?: number;
+  attackAnimUntil?: number;
+  meleeReadyAt?: number;
+  meleeCombo?: number;
+  meleeComboExpiresAt?: number;
+  meleeBufferedAt?: number;
+  blockingUntil?: number;
+  catchRootUntil?: number;
 }
 
 export interface ReconcileResult {
@@ -70,17 +83,30 @@ export interface PredictionOptions {
   teleportEpsilonM?: number;
   ringSize?: number;
   mode?: SimMode;
+  /**
+   * Sim authority for the replay (Phase 4). Prediction is ALWAYS a networked client, so it
+   * defaults to 'local' — the local avatar advances, server-owned combat/monsters/loot do
+   * not. In 'hub' mode this is moot (the hub branch runs the same reduced set either way).
+   */
+  authority?: SimAuthority;
 }
 
 const v3 = (v: Readonly<Vector3Tuple>): Vector3Tuple => [v[0], v[1], v[2]];
 
+interface PendingImpulse {
+  impulse: Vector3Tuple;
+  /** Hitstun window length, ms (0 = pure knockback). Applied relative to the seq's tick. */
+  staggerMs: number;
+}
+
 export class PredictionEngine {
   private readonly ring = new Map<number, PredictedEntry>();
-  private readonly impulses = new Map<number, Vector3Tuple[]>();
+  private readonly impulses = new Map<number, PendingImpulse[]>();
   private readonly epsilonM: number;
   private readonly teleportEpsilonM: number;
   private readonly ringSize: number;
-  private readonly mode: SimMode;
+  private mode: SimMode;
+  private readonly authority: SimAuthority;
   private readonly intents = new Map<Entity, PlayerIntent>();
 
   /** Newest predicted seq (0 = nothing predicted yet). */
@@ -101,11 +127,12 @@ export class PredictionEngine {
     this.teleportEpsilonM = opts.teleportEpsilonM ?? 2;
     this.ringSize = opts.ringSize ?? 128;
     this.mode = opts.mode ?? 'hub';
+    this.authority = opts.authority ?? 'local';
   }
 
   /** Predict one fixed tick: run stepSim with this cmd's intent and capture the result. */
   predict(seq: number, intent: PlayerIntent, tickTimeMs: number): void {
-    this.applyImpulsesFor(seq);
+    this.applyImpulsesFor(seq, tickTimeMs);
     this.stepOnce(intent, tickTimeMs);
     this.capture(seq, intent, tickTimeMs);
     this.headSeq = seq;
@@ -124,12 +151,12 @@ export class PredictionEngine {
    * Returns the presentation delta (oldPos − newPos) of the immediate rewind-replay so
    * the caller can fold the late-knowledge jump into the mesh instead of snapping it.
    */
-  scheduleImpulse(seq: number, impulse: Vector3Tuple): Vector3Tuple {
+  scheduleImpulse(seq: number, impulse: Vector3Tuple, staggerMs = 0): Vector3Tuple {
     // Already folded into the authoritative state we last rewound to → applying again
     // would double the shove.
     if (this.lastAuth && seq <= this.lastAuth.seq) return [0, 0, 0];
     const list = this.impulses.get(seq) ?? [];
-    list.push(v3(impulse));
+    list.push({ impulse: v3(impulse), staggerMs });
     this.impulses.set(seq, list);
     if (seq <= this.headSeq) {
       const before = this.entityPos();
@@ -152,8 +179,11 @@ export class PredictionEngine {
    * An authoritative snapshot ack arrived: `state` is the server's post-cmd state for
    * `ackSeq` (captured server-side at consume time, uncontaminated by starvation coasts).
    */
-  onAuthoritative(state: AuthoritativeState, ackSeq: number): ReconcileResult | null {
+  onAuthoritative(state: AuthoritativeState, ackSeq: number, downed?: boolean): ReconcileResult | null {
     if (ackSeq <= this.lastAckSeq && this.lastAckSeq !== -1) return null; // stale/duplicate
+    // Authoritative downed state: a downed avatar is inert (server freezes it), so predicting
+    // it as inert here keeps prediction and authority in agreement — no per-tick rubberband.
+    if (downed !== undefined) this.entity.downed = downed;
     this.lastAckSeq = ackSeq;
     this.lastAuth = { seq: ackSeq, state: { pos: v3(state.pos), vel: v3(state.vel), rotY: state.rotY } };
 
@@ -198,12 +228,25 @@ export class PredictionEngine {
     this.lastAuth = null;
   }
 
+  /**
+   * Switch the replay sim mode (hub ⇄ expedition) on a zone transition. A zone change is a
+   * server-side teleport, so the unacked prediction ring is stale — clear it and let the next
+   * authoritative snapshot re-anchor as a teleport (contract #4's one sanctioned hard place).
+   */
+  setMode(mode: SimMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.reset();
+  }
+
   // ── internals ───────────────────────────────────────────────────────────────
 
   private stepOnce(intent: PlayerIntent, tickTimeMs: number): void {
     this.intents.clear();
     this.intents.set(this.entity, intent);
-    stepSim(this.world, this.events, this.intents, this.fixedDtSec, tickTimeMs, this.mode);
+    stepSim(this.world, this.events, this.intents, this.fixedDtSec, tickTimeMs, this.mode, undefined, {
+      authority: this.authority,
+    });
   }
 
   private rewindAndReplay(fromSeq: number, auth: AuthoritativeState): void {
@@ -223,23 +266,34 @@ export class PredictionEngine {
       e.iframeUntil = anchor.iframeUntil;
       e.dodgeDir = anchor.dodgeDir ? v3(anchor.dodgeDir) : undefined;
       e.jumpsUsed = anchor.jumpsUsed;
+      e.staggerUntil = anchor.staggerUntil;
+      e.meleeStartedAt = anchor.meleeStartedAt;
+      e.attackAnimUntil = anchor.attackAnimUntil;
+      e.meleeReadyAt = anchor.meleeReadyAt;
+      e.meleeCombo = anchor.meleeCombo;
+      e.meleeComboExpiresAt = anchor.meleeComboExpiresAt;
+      e.meleeBufferedAt = anchor.meleeBufferedAt;
+      e.blockingUntil = anchor.blockingUntil;
+      e.catchRootUntil = anchor.catchRootUntil;
     }
 
     // Replay every unacked cmd through the SAME sim the server runs.
     for (let seq = fromSeq + 1; seq <= this.headSeq; seq += 1) {
       const entry = this.ring.get(seq);
       if (!entry) continue;
-      this.applyImpulsesFor(seq);
+      this.applyImpulsesFor(seq, entry.tickTimeMs);
       this.stepOnce(entry.intent, entry.tickTimeMs);
       this.capture(seq, entry.intent, entry.tickTimeMs);
     }
   }
 
   /** Fold pending impulses for `seq` into the entity (pre-step, mirroring the server). */
-  private applyImpulsesFor(seq: number): void {
+  private applyImpulsesFor(seq: number, tickTimeMs: number): void {
     const list = this.impulses.get(seq);
     if (!list) return;
-    for (const imp of list) applyImpulse(this.entity, imp);
+    for (const p of list) {
+      applyImpulse(this.entity, p.impulse, p.staggerMs > 0 ? tickTimeMs + p.staggerMs : undefined);
+    }
     // Keep them: replays re-cross this seq. Pruned together with acked ring entries.
   }
 
@@ -259,6 +313,15 @@ export class PredictionEngine {
       iframeUntil: e.iframeUntil,
       dodgeDir: e.dodgeDir ? v3(e.dodgeDir) : undefined,
       jumpsUsed: e.jumpsUsed,
+      staggerUntil: e.staggerUntil,
+      meleeStartedAt: e.meleeStartedAt,
+      attackAnimUntil: e.attackAnimUntil,
+      meleeReadyAt: e.meleeReadyAt,
+      meleeCombo: e.meleeCombo,
+      meleeComboExpiresAt: e.meleeComboExpiresAt,
+      meleeBufferedAt: e.meleeBufferedAt,
+      blockingUntil: e.blockingUntil,
+      catchRootUntil: e.catchRootUntil,
     });
   }
 
@@ -272,11 +335,21 @@ export class PredictionEngine {
   }
 }
 
-/** How a wire impulse enters the sim — IDENTICAL on server and client (contract #3). */
-export const applyImpulse = (e: Entity, impulse: Readonly<Vector3Tuple>): void => {
+/**
+ * How a wire impulse enters the sim — IDENTICAL on server and client (contract #3).
+ * `staggerUntilMs` (optional, sim-time) reproduces a monster hit's hitstun window so the
+ * client freezes for the same number of ticks the server does, relative to the application
+ * tick — the freeze DURATION matches even though the absolute timestamps differ.
+ */
+export const applyImpulse = (
+  e: Entity,
+  impulse: Readonly<Vector3Tuple>,
+  staggerUntilMs?: number,
+): void => {
   const kb = e.knockback ?? [0, 0, 0];
   e.knockback = [kb[0] + impulse[0], kb[1], kb[2] + impulse[2]];
   if (e.velocity && impulse[1] !== 0) e.velocity.linear[1] += impulse[1];
+  if (staggerUntilMs !== undefined) e.staggerUntil = Math.max(e.staggerUntil ?? 0, staggerUntilMs);
 };
 
 const dist = (a: Readonly<Vector3Tuple>, b: Readonly<Vector3Tuple>): number =>

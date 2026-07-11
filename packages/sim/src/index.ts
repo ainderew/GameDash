@@ -30,5 +30,6 @@ export * from './systems/separationSystem';
 export * from './systems/combatHelpers';
 export * from './systems/impactFxSystem';
 export * from './systems/healthSystem';
+export * from './systems/reviveSystem';
 export * from './systems/lootSystem';
 export * from './systems/spawnSystem';

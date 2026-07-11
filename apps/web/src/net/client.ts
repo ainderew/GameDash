@@ -327,9 +327,54 @@ class NetClient {
 
       case 'impulse': {
         // Owner copies carry the replay seq; remote shoves arrive via snapshots anyway.
-        if (msg.seq !== undefined) netGame.onImpulse(msg.seq, msg.impulse);
+        if (msg.seq !== undefined) netGame.onImpulse(msg.seq, msg.impulse, msg.staggerMs);
         return;
       }
+
+      // ── Phase 4: server-authoritative expedition combat (reliable events) ──────
+      case 'zoneChanged': {
+        // The party moved zones: switch the prediction sim mode + mirror it to the HUD scene.
+        netGame.setMode(msg.zone);
+        store.setScene(msg.zone);
+        if (msg.zone === 'expedition') store.setHuntFailed(false);
+        return;
+      }
+
+      case 'waveStarted': {
+        store.setWaveInfo(msg.wave, msg.count);
+        return;
+      }
+
+      case 'materialTally': {
+        // SHARED POOL: the count is server-authoritative — mirror it, never local pickups.
+        store.setMaterials(msg.total);
+        return;
+      }
+
+      case 'playerDowned': {
+        if (msg.playerId === this.ownPlayerId) store.setDowned(true);
+        return;
+      }
+
+      case 'playerRevived': {
+        if (msg.playerId === this.ownPlayerId) store.setDowned(false);
+        return;
+      }
+
+      case 'huntFailed': {
+        store.setHuntFailed(true);
+        store.setDowned(false);
+        return;
+      }
+
+      // Monster spawn/despawn + confirmed damage drive the 3D presentation layer (meshes,
+      // hitstop, floating numbers). That renderer wiring lands in Phase 6 (needs WebGL/R3F);
+      // the server-authoritative gameplay + HUD state above is complete and bot-verified.
+      case 'monsterSpawned':
+      case 'monsterDespawned':
+      case 'damageDealt':
+      case 'parrySuccess':
+        return;
 
       case 'ping': {
         this.transport?.send({ type: 'pong', t: msg.t });

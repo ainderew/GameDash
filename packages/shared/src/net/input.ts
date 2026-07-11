@@ -7,15 +7,19 @@
  * Layout (little-endian):
  *   u8  MSG_INPUT
  *   u8  count (1..INPUT_REDUNDANCY)
- *   per cmd (16 bytes):
- *     u32 seq          — client cmd sequence, 1-based, gapless
- *     u32 clientTick   — sender's fixed-tick index (diagnostics/jitter metrics only;
- *                        the server NEVER simulates on client time)
- *     i8  moveX, moveZ — world-space move dir × 100 (camera rotation already applied
- *                        client-side, so the server needs no camera state)
- *     u16 buttons      — BTN_* bitmask
- *     u16 aimYaw       — facing/aim yaw quantized to [0, 2π) / 65536 (combat, Phase 4)
- *     u16 passTargetId — entity id of a pass receiver; 0 = none (relic, Phase 5)
+ *   per cmd (20 bytes):
+ *     u32 seq              — client cmd sequence, 1-based, gapless
+ *     u32 clientTick       — sender's fixed-tick index (diagnostics/jitter metrics only;
+ *                            the server NEVER simulates on client time)
+ *     i8  moveX, moveZ     — world-space move dir × 100 (camera rotation already applied
+ *                            client-side, so the server needs no camera state)
+ *     u16 buttons          — BTN_* bitmask
+ *     u16 aimYaw           — facing/aim yaw quantized to [0, 2π) / 65536 (combat, Phase 4)
+ *     u16 passTargetId     — entity id of a pass receiver; 0 = none (relic, Phase 5)
+ *     u32 viewServerTimeMs — client's interpolated render time on the shared server
+ *                            timeline, ms (÷ MS_PER_TICK server-side → a tick to rewind to).
+ *                            Lets the server rewind hittable entities to WHAT THE ATTACKER
+ *                            SAW (lag-compensated melee, Phase 4 Task 3).
  */
 
 /**
@@ -35,7 +39,7 @@ export const MSG_INPUT = 1;
 /** How many trailing cmds each packet repeats (self-healing under loss). */
 export const INPUT_REDUNDANCY = 3;
 
-// ── Button bitmask ────────────────────────────────────────────────────────────
+// ── Button bitmask (buttons is u16 — bits 0–15 available) ──────────────────────
 export const BTN_JUMP = 1 << 0;
 export const BTN_SPRINT = 1 << 1;
 export const BTN_DODGE = 1 << 2;
@@ -44,6 +48,8 @@ export const BTN_RANGED = 1 << 4;
 export const BTN_PARRY = 1 << 5;
 export const BTN_PASS_HOLD = 1 << 6;
 export const BTN_DROP = 1 << 7;
+/** Holding the revive input near a downed teammate (co-op revive, Phase 4). */
+export const BTN_REVIVE = 1 << 8;
 
 export interface InputCmd {
   seq: number;
@@ -54,21 +60,56 @@ export interface InputCmd {
   buttons: number;
   aimYaw: number;
   passTargetId: number;
+  /** Client's interpolated render time on the shared server timeline, ms (lag-comp). */
+  viewServerTimeMs: number;
 }
 
-const CMD_BYTES = 16;
+const CMD_BYTES = 20;
 const MOVE_SCALE = 100;
+const YAW_SCALE = 65536;
+const TWO_PI = Math.PI * 2;
 
 /** Quantize a (pre-normalized) world move component to the wire int8. */
 export const quantizeMove = (v: number): number =>
   Math.max(-127, Math.min(127, Math.round(v * MOVE_SCALE)));
 
-/** Build a wire cmd from a raw intent (movement verbs only carry through in Phase 3). */
-export const makeInputCmd = (
-  seq: number,
-  clientTick: number,
-  intent: MoveIntent,
-): InputCmd => ({
+/** Quantize an aim yaw (radians) to the wire u16 ([0, 2π) → 0..65535). */
+export const quantizeYaw = (rad: number): number => {
+  const norm = ((rad % TWO_PI) + TWO_PI) % TWO_PI;
+  return Math.round((norm / TWO_PI) * YAW_SCALE) % YAW_SCALE;
+};
+export const dequantizeYaw = (q: number): number => (q / YAW_SCALE) * TWO_PI;
+
+/** The full per-tick intent a client encodes: movement + combat verbs + aim + view time. */
+export interface CmdIntent extends MoveIntent {
+  melee?: boolean;
+  ranged?: boolean;
+  parry?: boolean;
+  drop?: boolean;
+  passHold?: boolean;
+  revive?: boolean;
+  /** Aim yaw in radians (facing at swing/shot start). */
+  aimYaw?: number;
+  passTargetId?: number;
+  /** Interpolated render time on the shared server timeline, ms. */
+  viewServerTimeMs?: number;
+}
+
+/** Combat + aim verbs decoded from a cmd — fed alongside the MoveIntent into the sim. */
+export interface CombatIntent {
+  melee: boolean;
+  ranged: boolean;
+  parry: boolean;
+  drop: boolean;
+  passHold: boolean;
+  revive: boolean;
+  aimYaw: number;
+  passTargetId: number;
+  viewServerTimeMs: number;
+}
+
+/** Build a wire cmd from a full intent (movement + combat, Phase 4). */
+export const makeInputCmd = (seq: number, clientTick: number, intent: CmdIntent): InputCmd => ({
   seq,
   clientTick,
   moveX: quantizeMove(intent.moveX),
@@ -76,13 +117,20 @@ export const makeInputCmd = (
   buttons:
     (intent.jump ? BTN_JUMP : 0) |
     (intent.sprint ? BTN_SPRINT : 0) |
-    (intent.dodge ? BTN_DODGE : 0),
-  aimYaw: 0,
-  passTargetId: 0,
+    (intent.dodge ? BTN_DODGE : 0) |
+    (intent.melee ? BTN_MELEE : 0) |
+    (intent.ranged ? BTN_RANGED : 0) |
+    (intent.parry ? BTN_PARRY : 0) |
+    (intent.passHold ? BTN_PASS_HOLD : 0) |
+    (intent.drop ? BTN_DROP : 0) |
+    (intent.revive ? BTN_REVIVE : 0),
+  aimYaw: quantizeYaw(intent.aimYaw ?? 0),
+  passTargetId: (intent.passTargetId ?? 0) & 0xffff,
+  viewServerTimeMs: Math.max(0, Math.round(intent.viewServerTimeMs ?? 0)) >>> 0,
 });
 
 /**
- * Decode a cmd into the intent BOTH the server sim and the client prediction run.
+ * Decode a cmd into the movement intent BOTH the server sim and the client prediction run.
  * SANITY CLAMP lives here (single implementation): the move vector is renormalized when
  * its magnitude exceeds 1 — a speed-hacked client crafting (127,127) still moves at 1×.
  * Client prediction MUST use this decoded intent (not its raw float input) so prediction
@@ -105,6 +153,19 @@ export const intentFromCmd = (cmd: InputCmd): MoveIntent => {
   };
 };
 
+/** Decode the combat/aim verbs from a cmd (server + client prediction consume both). */
+export const combatFromCmd = (cmd: InputCmd): CombatIntent => ({
+  melee: (cmd.buttons & BTN_MELEE) !== 0,
+  ranged: (cmd.buttons & BTN_RANGED) !== 0,
+  parry: (cmd.buttons & BTN_PARRY) !== 0,
+  drop: (cmd.buttons & BTN_DROP) !== 0,
+  passHold: (cmd.buttons & BTN_PASS_HOLD) !== 0,
+  revive: (cmd.buttons & BTN_REVIVE) !== 0,
+  aimYaw: dequantizeYaw(cmd.aimYaw),
+  passTargetId: cmd.passTargetId,
+  viewServerTimeMs: cmd.viewServerTimeMs,
+});
+
 /** Encode the trailing window of cmds (newest last) into one binary packet. */
 export const encodeInputPacket = (cmds: readonly InputCmd[]): ArrayBuffer => {
   const count = Math.min(cmds.length, INPUT_REDUNDANCY);
@@ -122,6 +183,7 @@ export const encodeInputPacket = (cmds: readonly InputCmd[]): ArrayBuffer => {
     view.setUint16(off + 10, cmd.buttons & 0xffff, true);
     view.setUint16(off + 12, cmd.aimYaw & 0xffff, true);
     view.setUint16(off + 14, cmd.passTargetId & 0xffff, true);
+    view.setUint32(off + 16, cmd.viewServerTimeMs >>> 0, true);
     off += CMD_BYTES;
   }
   return buf;
@@ -146,6 +208,7 @@ export const decodeInputPacket = (buf: ArrayBufferLike): InputCmd[] | null => {
       buttons: view.getUint16(off + 10, true),
       aimYaw: view.getUint16(off + 12, true),
       passTargetId: view.getUint16(off + 14, true),
+      viewServerTimeMs: view.getUint32(off + 16, true),
     });
     off += CMD_BYTES;
   }

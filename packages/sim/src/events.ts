@@ -13,6 +13,22 @@ export interface LootDropped {
 
 export interface PlayerDowned {
   type: 'PlayerDowned';
+  /** Entity id of the downed player (server maps it to a playerId for the wire). */
+  id?: number;
+}
+
+/** A downed player was revived by a teammate (reviveSystem, Phase 4 co-op mechanic). */
+export interface PlayerRevived {
+  type: 'PlayerRevived';
+  id?: number;
+}
+
+/** A monster died — carries its id/archetype so the server can broadcast a despawn + FX. */
+export interface MonsterKilled {
+  type: 'MonsterKilled';
+  id?: number;
+  archetype: string;
+  position: Vector3Tuple;
 }
 
 export interface MaterialCollected {
@@ -48,6 +64,8 @@ export interface RelicPassFailed {
 export type GameEvent =
   | LootDropped
   | PlayerDowned
+  | PlayerRevived
+  | MonsterKilled
   | MaterialCollected
   | RelicPassLaunched
   | RelicCaught

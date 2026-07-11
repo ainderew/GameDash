@@ -145,6 +145,18 @@ export interface Entity {
   /** Timestamp (ms) after which the player may fire again. */
   rangedReadyAt?: number;
 
+  // ── Co-op downed / revive (Phase 4 netcode) ──────────────────────────────
+  /**
+   * True while a player is DOWNED (brought to 0 HP but not despawned). Cleared on revive.
+   * Server-authoritative: healthSystem sets it, reviveSystem clears it. Downed players are
+   * inert — aiSystem ignores them as targets and they cannot act.
+   */
+  downed?: boolean;
+  /** Accumulated revive progress on this downed player, ms (reviveSystem owns it). */
+  reviveProgressMs?: number;
+  /** True this tick if the player is holding the revive input (decoded from BTN_PARRY reuse → dedicated). */
+  reviving?: boolean;
+
   // ── Monster ─────────────────────────────────────────────────────────────
   monster?: MonsterArchetype;
   aiBrain?: AiBrain;

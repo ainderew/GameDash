@@ -29,6 +29,11 @@ export const MSG_SNAPSHOT = 2;
 
 export const SNAP_KEYFRAME = 1 << 0;
 
+/** Per-recipient ack flags (Phase 4): bit0 = the recipient's own avatar is DOWNED. The
+ * client's prediction reads this so it stops predicting movement for a downed avatar (the
+ * server freezes it), which would otherwise rubberband every tick while downed. */
+export const ACK_FLAG_DOWNED = 1 << 0;
+
 // ── Field dirty mask ──────────────────────────────────────────────────────────
 export const DIRTY_POS = 1 << 0;
 export const DIRTY_ROT = 1 << 1;
@@ -118,6 +123,8 @@ export interface SnapshotHeader {
   ackPos: [number, number, number];
   ackVel: [number, number, number];
   ackRotY: number;
+  /** Per-recipient ACK_FLAG_* bits (downed …). */
+  ackFlags: number;
 }
 
 /** A decoded record: only masked fields are present (dequantized to world units). */
@@ -137,7 +144,7 @@ export interface DecodedSnapshot {
   entities: DecodedEntityRecord[];
 }
 
-const HEADER_BYTES = 1 + 1 + 4 + 4 + 8 + 4 + 6 + 6 + 1 + 2; // 37
+const HEADER_BYTES = 1 + 1 + 4 + 4 + 8 + 4 + 6 + 6 + 1 + 1 + 2; // 38 (incl. ackFlags byte)
 const RECORD_FIXED = 4; // id + kind + mask
 
 const maskBytes = (mask: number): number =>
@@ -163,7 +170,7 @@ const dirtyVs = (cur: QuantEntityState, base: QuantEntityState | undefined): num
  * With a baseline, entities whose every field matches it are omitted entirely.
  */
 export const encodeSnapshot = (
-  header: Omit<SnapshotHeader, 'keyframe'>,
+  header: Omit<SnapshotHeader, 'keyframe' | 'ackFlags'> & { ackFlags?: number },
   entities: readonly QuantEntityState[],
   baseline: ReadonlyMap<number, QuantEntityState> | null,
 ): ArrayBuffer => {
@@ -192,7 +199,8 @@ export const encodeSnapshot = (
   view.setInt16(30, quantVel(header.ackVel[1]), true);
   view.setInt16(32, quantVel(header.ackVel[2]), true);
   view.setUint8(34, quantRot(header.ackRotY));
-  view.setUint16(35, records.length, true);
+  view.setUint8(35, (header.ackFlags ?? 0) & 0xff);
+  view.setUint16(36, records.length, true);
 
   let off = HEADER_BYTES;
   for (const { e, mask } of records) {
@@ -238,6 +246,7 @@ export const patchSnapshotAck = (
   ackPos: readonly [number, number, number],
   ackVel: readonly [number, number, number],
   ackRotY: number,
+  ackFlags = 0,
 ): void => {
   const view = new DataView(buf);
   view.setUint32(18, yourLastProcessedSeq >>> 0, true);
@@ -248,6 +257,7 @@ export const patchSnapshotAck = (
   view.setInt16(30, quantVel(ackVel[1]), true);
   view.setInt16(32, quantVel(ackVel[2]), true);
   view.setUint8(34, quantRot(ackRotY));
+  view.setUint8(35, ackFlags & 0xff);
 };
 
 /** Decode a snapshot frame. Returns null on malformed input. */
@@ -272,8 +282,9 @@ export const decodeSnapshot = (buf: ArrayBufferLike): DecodedSnapshot | null => 
       dequantVel(view.getInt16(32, true)),
     ],
     ackRotY: dequantRot(view.getUint8(34)),
+    ackFlags: view.getUint8(35),
   };
-  const count = view.getUint16(35, true);
+  const count = view.getUint16(36, true);
 
   const entities: DecodedEntityRecord[] = [];
   let off = HEADER_BYTES;

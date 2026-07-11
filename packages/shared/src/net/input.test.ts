@@ -27,6 +27,7 @@ const randomCmd = (seq: number): InputCmd => ({
   buttons: Math.floor(rng() * 0x10000),
   aimYaw: Math.floor(rng() * 0x10000),
   passTargetId: Math.floor(rng() * 0x10000),
+  viewServerTimeMs: Math.floor(rng() * 0xffffffff),
 });
 
 describe('input codec', () => {
@@ -66,7 +67,7 @@ describe('input codec', () => {
   });
 
   it('SANITY-CLAMPS speed-hacked vectors: (127,127) decodes to magnitude exactly 1', () => {
-    const hacked: InputCmd = { seq: 1, clientTick: 1, moveX: 127, moveZ: 127, buttons: 0, aimYaw: 0, passTargetId: 0 };
+    const hacked: InputCmd = { seq: 1, clientTick: 1, moveX: 127, moveZ: 127, buttons: 0, aimYaw: 0, passTargetId: 0, viewServerTimeMs: 0 };
     const intent = intentFromCmd(hacked);
     expect(Math.hypot(intent.moveX, intent.moveZ)).toBeCloseTo(1, 10);
     // Legit unit vectors survive un-renormalized (quantization ≤ 1 never triggers it).

@@ -1,10 +1,11 @@
 import type { Vector3Tuple } from '@shared/types';
 import { CORRECTION_SMOOTH_MS, MS_PER_TICK, RECONCILE_EPSILON_M, TELEPORT_EPSILON_M, PREDICTION_RING_SIZE } from '@shared/net/constants';
 import { makeInputCmd, intentFromCmd, encodeInputPacket, type InputCmd, type MoveIntent } from '@shared/net/input';
-import type { SnapshotHeader } from '@shared/net/snapshot';
+import { ACK_FLAG_DOWNED, type SnapshotHeader } from '@shared/net/snapshot';
 import type { Entity } from '@sim/components';
 import type { GameWorld } from '@sim/world';
 import type { EventQueue } from '@sim/events';
+import type { SimMode } from '@sim/step';
 import { PredictionEngine } from '@sim/prediction';
 import { netStats } from '@/net/netStats';
 
@@ -58,6 +59,11 @@ class NetGame {
     this.offset = [0, 0, 0];
   }
 
+  /** Switch prediction sim mode on a zone transition (hub ⇄ expedition). */
+  setMode(mode: SimMode): void {
+    this.engine?.setMode(mode);
+  }
+
   /**
    * One fixed client tick: quantize the intent to a wire cmd, PREDICT with the decoded
    * cmd (identical rounding to what the server will simulate — contract #1), and send
@@ -82,6 +88,7 @@ class NetGame {
     const result = engine.onAuthoritative(
       { pos: header.ackPos, vel: header.ackVel, rotY: header.ackRotY },
       header.yourLastProcessedSeq,
+      (header.ackFlags & ACK_FLAG_DOWNED) !== 0,
     );
     if (!result) return;
     netStats.lastAckSeq = result.ackSeq;
@@ -99,11 +106,11 @@ class NetGame {
   }
 
   /** Server-initiated force, keyed by the input seq it precedes (contract #3). */
-  onImpulse(seq: number, impulse: Vector3Tuple): void {
+  onImpulse(seq: number, impulse: Vector3Tuple, staggerMs = 0): void {
     if (!this.engine) return;
     // The shove lands retroactively at its true tick; fold the late-knowledge jump into
     // the presentation so it reads as a hit, not a teleport.
-    const delta = this.engine.scheduleImpulse(seq, impulse);
+    const delta = this.engine.scheduleImpulse(seq, impulse, staggerMs);
     this.offset[0] += delta[0];
     this.offset[1] += delta[1];
     this.offset[2] += delta[2];

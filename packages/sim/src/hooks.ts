@@ -37,6 +37,15 @@ export interface SimHooks {
   onParry?(ctx: HitContext): void;
   /** A melee swing started — whoosh etc. Fires for every player, whiff or hit. */
   onSwing?(player: Entity, strength: HitStrength): void;
+  /**
+   * A knockback+stagger force is about to hit a PLAYER (no-rubberband contract #3). If this
+   * hook is present, dealDamage DEFERS the force to it instead of applying it in-sim — the
+   * room server routes it through the sequenced ServerImpulse replay path so the owning
+   * client applies + replays the identical shove (position never rubberbands into a hit).
+   * Solo play leaves it unset and the knockback applies directly (unchanged feel).
+   * `impulse` = [kx, launchY, kz] world units/sec; `staggerMs` = hitstun window length.
+   */
+  onPlayerImpulse?(target: Entity, impulse: Vector3Tuple, staggerMs: number): void;
   /** Someone caught the Relic at `point` (event already emitted, shockwave applied). */
   onRelicCaught?(world: World<Entity>, relic: Entity, catcher: Entity, point: Vector3Tuple): void;
   /**

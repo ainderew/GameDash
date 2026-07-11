@@ -126,11 +126,17 @@ export const dealDamage = (
   const kbScale = target.playerControlled ? KNOCKBACK_TUNING.playerScale : 1;
   if (kbScale > 0) {
     const speed = KNOCKBACK_TUNING.speed[ctx.strength] * kbScale;
-    target.knockback = [ctx.dirX * speed, 0, ctx.dirZ * speed];
-    if (target.velocity) {
-      target.velocity.linear[1] = KNOCKBACK_TUNING.launch[ctx.strength] * kbScale;
+    const launch = KNOCKBACK_TUNING.launch[ctx.strength] * kbScale;
+    const staggerMs = HITSTUN_MS[ctx.strength];
+    if (target.playerControlled && hooks.onPlayerImpulse) {
+      // Server networked path: defer the shove to the sequenced ServerImpulse pipeline so
+      // the owning client replays it (contract #3) — apply nothing in-sim this tick.
+      hooks.onPlayerImpulse(target, [ctx.dirX * speed, launch, ctx.dirZ * speed], staggerMs);
+    } else {
+      target.knockback = [ctx.dirX * speed, 0, ctx.dirZ * speed];
+      if (target.velocity) target.velocity.linear[1] = launch;
+      target.staggerUntil = now + staggerMs;
     }
-    target.staggerUntil = now + HITSTUN_MS[ctx.strength];
   }
 
   // Hit-reaction stamp: deterministic sim data (passControl gates pass interruption on the
