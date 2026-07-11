@@ -9,7 +9,9 @@
     ".": "./src/index.ts",
     "./balance": "./src/balance.ts",
     "./types": "./src/types.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./net": "./src/net/index.ts",
+    "./net/*": "./src/net/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

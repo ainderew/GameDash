@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Headless Node server: no DOM lib, no DOM globals.
+    "lib": ["ES2023"],
+    "types": ["node", "vitest/globals"],
+    "baseUrl": ".",
+    // Same source-level aliases the sim package uses internally. tsx resolves these
+    // natively from this tsconfig (see README "Module resolution"), so the plain Node
+    // process can execute @friendslop/sim sources — which import '@shared/*' — without
+    // a build step and without touching the web/vite setup.
+    "paths": {
+      "@shared/*": ["../../packages/shared/src/*"],
+      "@sim/*": ["../../packages/sim/src/*"]
+    }
+  },
+  "include": ["src"]
+}

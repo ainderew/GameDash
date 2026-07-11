@@ -6,6 +6,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "web", "dev"],
       "port": 5173
+    },
+    {
+      "name": "realtime",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@friendslop/realtime", "dev"],
+      "port": 8090
     }
   ]
 }

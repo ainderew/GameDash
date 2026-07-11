@@ -13,6 +13,7 @@
     "./hooks": "./src/hooks.ts",
     "./step": "./src/step.ts",
     "./loop": "./src/loop.ts",
+    "./interp": "./src/interp.ts",
     "./combat/*": "./src/combat/*.ts",
     "./terrain/*": "./src/terrain/*.ts",
     "./systems/*": "./src/systems/*.ts"

@@ -7,6 +7,7 @@ import { feel } from '@/game/feel/config';
 import { resumeAudio } from '@/game/feel/audio';
 import { beginIntroAudio, preloadIntroImages } from '@/ui/intro/introAudio';
 import { INTRO_SCENES } from '@/ui/intro/introScenes';
+import { useSession } from '@/net/useSession';
 import { useUIStore } from '@/ui/store';
 
 /** How long each idle plays before drifting into the other, ms. */
@@ -65,13 +66,59 @@ const MENU_BUTTON =
  * the hero model towering on the right, and a lean uppercase option list on the left.
  * The game world does not exist until PLAY — GameCanvas mounts on screen change.
  */
+const NAME_KEY = 'gd_player_name_v1';
+const readPlayerName = (): string => {
+  try {
+    return window.localStorage.getItem(NAME_KEY) ?? 'Adventurer';
+  } catch {
+    return 'Adventurer';
+  }
+};
+
 export const MainMenu = () => {
   const setScreen = useUIStore((s) => s.setScreen);
+  const setScene = useUIStore((s) => s.setScene);
   const startIntro = useUIStore((s) => s.startIntro);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [audioOn, setAudioOn] = useState(feel.audio.enabled);
   const [volume, setVolume] = useState(feel.audio.masterVolume);
   const [quitHint, setQuitHint] = useState(false);
+
+  // ── Multiplayer (dev-grade session plumbing — polished UX is Phase 6) ──────
+  const { session, connectionState, netError, createSession, joinSession } = useSession();
+  const [mpOpen, setMpOpen] = useState(false);
+  const [playerName, setPlayerName] = useState(readPlayerName);
+  const [joinCode, setJoinCode] = useState('');
+  const busy = connectionState === 'connecting' || connectionState === 'reconnecting';
+
+  const rememberName = () => {
+    try {
+      window.localStorage.setItem(NAME_KEY, playerName);
+    } catch {
+      /* storage disabled — non-fatal */
+    }
+  };
+
+  const mpCreate = () => {
+    resumeAudio(); // the click doubles as our WebAudio unlock gesture
+    rememberName();
+    createSession(playerName.trim() || 'Adventurer');
+  };
+
+  const mpJoin = () => {
+    if (joinCode.trim().length < 6) return;
+    resumeAudio();
+    rememberName();
+    joinSession(joinCode, playerName.trim() || 'Adventurer');
+  };
+
+  // Joined a session → straight into the shared hub (multiplayer skips the intro).
+  useEffect(() => {
+    if (session && useUIStore.getState().screen === 'menu') {
+      setScene('hub');
+      setScreen('playing');
+    }
+  }, [session, setScene, setScreen]);
 
   useEffect(() => {
     for (const scene of INTRO_SCENES) preloadIntroImages(scene);
@@ -140,13 +187,53 @@ export const MainMenu = () => {
             <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
             Play
           </button>
-          <button className={`${MENU_BUTTON} cursor-not-allowed opacity-50 hover:border-transparent hover:bg-transparent hover:pl-5`}>
-            <span className="opacity-0">▸</span>
+          <button className={MENU_BUTTON} onClick={() => setMpOpen((v) => !v)}>
+            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
             Multiplayer
-            <span className="ml-2 rounded-sm border border-teal-400/40 px-1.5 py-0.5 text-[10px] tracking-widest text-teal-300/80">
-              Coming soon
-            </span>
           </button>
+          {mpOpen && (
+            <div className="ml-7 flex w-72 flex-col gap-3 border-l border-white/15 py-3 pl-6 text-sm text-white/80">
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-widest text-white/60">Name</span>
+                <input
+                  type="text"
+                  maxLength={24}
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  className="w-40 rounded border border-white/20 bg-black/40 px-2 py-1 text-sm text-white outline-none focus:border-teal-400/60"
+                />
+              </label>
+              <button
+                onClick={mpCreate}
+                disabled={busy}
+                className="self-start rounded border border-teal-400/50 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-teal-200 transition-colors hover:bg-teal-400/10 disabled:cursor-wait disabled:opacity-50"
+              >
+                Create Session
+              </button>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="CODE"
+                  maxLength={6}
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === 'Enter' && mpJoin()}
+                  className="w-28 rounded border border-white/20 bg-black/40 px-2 py-1 font-mono text-sm uppercase tracking-[0.25em] text-white outline-none focus:border-amber-400/60"
+                />
+                <button
+                  onClick={mpJoin}
+                  disabled={busy || joinCode.trim().length < 6}
+                  className="rounded border border-amber-400/50 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition-colors hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Join
+                </button>
+              </div>
+              {busy && (
+                <div className="text-xs uppercase tracking-widest text-white/50">Connecting…</div>
+              )}
+              {netError && <div className="text-xs text-red-400">{netError}</div>}
+            </div>
+          )}
           <button className={MENU_BUTTON} onClick={() => setSettingsOpen((v) => !v)}>
             <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
             Settings

@@ -6,6 +6,7 @@ import { FeelControls } from '@/game/fx/FeelControls';
 import { WeaponControls } from '@/game/fx/WeaponControls';
 import { HubHUD } from '@/ui/HubHUD';
 import { MainMenu } from '@/ui/MainMenu';
+import { PingCard } from '@/ui/PingCard';
 import { IntroSequence } from '@/ui/intro/IntroSequence';
 import { useUIStore } from '@/ui/store';
 
@@ -43,6 +44,8 @@ export const App = () => {
         <GameCanvas />
       </ErrorBoundary>
       {scene === 'hub' ? <HubHUD /> : <CombatHUD />}
+      {/* Session ping card (DOM overlay, self-hides when not in a session). */}
+      <PingCard />
       {/* Live combat-feel + weapon tuning panels + debug menu (dev only). */}
       {DEV && scene === 'expedition' && <FeelControls />}
       {DEV && scene === 'expedition' && <WeaponControls />}

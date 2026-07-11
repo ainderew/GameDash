@@ -19,6 +19,26 @@ const readIntroSeen = (): boolean => {
 /** How long the combo chain stays alive between landed player hits, ms (game time). */
 export const COMBO_WINDOW_MS = 1600;
 
+// ── Multiplayer session (UI mirror only — net GAMEPLAY state goes to the ECS) ─
+export type ConnectionState = 'offline' | 'connecting' | 'connected' | 'reconnecting';
+
+export interface SessionMemberUI {
+  id: string;
+  name: string;
+  /** PlayerCharacterId string from the wire (validated at render time). */
+  character: string;
+  /** EWMA RTT ms; null until the first heartbeat round-trip / while unknown. */
+  ping: number | null;
+  connected: boolean;
+}
+
+export interface SessionUI {
+  code: string;
+  /** OUR playerId within the session. */
+  playerId: string;
+  members: SessionMemberUI[];
+}
+
 interface UIState {
   /** Main menu vs in-game. The 3D world only mounts once the player hits PLAY. */
   screen: AppScreen;
@@ -47,6 +67,13 @@ interface UIState {
    * flow, 'menu' when replayed from Settings so tuning loops back to the menu. */
   introReturnTo: AppScreen;
 
+  // ── Multiplayer session (Phase 2). Updates are inherently throttled: roster at
+  // ~1 Hz (sessionState broadcast), own ping every 2 s heartbeat — never per frame. ──
+  connectionState: ConnectionState;
+  session?: SessionUI;
+  /** Last net-layer error for the menu/session UI (join failed, server down…). */
+  netError?: string;
+
   // ── HUD juice: combo counter ──────────────────────────────────────────────
   /** Consecutive landed hits within the combo window. */
   comboCount: number;
@@ -54,6 +81,15 @@ interface UIState {
   comboLastAt: number;
   /** Bumps on every landed hit so the HUD can re-trigger its pop animation. */
   comboBumpId: number;
+
+  setConnectionState: (state: ConnectionState) => void;
+  setSession: (session?: SessionUI) => void;
+  setSessionMembers: (members: SessionMemberUI[]) => void;
+  addSessionMember: (member: SessionMemberUI) => void;
+  removeSessionMember: (id: string) => void;
+  /** Own EWMA ping, updated from every heartbeat ping's `yourPing` echo. */
+  setOwnPing: (ping: number | null) => void;
+  setNetError: (message?: string) => void;
 
   setHealth: (value: number) => void;
   setScreen: (screen: AppScreen) => void;
@@ -91,6 +127,35 @@ export const useUIStore = create<UIState>((set) => ({
   comboCount: 0,
   comboLastAt: 0,
   comboBumpId: 0,
+  connectionState: 'offline',
+  session: undefined,
+  netError: undefined,
+
+  setConnectionState: (connectionState) => set({ connectionState }),
+  setSession: (session) => set({ session, netError: undefined }),
+  setSessionMembers: (members) =>
+    set((s) => (s.session ? { session: { ...s.session, members } } : {})),
+  addSessionMember: (member) =>
+    set((s) => {
+      if (!s.session) return {};
+      const others = s.session.members.filter((m) => m.id !== member.id);
+      return { session: { ...s.session, members: [...others, member] } };
+    }),
+  removeSessionMember: (id) =>
+    set((s) =>
+      s.session
+        ? { session: { ...s.session, members: s.session.members.filter((m) => m.id !== id) } }
+        : {},
+    ),
+  setOwnPing: (ping) =>
+    set((s) => {
+      if (!s.session) return {};
+      const members = s.session.members.map((m) =>
+        m.id === s.session!.playerId ? { ...m, ping } : m,
+      );
+      return { session: { ...s.session, members } };
+    }),
+  setNetError: (netError) => set({ netError }),
 
   setHealth: (value) => set({ health: value }),
   setScreen: (screen) => set({ screen }),

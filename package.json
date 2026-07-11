@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "pnpm --filter web dev",
+    "dev:realtime": "pnpm --filter @friendslop/realtime dev",
+    "dev:mp": "pnpm --parallel --filter web --filter @friendslop/realtime dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",

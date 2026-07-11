@@ -98,6 +98,11 @@ export interface Entity {
    * the server never sets it; sim systems must not branch on it for gameplay outcomes.
    */
   localPlayer?: true;
+  /**
+   * Marks another human's avatar mirrored from the network (Phase 2: hub transform relay;
+   * Phase 3: snapshots). Client-side marker — driven by interpolation, never by intents.
+   */
+  remotePlayer?: true;
   /** Reach multiplier of the wielded weapon (loadout data, synced by the client adapter). */
   weaponReachMul?: number;
   /**

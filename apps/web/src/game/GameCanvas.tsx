@@ -7,6 +7,7 @@ import { SkyAndLight } from '@/game/world/SkyAndLight';
 import { Zone } from '@/game/world/Zone';
 import { PostFX } from '@/game/fx/PostFX';
 import { Player } from '@/game/entities/Player';
+import { RemotePlayers } from '@/game/entities/RemotePlayers';
 import { SlashFX } from '@/game/fx/SlashFX';
 import { BladeTrail } from '@/game/fx/BladeTrail';
 import { AttackArcIndicator } from '@/game/fx/AttackArcIndicator';
@@ -59,6 +60,8 @@ export const GameCanvas = () => {
         <Physics>
           {scene === 'hub' ? <SocialHub obstacles={obstacles} /> : <Zone obstacles={obstacles} />}
           <Player playerRef={playerRef} />
+          {/* Session peers in the shared hub (Phase 2 scope: hub presence only). */}
+          {scene === 'hub' && <RemotePlayers />}
           {scene === 'expedition' && (
             <>
               <Teammates />

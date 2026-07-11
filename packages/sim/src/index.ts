@@ -10,6 +10,7 @@ export * from './events';
 export * from './hooks';
 export * from './step';
 export * from './loop';
+export * from './interp';
 
 export * from './terrain/terrainHeight';
 export * from './terrain/hubCollision';
