@@ -10,11 +10,15 @@ FROM node:20-slim AS build
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
-# Manifests first so `pnpm install` is cached until a dependency changes.
+# Manifests first so `pnpm install` is cached until a dependency changes. EVERY workspace
+# package the web build pulls in must be listed, or `pnpm install` won't install its deps:
+# web → @friendslop/sim → miniplex. Missing packages/sim here is what broke the build with
+# "Cannot find module 'miniplex'" (the whole ECS type surface collapsed off that one miss).
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY apps/server/package.json ./apps/server/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
+COPY packages/sim/package.json ./packages/sim/package.json
 RUN pnpm install --frozen-lockfile
 
 # Full source, then build only the web app.
