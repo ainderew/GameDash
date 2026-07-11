@@ -1,0 +1,283 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cobblestone preview</title>
+<style>
+  body { background:#9a7f5e; font-family:sans-serif; margin:16px; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  .cell { text-align:center; color:#fff; }
+  canvas { width:460px; height:460px; border-radius:50%; display:block; }
+  canvas.sq { border-radius:8px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="cell"><canvas id="lit" width="1024" height="1024"></canvas><p>Lit preview (albedo + normals)</p></div>
+  <div class="cell"><canvas id="alb" width="1024" height="1024"></canvas><p>Albedo</p></div>
+  <div class="cell"><canvas id="nrm" width="1024" height="1024" class="sq"></canvas><p>Normal map</p></div>
+</div>
+<script>
+const mulberry32 = (seed) => () => {
+  seed |= 0;
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
+const heightToNormal = (heightCanvas, strength) => {
+  const size = heightCanvas.width;
+  const src = heightCanvas.getContext('2d').getImageData(0, 0, size, size).data;
+  const out = document.createElement('canvas');
+  out.width = size; out.height = size;
+  const outCtx = out.getContext('2d');
+  const img = outCtx.createImageData(size, size);
+  const heightAt = (x, y) => src[(((y + size) % size) * size + ((x + size) % size)) * 4] / 255;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = (heightAt(x + 1, y) - heightAt(x - 1, y)) * strength;
+      const dy = (heightAt(x, y + 1) - heightAt(x, y - 1)) * strength;
+      const inv = 1 / Math.hypot(dx, dy, 1);
+      const i = (y * size + x) * 4;
+      img.data[i] = (-dx * inv * 0.5 + 0.5) * 255;
+      img.data[i + 1] = (dy * inv * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (inv * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  outCtx.putImageData(img, 0, 0);
+  return out;
+};
+
+const createCobblestoneMaps = () => {
+  const size = 2048;
+  const albedo = document.createElement('canvas');
+  albedo.width = size; albedo.height = size;
+  const a = albedo.getContext('2d');
+  const heightCanvas = document.createElement('canvas');
+  heightCanvas.width = size; heightCanvas.height = size;
+  const h = heightCanvas.getContext('2d');
+  const rand = mulberry32(20260711);
+  const cx = size / 2, cy = size / 2, maxRadius = size / 2;
+  const grout = 9;
+
+  a.fillStyle = '#453e34';
+  a.fillRect(0, 0, size, size);
+  h.fillStyle = '#333333';
+  h.fillRect(0, 0, size, size);
+
+  const rings = 8;
+  const radii = [0];
+  for (let i = 1; i < rings; i += 1) radii.push((i / rings) * maxRadius * (1 + (rand() - 0.5) * 0.03));
+  radii.push(maxRadius);
+
+  const stones = [];
+  const corners = [];
+
+  const buildStone = (ring, a0, a1, r0, r1) => {
+    const path = new Path2D();
+    const jitter = grout * 0.55;
+    const steps = 5;
+    if (ring === 0) {
+      const blob = Array.from({ length: 16 }, () => (rand() - 0.5) * jitter * 2);
+      for (let i = 0; i <= 16; i += 1) {
+        const angle = (i / 16) * Math.PI * 2;
+        const radius = r1 - grout + blob[i % 16];
+        const x = cx + Math.cos(angle) * radius;
+        const y = cy + Math.sin(angle) * radius;
+        if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+      }
+      path.closePath();
+      return path;
+    }
+    const gapInner = (grout * 0.5) / Math.max(r0, 1);
+    const gapOuter = (grout * 0.5) / Math.max(r1, 1);
+    for (let i = 0; i <= steps; i += 1) {
+      const angle = a0 + gapOuter + ((a1 - a0 - gapOuter * 2) * i) / steps + ((rand() - 0.5) * jitter) / r1;
+      const radius = r1 - grout * 0.5 + (rand() - 0.5) * jitter;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    for (let i = steps; i >= 0; i -= 1) {
+      const angle = a0 + gapInner + ((a1 - a0 - gapInner * 2) * i) / steps + ((rand() - 0.5) * jitter) / Math.max(r0, 40);
+      const radius = r0 + grout * 0.5 + (rand() - 0.5) * jitter;
+      path.lineTo(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
+    }
+    path.closePath();
+    return path;
+  };
+
+  for (let ring = 0; ring < rings; ring += 1) {
+    const r0 = radii[ring];
+    const r1 = radii[ring + 1];
+    const rMid = (r0 + r1) / 2;
+    const segments = ring === 0 ? 1 : Math.max(7, Math.round((Math.PI * 2 * rMid) / ((r1 - r0) * 1.25)));
+    const angleStep = (Math.PI * 2) / segments;
+    const startOffset = rand() * Math.PI * 2;
+
+    for (let s = 0; s < segments; s += 1) {
+      const a0 = startOffset + s * angleStep;
+      const a1 = a0 + angleStep;
+      const path = buildStone(ring, a0, a1, r0, r1);
+      const aMid = (a0 + a1) / 2;
+      const px = ring === 0 ? cx : cx + Math.cos(aMid) * rMid;
+      const py = ring === 0 ? cy : cy + Math.sin(aMid) * rMid;
+      const stoneR = ring === 0 ? r1 : Math.max((r1 - r0) / 2, (rMid * angleStep) / 2);
+      stones.push({ path, px, py, r: stoneR });
+      if (ring > 0) corners.push({ x: cx + Math.cos(a0) * r0, y: cy + Math.sin(a0) * r0, ring });
+
+      const hue = 30 + rand() * 18;
+      const sat = 6 + rand() * 11;
+      const lit = 38 + rand() * 24;
+      const grad = a.createRadialGradient(px - stoneR * 0.35, py - stoneR * 0.35, stoneR * 0.1, px, py, stoneR * 1.5);
+      grad.addColorStop(0, `hsl(${hue} ${sat}% ${lit + 7}%)`);
+      grad.addColorStop(1, `hsl(${hue} ${sat}% ${lit - 7}%)`);
+      a.fillStyle = grad;
+      a.fill(path);
+
+      a.save();
+      a.clip(path);
+      a.lineWidth = 7;
+      a.strokeStyle = 'rgba(20,15,10,0.38)';
+      a.translate(-3, -3);
+      a.stroke(path);
+      a.strokeStyle = 'rgba(255,240,215,0.16)';
+      a.translate(6, 6);
+      a.stroke(path);
+      a.translate(-3, -3);
+      for (let b = 0; b < 3; b += 1) {
+        const bx = px + (rand() - 0.5) * stoneR * 1.4;
+        const by = py + (rand() - 0.5) * stoneR * 1.4;
+        a.fillStyle = rand() > 0.45 ? `rgba(25,20,14,${0.05 + rand() * 0.08})` : `rgba(255,244,225,${0.04 + rand() * 0.06})`;
+        a.beginPath();
+        a.ellipse(bx, by, stoneR * (0.2 + rand() * 0.4), stoneR * (0.15 + rand() * 0.3), rand() * Math.PI, 0, Math.PI * 2);
+        a.fill();
+      }
+      a.restore();
+
+      const elevation = 150 + rand() * 72;
+      h.fillStyle = `rgb(${elevation},${elevation},${elevation})`;
+      h.fill(path);
+      const dome = h.createRadialGradient(px, py, 0, px, py, stoneR * 1.35);
+      dome.addColorStop(0, 'rgba(255,255,255,0.30)');
+      dome.addColorStop(1, 'rgba(0,0,0,0.22)');
+      h.save();
+      h.clip(path);
+      h.fillStyle = dome;
+      h.fill(path);
+      h.restore();
+    }
+  }
+
+  for (let i = 0; i < 16; i += 1) {
+    const stone = stones[Math.floor(rand() * stones.length)];
+    const angle = rand() * Math.PI * 2;
+    for (const [ctx2, style, width] of [[a, 'rgba(20,15,10,0.4)', 2.5], [h, 'rgba(0,0,0,0.5)', 3]]) {
+      ctx2.save();
+      ctx2.clip(stone.path);
+      ctx2.strokeStyle = style;
+      ctx2.lineWidth = width;
+      ctx2.beginPath();
+      let x = stone.px - Math.cos(angle) * stone.r;
+      let y = stone.py - Math.sin(angle) * stone.r;
+      ctx2.moveTo(x, y);
+      for (let seg = 0; seg < 4; seg += 1) {
+        x += Math.cos(angle) * stone.r * 0.55 + (rand() - 0.5) * stone.r * 0.4;
+        y += Math.sin(angle) * stone.r * 0.55 + (rand() - 0.5) * stone.r * 0.4;
+        ctx2.lineTo(x, y);
+      }
+      ctx2.stroke();
+      ctx2.restore();
+    }
+  }
+
+  const noisePass = (cells, alpha, mode, target) => {
+    const n = document.createElement('canvas');
+    n.width = cells; n.height = cells;
+    const nCtx = n.getContext('2d');
+    const img = nCtx.createImageData(cells, cells);
+    for (let i = 0; i < cells * cells; i += 1) {
+      const v = Math.floor(rand() * 255);
+      img.data[i * 4] = v; img.data[i * 4 + 1] = v; img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255;
+    }
+    nCtx.putImageData(img, 0, 0);
+    target.globalAlpha = alpha;
+    target.globalCompositeOperation = mode;
+    target.imageSmoothingEnabled = true;
+    target.drawImage(n, 0, 0, size, size);
+    target.globalAlpha = 1;
+    target.globalCompositeOperation = 'source-over';
+  };
+  noisePass(48, 0.16, 'overlay', a);
+  noisePass(200, 0.13, 'overlay', a);
+  noisePass(900, 0.1, 'soft-light', a);
+  noisePass(700, 0.12, 'overlay', h);
+
+  const mossClump = (x, y, scale) => {
+    const blobs = 5 + Math.floor(rand() * 8);
+    for (let b = 0; b < blobs; b += 1) {
+      const bx = x + (rand() - 0.5) * 26 * scale;
+      const by = y + (rand() - 0.5) * 26 * scale;
+      const hue = 78 + rand() * 32;
+      a.fillStyle = `hsla(${hue}, ${34 + rand() * 22}%, ${26 + rand() * 14}%, ${0.22 + rand() * 0.3})`;
+      a.beginPath();
+      a.ellipse(bx, by, (3 + rand() * 9) * scale, (2 + rand() * 6) * scale, rand() * Math.PI, 0, Math.PI * 2);
+      a.fill();
+    }
+  };
+  for (const corner of corners) {
+    if (rand() < 0.12 + 0.3 * (corner.ring / rings)) mossClump(corner.x, corner.y, 0.8 + rand() * 0.9);
+  }
+  for (let i = 0; i < 46; i += 1) {
+    const angle = rand() * Math.PI * 2;
+    const radius = maxRadius * (0.9 + rand() * 0.08);
+    mossClump(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, 0.9 + rand() * 1.1);
+  }
+
+  const vignette = a.createRadialGradient(cx, cy, maxRadius * 0.72, cx, cy, maxRadius);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(1, 'rgba(20,14,8,0.28)');
+  a.fillStyle = vignette;
+  a.fillRect(0, 0, size, size);
+
+  const blurred = document.createElement('canvas');
+  blurred.width = size; blurred.height = size;
+  const bCtx = blurred.getContext('2d');
+  bCtx.filter = 'blur(2.5px)';
+  bCtx.drawImage(heightCanvas, 0, 0);
+
+  return { albedo, normal: heightToNormal(blurred, 2.6) };
+};
+
+const { albedo, normal } = createCobblestoneMaps();
+document.getElementById('alb').getContext('2d').drawImage(albedo, 0, 0, 1024, 1024);
+document.getElementById('nrm').getContext('2d').drawImage(normal, 0, 0, 1024, 1024);
+
+// Lit preview: lambertian shade with a warm sun from the upper-left, like the game's key light.
+{
+  const s = 1024;
+  const alb = document.createElement('canvas'); alb.width = s; alb.height = s;
+  alb.getContext('2d').drawImage(albedo, 0, 0, s, s);
+  const nrm = document.createElement('canvas'); nrm.width = s; nrm.height = s;
+  nrm.getContext('2d').drawImage(normal, 0, 0, s, s);
+  const aData = alb.getContext('2d').getImageData(0, 0, s, s);
+  const nData = nrm.getContext('2d').getImageData(0, 0, s, s).data;
+  const L = [-0.45, -0.5, 0.74];
+  for (let i = 0; i < s * s; i += 1) {
+    const nx = nData[i * 4] / 127.5 - 1;
+    const ny = -(nData[i * 4 + 1] / 127.5 - 1);
+    const nz = nData[i * 4 + 2] / 127.5 - 1;
+    const dot = Math.max(0, nx * L[0] + ny * L[1] + nz * L[2]);
+    const shade = 0.45 + 0.75 * dot;
+    aData.data[i * 4] = Math.min(255, aData.data[i * 4] * shade * 1.06);
+    aData.data[i * 4 + 1] = Math.min(255, aData.data[i * 4 + 1] * shade);
+    aData.data[i * 4 + 2] = Math.min(255, aData.data[i * 4 + 2] * shade * 0.94);
+  }
+  document.getElementById('lit').getContext('2d').putImageData(aData, 0, 0);
+  document.title = 'cobble-ready';
+}
+</script>
+</body>
+</html>

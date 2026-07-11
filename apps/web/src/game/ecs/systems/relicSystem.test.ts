@@ -5,6 +5,7 @@ import { dropRelic, passRelic, relicSystem } from '@/game/ecs/systems/relicSyste
 import { drainEvents, resetEvents } from '@/game/events';
 import {
   RELIC_CATCH_RADIUS,
+  RELIC_CATCH_ROOT_MS,
   RELIC_FAIL_BOUNCE_DIST,
   RELIC_HANDOFF_SHIELD_MS,
   RELIC_PASS_RECATCH_MS,
@@ -244,6 +245,20 @@ describe('relicSystem', () => {
     relicSystem(world, DT, 5000);
     expect(monster.staggerUntil).toBeGreaterThan(5000);
     expect(monster.knockback![0]).toBeGreaterThan(0); // shoved away from the catch point
+  });
+
+  it('plants the player on catch so the catch clip does not glide', () => {
+    const world = new World<Entity>();
+    const player = world.add(makePlayer(0.5, 0));
+    player.velocity!.linear = [6, 0, 0]; // caught mid-run — would otherwise slide
+    world.add({
+      transform: { position: [0, 0.6, 0] as [number, number, number], rotationY: 0 },
+      relic: { phase: 'grounded' as const, noCatchUntil: 0 },
+    });
+
+    relicSystem(world, DT, 5000);
+    expect(world.with('relic').first!.relic!.phase).toBe('carried');
+    expect(player.catchRootUntil).toBe(5000 + RELIC_CATCH_ROOT_MS);
   });
 
   it('drops to grounded where the carrier died', () => {

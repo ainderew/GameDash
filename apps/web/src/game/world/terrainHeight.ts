@@ -51,3 +51,39 @@ export const pathMask = (x: number, z: number): number => {
   const fade = Math.min(1, Math.max(0, 1 - (r - 66) / 10));
   return edge * fade;
 };
+
+// ── Hub dirt roads ─────────────────────────────────────────────────────────────
+// Worn dirt roads radiating from the plaza cobbles out to each landmark, so the hub
+// reads as green grass CUT by roads rather than a brown clearing. Terrain.tsx bakes
+// these same segments into the ground splat (single source of truth); GrassField and
+// Scatter use hubRoadMask() to keep vegetation off the packed earth.
+// Thin worn footpaths (roughly half the earlier width) that leave the cobble ring as
+// distinct, well-separated spokes rather than a fat clearing.
+// [x0, z0, x1, z1, halfWidth]
+export const HUB_ROADS: readonly (readonly [number, number, number, number, number])[] = [
+  [0, -6.0, 0, -16.2, 0.62], //   → Expedition Gate (north)
+  [0, 6.0, 0, 15.0, 0.66], //     → southern approach / spawn
+  [-4.4, -4.0, -9.8, -7.8, 0.55], // → Roster Lodge (west)
+  [4.9, -3.5, 9.6, -6.4, 0.55], //   → Summoning Shrine (east)
+] as const;
+
+/** Squared-free distance from (px,pz) to segment a→b. */
+const segDist = (px: number, pz: number, ax: number, az: number, bx: number, bz: number): number => {
+  const pax = px - ax;
+  const paz = pz - az;
+  const bax = bx - ax;
+  const baz = bz - az;
+  const h = Math.min(1, Math.max(0, (pax * bax + paz * baz) / (bax * bax + baz * baz || 1)));
+  return Math.hypot(pax - bax * h, paz - baz * h);
+};
+
+/** 1 on a hub road, smoothly falling to 0 at its edge. */
+export const hubRoadMask = (x: number, z: number): number => {
+  let m = 0;
+  for (const [ax, az, bx, bz, hw] of HUB_ROADS) {
+    const d = segDist(x, z, ax, az, bx, bz);
+    const t = Math.min(1, Math.max(0, (d - hw) / 0.6));
+    m = Math.max(m, 1 - t * t * (3 - 2 * t)); // smoothstep, ascending
+  }
+  return m;
+};

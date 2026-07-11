@@ -27,6 +27,13 @@ let footstepBuffers: readonly AudioBuffer[] = [];
 let footstepLoad: Promise<void> | null = null;
 let nextFootstepVariation = 0;
 
+// The Relic-pickup reward stinger is a real recording (unlike the procedural combat
+// sounds): a rising magical swell, loudness-normalized to -16 LUFS / -1.5 dBTP so it
+// sits consistently against the synth SFX. Fetched/decoded once, same as footsteps.
+const RELIC_PICKUP_URL = '/audio/relic-pickup.wav';
+let relicPickupBuffer: AudioBuffer | null = null;
+let relicPickupLoad: Promise<void> | null = null;
+
 const supported = (): boolean =>
   typeof window !== 'undefined' &&
   (typeof AudioContext !== 'undefined' ||
@@ -67,15 +74,30 @@ const loadFootsteps = (c: Ctx): void => {
     });
 };
 
+/** Fetch/decode the Relic-pickup sample once. Failure is safely retriable. */
+const loadRelicPickup = (c: Ctx): void => {
+  if (relicPickupBuffer || relicPickupLoad) return;
+  relicPickupLoad = (async () => {
+    const response = await fetch(RELIC_PICKUP_URL);
+    if (!response.ok) throw new Error(`Unable to load relic pickup sample: ${RELIC_PICKUP_URL}`);
+    relicPickupBuffer = await c.decodeAudioData(await response.arrayBuffer());
+  })().catch(() => {
+    // A missing/undecodable stinger must never break the pickup itself.
+    relicPickupLoad = null;
+  });
+};
+
 /**
  * Resume the audio context — call from a user-gesture handler (mousedown/keydown).
- * No-op until the browser allows it.
+ * No-op until the browser allows it. Also warms the sample caches so the first
+ * footstep/pickup doesn't miss while its buffer is still decoding.
  */
 export const resumeAudio = (): void => {
   const c = engine();
   if (!c) return;
   if (c.state === 'suspended') void c.resume();
   loadFootsteps(c);
+  loadRelicPickup(c);
 };
 
 /**
@@ -112,6 +134,47 @@ export const playFootstep = (running: boolean): boolean => {
     gain.disconnect();
   };
   return true;
+};
+
+/**
+ * Random pitch spread applied to the pickup each play, in semitones (±this much). The
+ * classic "sample doesn't sound copy-pasted" trick: a fixed one-shot repeated verbatim
+ * reads as canned, so we detune it every time. ±3 semitones (~±18% speed) is clearly
+ * audible without turning chipmunky/sludgy — a subtler ±1.5 was inaudible in play because
+ * pickups fire seconds apart, so there's no back-to-back A/B reference for the ear.
+ */
+const RELIC_PICKUP_PITCH_SEMITONES = 20;
+
+/**
+ * The Relic-pickup reward stinger. Plays the pre-normalized sample through a gain node with
+ * a small random pitch shift so a repeated pickup never sounds identical. The 0.9 gain
+ * (× 0.8 master) lands it at a prominent-but-unclipped ~0.6 peak, on par with a heavy hit
+ * so claiming the Relic feels like an event. Silently no-ops if the buffer isn't ready.
+ */
+export const playRelicPickup = (): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  loadRelicPickup(c);
+  const buffer = relicPickupBuffer;
+  if (!buffer) return;
+
+  master.gain.value = feel.audio.masterVolume;
+  const t = now(c);
+  const source = c.createBufferSource();
+  const gain = c.createGain();
+  source.buffer = buffer;
+  // ±N semitones of detune → playbackRate = 2^(semitones/12). Continuous, not quantized.
+  const semitones = (Math.random() * 2 - 1) * RELIC_PICKUP_PITCH_SEMITONES;
+  source.playbackRate.value = Math.pow(2, semitones / 12);
+  gain.gain.value = 0.9;
+  source.connect(gain);
+  gain.connect(master);
+  source.start(t);
+  source.onended = () => {
+    source.disconnect();
+    gain.disconnect();
+  };
 };
 
 /** Short reusable white-noise buffer for transients + whooshes. */

@@ -17,6 +17,7 @@ import { Projectiles } from '@/game/entities/Projectiles';
 import { Relic } from '@/game/entities/Relic';
 import { Teammates } from '@/game/entities/Teammates';
 import { PassAimUI } from '@/game/fx/PassAimUI';
+import { RelicDrainVFX } from '@/game/fx/RelicDrainVFX';
 import { Pickups } from '@/game/entities/Pickups';
 import { DamageNumbers } from '@/game/entities/DamageNumbers';
 import { SystemRunner } from '@/game/ecs/SystemRunner';
@@ -63,6 +64,7 @@ export const GameCanvas = () => {
               <Teammates />
               <Relic />
               <PassAimUI />
+              <RelicDrainVFX />
               <SlashFX />
               <BladeTrail />
               <AttackArcIndicator />

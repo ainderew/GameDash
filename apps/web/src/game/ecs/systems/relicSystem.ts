@@ -3,6 +3,7 @@ import type { Entity } from '@/game/ecs/components';
 import type { Vector3Tuple } from '@shared/types';
 import { spawnImpactVfx } from '@/game/feel/onHit';
 import { addTrauma } from '@/game/feel/screenShake';
+import { requestHitstop } from '@/game/feel/time';
 import { emit } from '@/game/events';
 import { heightAt } from '@/game/world/terrainHeight';
 import { passAim } from '@/game/combat/passAim';
@@ -14,7 +15,9 @@ import {
   RELIC_FAIL_BOUNCE_DIST,
   RELIC_FAIL_BOUNCE_MS,
   RELIC_CATCH_HEIGHT,
+  RELIC_CATCH_HITSTOP_MS,
   RELIC_CATCH_RADIUS,
+  RELIC_CATCH_ROOT_MS,
   RELIC_CATCH_SOCKET_Y,
   RELIC_FLIGHT_MIN_MS,
   RELIC_GROUND_HOVER,
@@ -40,6 +43,28 @@ const HOMING_RATE = 10;
 const ARRIVAL_TOLERANCE = 2;
 
 const isDead = (e: Entity): boolean => (e.health?.current ?? 1) <= 0;
+
+/**
+ * A wide white-hot "claim" bloom, layered over the teal shockwave spark+ring so a catch
+ * reads bigger and brighter than a combat hit. Colour values exceed 1 to cross the Bloom
+ * threshold for a hard flash; aged on real time so it erupts through the catch hitstop.
+ */
+const spawnCatchBloom = (world: World<Entity>, point: Vector3Tuple): void => {
+  world.add({
+    transform: { position: [...point], rotationY: 0 },
+    impactFx: {
+      kind: 'ring',
+      strength: 'heavy',
+      spawnedAtReal: performance.now(),
+      lifetimeMs: 340,
+      color: [1.6, 1.6, 1.45],
+      count: 0,
+      radius: RELIC_SHOCKWAVE_RADIUS * 0.75,
+      dirX: 0,
+      dirZ: 0,
+    },
+  });
+};
 
 /**
  * A successful catch: attach to the new carrier and release the defensive shockwave —
@@ -69,7 +94,16 @@ const catchRelic = (world: World<Entity>, relic: Entity, catcher: Entity, now: n
     position: [point[0], point[1], point[2]],
   });
   spawnImpactVfx(world, [point[0], point[1], point[2]], 'heavy', RELIC_FX_COLOR);
+  spawnCatchBloom(world, [point[0], point[1], point[2]]);
   addTrauma(0.25);
+
+  // Local-player catch juice: a brief whole-scene "thunk" freeze plus a plant that keeps the
+  // catch clip from gliding on residual run momentum. Teammate catches skip this — freezing
+  // the fight every time an AI receives a relay pass would feel like a stutter, not a beat.
+  if (catcher.playerControlled) {
+    requestHitstop(RELIC_CATCH_HITSTOP_MS);
+    catcher.catchRootUntil = now + RELIC_CATCH_ROOT_MS;
+  }
 
   for (const m of world.with('transform', 'health', 'monster')) {
     if (isDead(m)) continue;

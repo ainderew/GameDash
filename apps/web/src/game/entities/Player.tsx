@@ -20,7 +20,7 @@ import { gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
 import { playFootstep } from '@/game/feel/audio';
 import { heightAt } from '@/game/world/terrainHeight';
-import { DODGE_DURATION_MS } from '@shared/balance';
+import { DODGE_DURATION_MS, RELIC_CATCH_ROOT_MS } from '@shared/balance';
 
 interface Props {
   /** GameCanvas passes this so the camera can follow the player group. */
@@ -52,6 +52,11 @@ const BORED_IDLE_AFTER_MS = 3000;
 /** How long the throw follow-through shows after a pass launches. The player is NOT
  * rooted during this — the clip plays over whatever they're doing (spec §8). */
 const THROW_FOLLOW_MS = 550;
+/** How long the catch/receive clip plays after the player acquires the relic. Locked to the
+ * sim-side plant (RELIC_CATCH_ROOT_MS) so the animation and the no-glide root end together.
+ * Sped-up (STATE_TIMESCALE.catch) so the grab reads inside the window; dodge/attack outrank
+ * it, so a catch never eats a defensive input. */
+const CATCH_ANIM_MS = RELIC_CATCH_ROOT_MS;
 /** World units per left/right foot plant; cadence scales continuously with actual speed. */
 const STEP_LENGTH = { walk: 1.35, run: 1.75 } as const;
 /**
@@ -132,6 +137,10 @@ export const Player = ({ playerRef }: Props) => {
   const throwFollowUntil = useRef(0);
   /** startedAt of the last pass we latched, so each launch triggers exactly once. */
   const lastThrowStamp = useRef<number | undefined>(undefined);
+  /** Whether WE held the relic last frame — a false→true edge is a fresh catch/pickup. */
+  const wasCarrying = useRef<boolean | null>(null);
+  /** gameNow() until which the catch clip plays after acquiring the relic. */
+  const catchUntil = useRef(0);
   /** gameNow() when another foot plant may sound; uses game time, so hitstop stays silent. */
   const nextFootstepAt = useRef(0);
 
@@ -185,10 +194,21 @@ export const Player = ({ playerRef }: Props) => {
     const throwing =
       (passAim.aiming && speed <= WALK_SPEED_THRESHOLD) || now < throwFollowUntil.current;
 
+    // Catch: latch the receive clip on the false→true edge of us holding the relic —
+    // covers pass receptions and walk-in ground pickups alike. Skip the very first
+    // observation so spawning with the relic in hand doesn't fire a phantom catch.
+    const carrying = rs?.phase === 'carried' && rs.carrier === e;
+    if (wasCarrying.current !== null && !wasCarrying.current && carrying) {
+      catchUntil.current = now + CATCH_ANIM_MS;
+    }
+    wasCarrying.current = carrying;
+    const catching = now < catchUntil.current;
+
     let next: CharState;
     if (dead) next = 'death';
     else if (dodging) next = 'dodge';
     else if (attacking) next = ATTACK_STATE[comboAt(e.meleeCombo ?? 0).clip];
+    else if (catching) next = 'catch';
     else if (throwing) next = 'throw';
     else if (hurting) next = 'hurt';
     else if (y > AIRBORNE_Y) next = 'jump';
@@ -261,6 +281,7 @@ export const Player = ({ playerRef }: Props) => {
         light2Path="/models/hero/anim-attack-l2.glb"
         finisherPath="/models/hero/anim-finisher.glb"
         throwPath="/models/hero/anim-throw.glb"
+        catchPath="/models/hero/anim-catch.glb"
         targetHeight={1.8}
         stateRef={charState}
         throwHoldRef={throwHold}

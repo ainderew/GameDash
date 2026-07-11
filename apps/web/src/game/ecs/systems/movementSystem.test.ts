@@ -45,6 +45,23 @@ describe('applyPlayerIntent', () => {
     expect(e.velocity!.linear[0]).toBeCloseTo(PLAYER_SPEED);
   });
 
+  it('plants in place while catch-rooted, ignoring move input (no glide)', () => {
+    const e = makePlayer();
+    e.catchRootUntil = 2000;
+    applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: true, dodge: false, sprint: true }, 1500);
+    expect(e.velocity!.linear[0]).toBe(0);
+    expect(e.velocity!.linear[2]).toBe(0);
+    expect(e.velocity!.linear[1]).toBe(0); // jump is suppressed too
+  });
+
+  it('lets a dodge break out of the catch plant immediately', () => {
+    const e = makePlayer();
+    e.catchRootUntil = 2000;
+    applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: false, dodge: true, sprint: false }, 1500);
+    expect(e.catchRootUntil).toBe(0);
+    expect(Math.hypot(e.velocity!.linear[0], e.velocity!.linear[2])).toBeGreaterThan(0); // dashing
+  });
+
   it('allows exactly one mid-air double jump and resets both jumps on landing', () => {
     const e = makePlayer();
     applyPlayerIntent(e, { moveX: 0, moveZ: 0, jump: true, dodge: false, sprint: false }, 1000);

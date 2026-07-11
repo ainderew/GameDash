@@ -15,8 +15,9 @@ import {
 } from 'three';
 import type { Mesh, MeshStandardMaterial, Texture } from 'three';
 import { useGameModel } from '@/lib/loaders';
-import { heightAt, pathMask } from '@/game/world/terrainHeight';
+import { heightAt, pathMask, hubRoadMask } from '@/game/world/terrainHeight';
 import { SUN_POSITION } from '@/game/world/SkyAndLight';
+import { PLAZA_DRESSING, inPlazaKeepout } from '@/game/world/hubLayout';
 
 /**
  * GRASS FIELD v3 — instanced tuft models from the Stylized Nature MegaKit,
@@ -53,11 +54,11 @@ const mulberry32 = (seed: number) => () => {
 const DENSE_RADIUS = 58; // matches the playfield (same as the old field)
 const RING_RADIUS = 84; // sparse horizon ring beyond the dense disk
 const MAX_TERRAIN_Y = 4; // keep tufts off the steep perimeter peaks
-const TINT_CELL = 6; // world-units per patch of coherent colour variation
+const TINT_CELL = 7; // world-units per patch of coherent colour variation
 
 // Root ≈ the average terrain colour at play level (the grassLow→grassHigh splat,
 // Terrain.tsx) — THE trick that melts the tufts into the ground.
-const ROOT_COLOR = '#4d7223';
+const ROOT_COLOR = '#648832';
 const SSS_COLOR = '#f1c875';
 
 interface Variant {
@@ -76,30 +77,30 @@ interface Variant {
 const VARIANTS: Variant[] = [
   {
     path: '/models/grass/Grass_Common_Short.gltf', // 155 tris — the dense base layer
-    count: 4400,
+    count: 3350,
     ringFraction: 0.14,
-    scale: [0.65, 1.05],
-    yScale: [0.8, 1.25],
+    scale: [0.52, 0.94],
+    yScale: [0.72, 1.18],
   },
   {
     path: '/models/grass/Grass_Common_Tall.gltf', // 326 tris — mid-height fill
-    count: 860,
+    count: 650,
     ringFraction: 0.25,
-    scale: [0.55, 0.85],
-    yScale: [0.8, 1.15],
+    scale: [0.48, 0.82],
+    yScale: [0.76, 1.16],
   },
   {
     path: '/models/grass/Grass_Wispy_Short.gltf', // 494 tris — feathery accents
-    count: 310,
+    count: 250,
     ringFraction: 0.1,
-    scale: [0.6, 1.0],
+    scale: [0.52, 0.92],
     yScale: [0.85, 1.2],
   },
   {
     path: '/models/grass/Grass_Wispy_Tall.gltf', // 622 tris — tall silhouette accents
-    count: 190,
+    count: 135,
     ringFraction: 0.35,
-    scale: [0.5, 0.8],
+    scale: [0.46, 0.76],
     yScale: [0.85, 1.15],
   },
 ];
@@ -184,16 +185,16 @@ const FRAG = /* glsl */ `
     // The pack's gradient atlas gives each blade its root→tip colour.
     vec3 col = texture2D(uMap, vUv).rgb;
     // Melt the lowest part of each tuft into the terrain colour.
-    col = mix(uRootColor, col, smoothstep(0.0, 0.45, vT));
-    // Pack's baked occlusion separates the blades inside a tuft (kept subtle).
-    col *= mix(0.67, 1.03, vAO);
+    col = mix(uRootColor, col, smoothstep(0.04, 0.62, vT));
+    // Pack's baked occlusion separates blades without turning clump interiors black.
+    col *= mix(0.74, 1.02, vAO);
     vec3 n = normalize(vWorldNormal);
     float wrappedSun = clamp((dot(n, normalize(uSunDir)) + 0.48) / 1.48, 0.0, 1.0);
     float skyFacing = 0.72 + 0.28 * clamp(n.y, 0.0, 1.0);
     col *= uAmbientLight * skyFacing + uSunLight * wrappedSun * 0.76;
     // Restrained warm translucency on sun-facing tips.
-    col += uSSSColor * pow(vT, 3.0) * wrappedSun * 0.075;
-    col *= vTint;
+    col += uSSSColor * pow(vT, 3.0) * wrappedSun * 0.055;
+    col *= mix(vec3(1.0), vTint, 0.7);
 
     gl_FragColor = vec4(col, 1.0);
     #include <fog_fragment>
@@ -239,15 +240,60 @@ const prepareGeometry = (scene: { traverse: (cb: (o: unknown) => void) => void }
   return geo;
 };
 
-/** Low-frequency deterministic patch noise — coherent colour variation across the field. */
+/** Smooth deterministic patch noise — coherent tint drifts without square colour cells. */
 const patchNoise = (x: number, z: number) => {
-  const cx = Math.floor(x / TINT_CELL);
-  const cz = Math.floor(z / TINT_CELL);
-  const s = Math.sin(cx * 127.1 + cz * 311.7) * 43758.5453;
-  return s - Math.floor(s);
+  const gx = x / TINT_CELL;
+  const gz = z / TINT_CELL;
+  const ix = Math.floor(gx);
+  const iz = Math.floor(gz);
+  let fx = gx - ix;
+  let fz = gz - iz;
+  fx = fx * fx * (3 - 2 * fx);
+  fz = fz * fz * (3 - 2 * fz);
+  const hash = (hx: number, hz: number) => {
+    const s = Math.sin(hx * 127.1 + hz * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  const a = hash(ix, iz);
+  const b = hash(ix + 1, iz);
+  const c = hash(ix, iz + 1);
+  const d = hash(ix + 1, iz + 1);
+  return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
 };
 
-const buildField = (geometries: BufferGeometry[], map: Texture, clearRadius: number) => {
+/** Smooth (bilinear) value noise for MEADOW DENSITY — thickets and clearings instead of
+ * an even carpet. Cell size ~9u so patches read at gameplay scale. */
+const MEADOW_CELL = 9;
+const cellHash = (ix: number, iz: number) => {
+  const s = Math.sin(ix * 157.31 + iz * 271.9) * 43758.5453;
+  return s - Math.floor(s);
+};
+const meadowNoise = (x: number, z: number) => {
+  const gx = x / MEADOW_CELL;
+  const gz = z / MEADOW_CELL;
+  const ix = Math.floor(gx);
+  const iz = Math.floor(gz);
+  let fx = gx - ix;
+  let fz = gz - iz;
+  fx = fx * fx * (3 - 2 * fx);
+  fz = fz * fz * (3 - 2 * fz);
+  const a = cellHash(ix, iz);
+  const b = cellHash(ix + 1, iz);
+  const c = cellHash(ix, iz + 1);
+  const d = cellHash(ix + 1, iz + 1);
+  return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
+};
+
+/** Extra plaza tufts as a share of each variant's meadow count — heavily weighted to
+ *  the short base grass so the plaza reads as low, trodden ground cover, not a meadow. */
+const PLAZA_GRASS_SHARE = [0.11, 0.035, 0.035, 0.018];
+
+const buildField = (
+  geometries: BufferGeometry[],
+  map: Texture,
+  clearRadius: number,
+  plazaFill: boolean,
+) => {
   const material = new ShaderMaterial({
     vertexShader: VERT,
     fragmentShader: FRAG,
@@ -273,15 +319,16 @@ const buildField = (geometries: BufferGeometry[], map: Texture, clearRadius: num
   const dummy = new Object3D();
   const tint = new Color();
   const tintFresh = new Color('#cbd9a7');
-  const tintDry = new Color('#9c8f58');
+  const tintDry = new Color('#b19b68');
 
   const meshes = VARIANTS.map((variant, vi) => {
-    const mesh = new InstancedMesh(geometries[vi]!, material, variant.count);
+    const plazaTarget = plazaFill ? Math.round(variant.count * PLAZA_GRASS_SHARE[vi]!) : 0;
+    const mesh = new InstancedMesh(geometries[vi]!, material, variant.count + plazaTarget);
     mesh.instanceMatrix.setUsage(StaticDrawUsage);
 
     let placed = 0;
     let guard = 0;
-    while (placed < variant.count && guard < variant.count * 6) {
+    while (placed < variant.count && guard < variant.count * 14) {
       guard++;
       // Dense disk, with a share pushed out to the horizon ring.
       const ring = rng() < variant.ringFraction;
@@ -295,11 +342,23 @@ const buildField = (geometries: BufferGeometry[], map: Texture, clearRadius: num
       if (heightAt(x, z) > MAX_TERRAIN_Y) continue; // stay off the steep peaks
       if (pathMask(x, z) > 0.35) continue; // and off the dirt trail
 
+      // CLUMPED CONCENTRATION: meadow noise gates placement — thick drifts of grass
+      // with genuinely thin clearings between them, not one even carpet. The remap
+      // pushes low noise to a true floor so clearings actually clear out.
+      const raw = meadowNoise(x + vi * 37.3, z - vi * 21.7);
+      const ms = Math.min(1, Math.max(0, (raw - 0.28) / 0.44));
+      const meadow = ms * ms * (3 - 2 * ms);
+      if (rng() > 0.07 + meadow * 0.96) continue;
+
       const s = variant.scale[0] + rng() * (variant.scale[1] - variant.scale[0]);
-      const sy = s * (variant.yScale[0] + rng() * (variant.yScale[1] - variant.yScale[0]));
+      // Lush patches also grow TALLER — height follows concentration.
+      const sy =
+        s *
+        (variant.yScale[0] + rng() * (variant.yScale[1] - variant.yScale[0])) *
+        (0.78 + meadow * 0.5);
       dummy.position.set(x, heightAt(x, z) - 0.02, z);
-      dummy.rotation.set((rng() - 0.5) * 0.12, rng() * Math.PI * 2, (rng() - 0.5) * 0.12);
-      dummy.scale.set(s, sy, s);
+      dummy.rotation.set((rng() - 0.5) * 0.22, rng() * Math.PI * 2, (rng() - 0.5) * 0.22);
+      dummy.scale.set(s * (0.72 + rng() * 0.56), sy, s * (0.72 + rng() * 0.56));
       dummy.updateMatrix();
       mesh.setMatrixAt(placed, dummy.matrix);
 
@@ -308,7 +367,68 @@ const buildField = (geometries: BufferGeometry[], map: Texture, clearRadius: num
       mesh.setColorAt(placed, tint);
       placed++;
     }
-    mesh.count = placed;
+
+    // PLAZA DIRT FILL: shorter, drier tufts growing out of the trodden haven plaza,
+    // concentrated toward the hub (pow>1 on radius biases inward) and dodging the
+    // cobbles/buildings/lamps. Appended after the meadow instances in the same buffer.
+    // Generate persistent family anchors first; individual tufts then gather around
+    // them instead of appearing as evenly spaced, unrelated model stamps.
+    const plazaAnchors: [number, number][] = [];
+    const anchorTarget = plazaFill ? Math.max(1, Math.ceil(plazaTarget / (vi === 0 ? 7 : 3))) : 0;
+    let anchorGuard = 0;
+    while (plazaAnchors.length < anchorTarget && anchorGuard < anchorTarget * 40) {
+      anchorGuard++;
+      const r = PLAZA_DRESSING.inner + Math.pow(rng(), 1.8) * (PLAZA_DRESSING.outer - PLAZA_DRESSING.inner);
+      const a = rng() * Math.PI * 2;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      if (inPlazaKeepout(x, z) || hubRoadMask(x, z) > 0.66) continue;
+      const raw = meadowNoise(x + 91.7, z - 63.1);
+      const ps = Math.min(1, Math.max(0, (raw - 0.34) / 0.42));
+      const patch = ps * ps * (3 - 2 * ps);
+      if (rng() > 0.25 + patch * 0.85) continue;
+      plazaAnchors.push([x, z]);
+    }
+
+    let plazaPlaced = 0;
+    let plazaGuard = 0;
+    while (plazaFill && plazaPlaced < plazaTarget && plazaGuard < plazaTarget * 40) {
+      plazaGuard++;
+      const anchor = plazaAnchors[Math.floor(rng() * plazaAnchors.length)];
+      if (!anchor) break;
+      const spread = vi === 0 ? 1.35 : 0.9;
+      const r = Math.sqrt(rng()) * spread;
+      const a = rng() * Math.PI * 2;
+      const x = anchor[0] + Math.cos(a) * r;
+      const z = anchor[1] + Math.sin(a) * r;
+      if (inPlazaKeepout(x, z)) continue;
+      // Probabilistic verge: the packed core stays clear while irregular tufts survive
+      // progressively farther into the soft dirt/grass blend instead of ending in a line.
+      const road = hubRoadMask(x, z);
+      if (road > 0.78 || (road > 0.22 && rng() < road * 0.82)) continue;
+
+      // The anchor already establishes the clump; local patch value drives its height.
+      const raw = meadowNoise(x + 91.7, z - 63.1);
+      const ps = Math.min(1, Math.max(0, (raw - 0.34) / 0.42));
+      const patch = ps * ps * (3 - 2 * ps);
+
+      const s = variant.scale[0] * 0.6 + rng() * (variant.scale[1] - variant.scale[0]) * 0.7;
+      // Short and varied — plaza grass tops out well below the meadow.
+      const sy =
+        s * (variant.yScale[0] + rng() * (variant.yScale[1] - variant.yScale[0])) * (0.62 + patch * 0.45);
+      const idx = placed + plazaPlaced;
+      dummy.position.set(x, heightAt(x, z) - 0.02, z);
+      dummy.rotation.set((rng() - 0.5) * 0.26, rng() * Math.PI * 2, (rng() - 0.5) * 0.26);
+      dummy.scale.set(s * (0.7 + rng() * 0.62), sy, s * (0.7 + rng() * 0.62));
+      dummy.updateMatrix();
+      mesh.setMatrixAt(idx, dummy.matrix);
+      // Drier, earthier tint to sit against the dirt.
+      tint.lerpColors(tintFresh, tintDry, 0.4 + patchNoise(x, z) * 0.45 + rng() * 0.15);
+      mesh.setColorAt(idx, tint);
+      plazaPlaced++;
+    }
+
+    mesh.count = placed + plazaPlaced;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
     // Wind moves vertices in the shader — three's culling sphere would be stale anyway.
@@ -322,7 +442,15 @@ const buildField = (geometries: BufferGeometry[], map: Texture, clearRadius: num
 };
 
 /** Stylized wind-swept grass tufts from the nature pack. Mounted once in Zone.tsx. */
-export const GrassField = ({ clearRadius = 0 }: { clearRadius?: number }) => {
+export const GrassField = ({
+  clearRadius = 0,
+  plazaFill = false,
+}: {
+  clearRadius?: number;
+  /** Also grow short, patchy tufts across the inner haven plaza dirt (inside the
+   * clear radius), dodging the cobbles/buildings/lamps. */
+  plazaFill?: boolean;
+}) => {
   const commonShort = useGameModel(VARIANTS[0]!.path);
   const commonTall = useGameModel(VARIANTS[1]!.path);
   const wispyShort = useGameModel(VARIANTS[2]!.path);
@@ -341,8 +469,8 @@ export const GrassField = ({ clearRadius = 0 }: { clearRadius?: number }) => {
   }, [commonShort.scene]);
 
   const { meshes, material } = useMemo(
-    () => buildField(geometries, map, clearRadius),
-    [geometries, map, clearRadius],
+    () => buildField(geometries, map, clearRadius, plazaFill),
+    [geometries, map, clearRadius, plazaFill],
   );
 
   useEffect(

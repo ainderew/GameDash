@@ -27,7 +27,7 @@ Introduce accounts and a **tamper-proof economy**. Add a Next.js server (Vercel)
 
 ### Decision: The client sends intent; the server owns every outcome
 - **Choice:** No balance, drop result, or upgrade result is ever computed or trusted from the client. Endpoints accept intent + an idempotency key; the server validates, mutates in a transaction, and returns the authoritative new state.
-- **Rationale:** Threat model — a browser is attacker-controlled (devtools, request forgery/replay). Server authority eliminates currency dupes, item injection, and forced rolls. (Overview core rule.)
+- **Rationale:** Threat model — a browser is T ~ attacker-controlled (devtools, request forgery/replay). Server authority eliminates currency dupes, item injection, and forced rolls. (Overview core rule.)
 - **Tradeoff:** More round-trips than a naive client-side economy; the only acceptable design for a commercial gacha.
 
 ### Decision: Append-only ledger is the source of truth for currency

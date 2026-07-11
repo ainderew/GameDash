@@ -12,7 +12,7 @@ import { teammateSystem } from '@/game/ecs/systems/teammateSystem';
 import { updatePassControl } from '@/game/combat/passControl';
 import { passAim } from '@/game/combat/passAim';
 import { stereoPanFor } from '@/game/combat/passTargeting';
-import { playPassChime, playPassFail, playWhoosh } from '@/game/feel/audio';
+import { playPassChime, playPassFail, playRelicPickup, playWhoosh } from '@/game/feel/audio';
 import { RELIC_AIM_MOVE_SCALE } from '@shared/balance';
 import { aiSystem } from '@/game/ecs/systems/aiSystem';
 import { knockbackSystem } from '@/game/ecs/systems/knockbackSystem';
@@ -185,6 +185,10 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
           }
         } else if (ev.type === 'RelicPassFailed') {
           playPassFail();
+        } else if (ev.type === 'RelicCaught' && ev.byLocalPlayer) {
+          // Reward stinger for the local player claiming the Relic — teammate/enemy
+          // catches stay silent so the sound always means "you have it".
+          playRelicPickup();
         }
       }
       if (gained > 0) store.addMaterials(gained);

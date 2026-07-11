@@ -167,6 +167,11 @@ export interface Entity {
   relic?: RelicState;
   /** gameNow() until which this player can't receive the Relic (post-pass rotation rule). */
   relicRecatchUntil?: number;
+  /**
+   * gameNow() until which the player is planted after catching the Relic — movementSystem
+   * zeroes their velocity so the catch clip doesn't glide. Dodge/attack break it early.
+   */
+  catchRootUntil?: number;
 
   // ── Teammate (local stand-in for other players until netcode lands) ──────
   teammate?: true;

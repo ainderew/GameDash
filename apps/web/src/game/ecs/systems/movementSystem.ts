@@ -63,6 +63,8 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     // Also break out of hit knockback — the dodge is the universal escape.
     entity.knockback = undefined;
     entity.staggerUntil = 0;
+    // A dodge cancels the post-catch plant too, so the catch never feels like a lock.
+    entity.catchRootUntil = 0;
   }
 
   // Attacking LOCKS the player into the animation: move/turn/jump input is ignored until
@@ -70,6 +72,10 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
   // forward along facing (lungeSpeed), so heavy moves close gaps instead of feeling stuck.
   // Only the dodge above breaks out early.
   const rooted = now < (entity.attackAnimUntil ?? 0);
+  // Planted for a beat after catching the Relic: zero horizontal velocity so the catch clip
+  // plants instead of gliding on leftover run momentum. Ranks below dodge/attack, so either
+  // one cancels straight out of it.
+  const catchRooted = now < (entity.catchRootUntil ?? 0);
 
   const stillDodging = (entity.dodgingUntil ?? 0) > now;
   if (stillDodging && entity.dodgeDir) {
@@ -82,6 +88,9 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     const v = lungeSpeed(move, age, currentWeapon().reachMul);
     velocity.linear[0] = Math.sin(transform.rotationY) * v;
     velocity.linear[2] = Math.cos(transform.rotationY) * v;
+  } else if (catchRooted) {
+    velocity.linear[0] = 0;
+    velocity.linear[2] = 0;
   } else {
     // Plain WASD walks; Shift sprints.
     const speed = intent.sprint ? PLAYER_SPEED : PLAYER_WALK_SPEED;
@@ -98,7 +107,7 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
   // pressed on the landing frame starts the next two-jump sequence correctly.
   if (grounded) entity.jumpsUsed = 0;
 
-  if (intent.jump && !rooted && (entity.jumpsUsed ?? 0) < 2) {
+  if (intent.jump && !rooted && !catchRooted && (entity.jumpsUsed ?? 0) < 2) {
     velocity.linear[1] = JUMP_IMPULSE;
     entity.jumpsUsed = (entity.jumpsUsed ?? 0) + 1;
   }

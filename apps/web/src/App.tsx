@@ -5,13 +5,37 @@ import { ErrorBoundary } from '@/ui/ErrorBoundary';
 import { FeelControls } from '@/game/fx/FeelControls';
 import { WeaponControls } from '@/game/fx/WeaponControls';
 import { HubHUD } from '@/ui/HubHUD';
+import { MainMenu } from '@/ui/MainMenu';
+import { IntroSequence } from '@/ui/intro/IntroSequence';
 import { useUIStore } from '@/ui/store';
 
 const DEV = import.meta.env.DEV;
 
-/** Composes the 3D canvas and the DOM HUD overlay — the two-layer architecture. */
+/** Composes the 3D canvas and the DOM HUD overlay — the two-layer architecture.
+ * The main menu gates it all: the game world doesn't mount until PLAY. */
 export const App = () => {
+  const screen = useUIStore((state) => state.screen);
   const scene = useUIStore((state) => state.scene);
+
+  if (screen === 'menu') {
+    return (
+      <div className="relative h-full w-full">
+        <ErrorBoundary>
+          <MainMenu />
+        </ErrorBoundary>
+      </div>
+    );
+  }
+
+  if (screen === 'intro') {
+    return (
+      <div className="relative h-full w-full">
+        <ErrorBoundary>
+          <IntroSequence />
+        </ErrorBoundary>
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full w-full">

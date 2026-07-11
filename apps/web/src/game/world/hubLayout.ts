@@ -40,6 +40,36 @@ export const HUB_STATIONS: readonly HubStation[] = [
 
 export const HUB_SPAWN: readonly [number, number, number] = [0, 0, 11.5];
 
+// ── Plaza ground dressing ─────────────────────────────────────────────────────
+// The haven's dirt plaza (the brown disk between the cobbles and the treeline) is
+// dressed with its own denser band of grass/weeds/rocks/flowers so it doesn't read
+// as a flat empty plane. These describe where that dressing lives and what it dodges.
+
+/** The dirt-disk annulus the plaza dressing fills: just outside the cobbles to just
+ *  inside the outer brick ring. Density is concentrated toward the inner edge (the hub). */
+export const PLAZA_DRESSING = { inner: 6.0, outer: 18.5 } as const;
+
+/** Circular keep-outs so plaza dressing never sprouts on the cobbles, through a
+ *  building, or up a lamp post. [x, z, radius]. */
+const PLAZA_KEEPOUT: readonly (readonly [number, number, number])[] = [
+  [0, 0, 5.9], // cobblestone circle + campfire (grass meets the stone edge)
+  [-10.5, -10.5, 5.6], // Roster Lodge footprint
+  [10.5, -7.4, 3.4], // Summoning Shrine + relic base
+  [0, -17, 4.2], // Expedition Gate
+  [-6.8, 7, 1.0], // lamp
+  [6.8, 7, 1.0], // lamp
+  [-14.8, -1.5, 1.0], // lamp
+  [14.8, -1.5, 1.0], // lamp
+] as const;
+
+/** True when (x, z) sits on a plaza structure and must stay clear of dressing. */
+export const inPlazaKeepout = (x: number, z: number): boolean => {
+  for (const [cx, cz, r] of PLAZA_KEEPOUT) {
+    if ((x - cx) * (x - cx) + (z - cz) * (z - cz) < r * r) return true;
+  }
+  return false;
+};
+
 const pushOutOfCircle = (
   x: number,
   z: number,
@@ -71,6 +101,8 @@ export const resolveHubCollisions = (entity: Entity): void => {
   // structural corner posts block movement, so the player can walk into its roster bay.
   [x, z] = pushOutOfCircle(x, z, 10.5, -7.4, 1.55 + playerRadius);
   [x, z] = pushOutOfCircle(x, z, 0, -17, 1.55 + playerRadius);
+  // Central campfire.
+  [x, z] = pushOutOfCircle(x, z, 0, 0, 0.85 + playerRadius);
   [x, z] = pushOutOfCircle(x, z, -14.7, -8.25, 0.75 + playerRadius);
   [x, z] = pushOutOfCircle(x, z, -6.3, -8.25, 0.75 + playerRadius);
 

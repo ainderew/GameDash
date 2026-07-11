@@ -139,12 +139,12 @@ export const SkyAndLight = () => (
     <fogExp2 attach="fog" args={[WORLD_PALETTE.fog, 0.0075]} />
 
     {/* Low ambient keeps the golden key directional and gives foliage real depth. */}
-    <hemisphereLight args={['#b8c8ec', '#596a35', 1.02]} />
+    <hemisphereLight args={['#b8c8ec', '#667846', 1.18]} />
 
     <directionalLight
       castShadow
       position={SUN_POSITION}
-      intensity={4.15}
+      intensity={3.8}
       color="#ffd59a"
       shadow-mapSize={[2048, 2048]}
       shadow-camera-left={-42}
@@ -155,9 +155,9 @@ export const SkyAndLight = () => (
       shadow-camera-far={170}
       shadow-bias={-0.00035}
       shadow-normalBias={0.035}
-      shadow-radius={3}
+      shadow-radius={4}
     />
 
-    <directionalLight position={[24, 15, 30]} intensity={0.38} color="#a9c4ff" />
+    <directionalLight position={[24, 15, 30]} intensity={0.5} color="#a9c4ff" />
   </>
 );

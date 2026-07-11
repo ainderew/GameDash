@@ -135,6 +135,14 @@ export const RELIC_HOMING_MAX_CORRECTION = 3;
 export const RELIC_HANDOFF_SHIELD_MS = 400;
 /** Chest height of the catch socket above an entity's feet, world units. */
 export const RELIC_CATCH_SOCKET_Y = 1.2;
+/**
+ * How long the player is planted (velocity zeroed, no walk/turn) after catching, ms — so
+ * the catch animation plants instead of gliding on residual momentum. Dodge/attack cancel
+ * it. Shared with the catch-clip window (AnimatedCharacter) so root and anim stay in lockstep.
+ */
+export const RELIC_CATCH_ROOT_MS = 700;
+/** Brief whole-scene freeze on the local player's catch — the "thunk" that sells the grab, ms. */
+export const RELIC_CATCH_HITSTOP_MS = 120;
 /** Carrier moves at this fraction of normal speed while aiming a pass. */
 export const RELIC_AIM_MOVE_SCALE = 0.8;
 

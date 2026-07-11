@@ -26,9 +26,9 @@ export const PostFX = () => {
 
   return (
     <EffectComposer key={composerKey} multisampling={0} enableNormalPass>
-      {/* Tight-radius AO: contact shadows for characters/rocks without smothering or
-          shimmering the dense grass field (large radii flicker on thin swaying blades). */}
-      <N8AO aoRadius={0.65} intensity={1.02} distanceFalloff={1} halfRes quality="medium" />
+      {/* Soft local AO seats the embedded stones in the soil without spreading a dark
+          halo across the path or smothering the thin, swaying grass field. */}
+      <N8AO aoRadius={0.78} intensity={1.04} distanceFalloff={1.2} halfRes quality="medium" />
       {/* Threshold > 1 so only true HDR emitters (pickups, projectiles, sun disc) bloom —
           at 0.75 the whole Preetham sky crossed it and washed out to white. */}
       <Bloom
