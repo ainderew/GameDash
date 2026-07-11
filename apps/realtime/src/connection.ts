@@ -5,7 +5,14 @@ import {
   type ServerMessage,
 } from '@shared/net/messages';
 import { normalizeSessionCode } from '@shared/net/ids';
-import { PING_EWMA_ALPHA, PROTOCOL_VERSION } from '@shared/net/constants';
+import {
+  MAX_BYTES_PER_WINDOW,
+  MAX_MSGS_PER_WINDOW,
+  PING_EWMA_ALPHA,
+  PROTOCOL_VERSION,
+  RATE_LIMIT_ABUSE_WINDOWS,
+  RATE_LIMIT_WINDOW_MS,
+} from '@shared/net/constants';
 import { decodeInputPacket, MSG_INPUT } from '@shared/net/input';
 import type { CharacterId } from '@shared/net/character';
 import { logger, type Logger } from './log';
@@ -30,6 +37,8 @@ export interface SocketLike {
 
 /** ws close code for protocol violations we refuse to serve (version mismatch). */
 const CLOSE_UNSUPPORTED = 4400;
+/** ws close code for a peer force-dropped for sustained rate-limit abuse. */
+const CLOSE_POLICY = 4408;
 
 type Phase = 'awaitingHello' | 'ready' | 'inSession' | 'closed';
 
@@ -42,6 +51,13 @@ export class ClientConnection implements PeerLink {
   /** Set when a ping goes out; a pong echoing an older stamp still yields a valid RTT. */
   lastPongAt: number;
 
+  // ── Per-connection rate limiting (fixed 1 s window; Phase 6 Task 3) ──────────
+  private rlWindowStart: number;
+  private rlMsgs = 0;
+  private rlBytes = 0;
+  private rlWindowAbusive = false;
+  private rlConsecutiveAbusive = 0;
+
   constructor(
     private readonly socket: SocketLike,
     private readonly manager: SessionManager,
@@ -49,6 +65,37 @@ export class ClientConnection implements PeerLink {
     private readonly log: Logger = logger,
   ) {
     this.lastPongAt = this.now();
+    this.rlWindowStart = this.now();
+  }
+
+  /**
+   * Meter one inbound frame against the fixed 1 s window. Returns false when the frame must
+   * be dropped (over the msgs/s or bytes/s cap this window); the excess is discarded but the
+   * connection survives. Only SUSTAINED abuse — every window over cap for
+   * RATE_LIMIT_ABUSE_WINDOWS in a row — force-closes the socket. A buggy/hostile client can
+   * never spend the room's CPU beyond the cap.
+   */
+  private admit(bytes: number): boolean {
+    const now = this.now();
+    if (now - this.rlWindowStart >= RATE_LIMIT_WINDOW_MS) {
+      this.rlConsecutiveAbusive = this.rlWindowAbusive ? this.rlConsecutiveAbusive + 1 : 0;
+      if (this.rlConsecutiveAbusive >= RATE_LIMIT_ABUSE_WINDOWS) {
+        this.log.warn('rate_limit_abuse', { playerId: this.player?.id });
+        this.socket.close(CLOSE_POLICY, 'rate limit exceeded');
+        this.phase = 'closed';
+        this.detachFromSession('disconnected');
+        return false;
+      }
+      this.rlWindowStart = now;
+      this.rlMsgs = 0;
+      this.rlBytes = 0;
+      this.rlWindowAbusive = false;
+    }
+    this.rlMsgs += 1;
+    this.rlBytes += bytes;
+    const over = this.rlMsgs > MAX_MSGS_PER_WINDOW || this.rlBytes > MAX_BYTES_PER_WINDOW;
+    if (over) this.rlWindowAbusive = true;
+    return !over;
   }
 
   // ── PeerLink ────────────────────────────────────────────────────────────────
@@ -75,17 +122,22 @@ export class ClientConnection implements PeerLink {
    */
   handleBinary(data: ArrayBufferLike): void {
     if (this.phase !== 'inSession' || !this.player) return;
+    if (!this.admit(data.byteLength)) return;
     const view = new DataView(data);
     if (view.byteLength < 1 || view.getUint8(0) !== MSG_INPUT) return;
     const cmds = decodeInputPacket(data);
     if (!cmds) return;
     const now = this.now();
     for (const cmd of cmds) this.player.input.offer(cmd, now);
+    // Input is the "player is here and playing" signal that keeps idle-GC at bay.
+    this.session?.markActivity(now);
   }
 
   // ── Inbound: JSON control channel ───────────────────────────────────────────
   handleRaw(raw: unknown): void {
     if (this.phase === 'closed') return;
+    const size = typeof raw === 'string' ? raw.length : String(raw).length;
+    if (!this.admit(size)) return;
 
     let json: unknown;
     try {
@@ -120,6 +172,10 @@ export class ClientConnection implements PeerLink {
 
       case 'createSession': {
         if (!this.requireReadyNoSession()) return;
+        if (this.manager.atCapacity) {
+          this.sendError('server_full', 'the server is at capacity — try again shortly');
+          return;
+        }
         const { session, player } = this.manager.createSession(this.profile!, this);
         this.enterSession(session, player);
         return;
@@ -143,6 +199,21 @@ export class ClientConnection implements PeerLink {
 
       case 'leaveSession': {
         this.detachFromSession('left');
+        return;
+      }
+
+      case 'requestZoneCountdown': {
+        this.session?.startExpeditionCountdown();
+        return;
+      }
+
+      case 'cancelZoneCountdown': {
+        this.session?.cancelCountdown();
+        return;
+      }
+
+      case 'returnToHub': {
+        this.session?.returnToHub();
         return;
       }
 

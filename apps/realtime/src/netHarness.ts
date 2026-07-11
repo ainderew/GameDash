@@ -143,7 +143,7 @@ export class NetHarness {
   readonly bots: HarnessBot[] = [];
 
   constructor(opts: HarnessOptions) {
-    this.manager = new SessionManager(() => this.clock.t, silentLogger);
+    this.manager = new SessionManager({ now: () => this.clock.t, log: silentLogger });
 
     let session: Session | null = null;
     for (let i = 0; i < opts.bots.length; i += 1) {

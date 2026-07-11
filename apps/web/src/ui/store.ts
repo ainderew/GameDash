@@ -32,6 +32,8 @@ export interface SessionMemberUI {
   /** EWMA RTT ms; null until the first heartbeat round-trip / while unknown. */
   ping: number | null;
   connected: boolean;
+  /** Latest HP from snapshots (0–100). Undefined until the first snapshot with this member. */
+  hp?: number;
 }
 
 export interface SessionUI {
@@ -77,6 +79,10 @@ interface UIState {
   session?: SessionUI;
   /** Last net-layer error for the menu/session UI (join failed, server down…). */
   netError?: string;
+  /** Seconds left on the shared expedition-gate countdown (null = not running). */
+  zoneCountdown: number | null;
+  /** PlayerId currently carrying the relic (null = grounded/in-flight). Drives the carrier icon. */
+  relicCarrier: string | null;
 
   // ── HUD juice: combo counter ──────────────────────────────────────────────
   /** Consecutive landed hits within the combo window. */
@@ -93,11 +99,20 @@ interface UIState {
   removeSessionMember: (id: string) => void;
   /** Own EWMA ping, updated from every heartbeat ping's `yourPing` echo. */
   setOwnPing: (ping: number | null) => void;
+  /** Update one member's HP from a snapshot (throttled to integer changes by the net layer). */
+  setMemberHp: (id: string, hp: number) => void;
+  /** Set who holds the relic (playerId), or null when nobody carries it. */
+  setRelicCarrier: (id: string | null) => void;
   setNetError: (message?: string) => void;
 
   setHealth: (value: number) => void;
   setScreen: (screen: AppScreen) => void;
+  /** LOCAL scene change (solo). In a networked session the server owns the zone, so this is
+   * ignored — the authoritative flip arrives via `setSceneAuthoritative` on `zoneChanged`. */
   setScene: (scene: GameScene) => void;
+  /** Server-driven zone flip (networked). Always applies, bypassing the local guard. */
+  setSceneAuthoritative: (scene: GameScene) => void;
+  setZoneCountdown: (secondsLeft: number | null) => void;
   setHubStation: (station?: HubStationId) => void;
   addMaterials: (n: number) => void;
   /** Set the material tally to an absolute value (server-authoritative shared pool, MP). */
@@ -138,6 +153,8 @@ export const useUIStore = create<UIState>((set) => ({
   connectionState: 'offline',
   session: undefined,
   netError: undefined,
+  zoneCountdown: null,
+  relicCarrier: null,
 
   setConnectionState: (connectionState) => set({ connectionState }),
   setSession: (session) => set({ session, netError: undefined }),
@@ -163,11 +180,21 @@ export const useUIStore = create<UIState>((set) => ({
       );
       return { session: { ...s.session, members } };
     }),
+  setMemberHp: (id, hp) =>
+    set((s) => {
+      if (!s.session) return {};
+      const members = s.session.members.map((m) => (m.id === id ? { ...m, hp } : m));
+      return { session: { ...s.session, members } };
+    }),
+  setRelicCarrier: (relicCarrier) => set({ relicCarrier }),
   setNetError: (netError) => set({ netError }),
 
   setHealth: (value) => set({ health: value }),
   setScreen: (screen) => set({ screen }),
-  setScene: (scene) => set({ scene, hubStation: undefined }),
+  setScene: (scene) =>
+    set((s) => (s.session ? {} : { scene, hubStation: undefined })),
+  setSceneAuthoritative: (scene) => set({ scene, hubStation: undefined }),
+  setZoneCountdown: (secondsLeft) => set({ zoneCountdown: secondsLeft }),
   setHubStation: (hubStation) => set({ hubStation }),
   addMaterials: (n) => set((s) => ({ materials: s.materials + n })),
   setMaterials: (total) => set({ materials: total }),

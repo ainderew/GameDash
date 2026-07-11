@@ -19,6 +19,10 @@ RUN pnpm install --frozen-lockfile
 
 # Full source, then build only the web app.
 COPY . .
+# Realtime endpoint baked into the SPA at build time. Defaults to the same-origin prod WSS
+# (also the client's built-in fallback in transport.ts); overridable per environment.
+ARG VITE_REALTIME_URL="wss://gamedash.workdash.site/realtime"
+ENV VITE_REALTIME_URL=$VITE_REALTIME_URL
 RUN pnpm --filter web build
 
 # --- runtime: static SPA served by nginx ---

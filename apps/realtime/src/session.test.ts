@@ -26,7 +26,7 @@ const profile = (name: string): PlayerProfile => ({ name, character: 'hero' });
 const makeManager = () => {
   let t = 1_000_000;
   const clock = { now: () => t, advance: (ms: number) => (t += ms) };
-  const manager = new SessionManager(clock.now, silentLogger);
+  const manager = new SessionManager({ now: clock.now, log: silentLogger });
   return { manager, clock };
 };
 

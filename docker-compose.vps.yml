@@ -18,3 +18,29 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  realtime:
+    build:
+      context: .
+      dockerfile: apps/realtime/Dockerfile
+    container_name: gamedash-realtime
+    # Loopback-only: the host nginx `location /realtime` upgrades WS traffic to this port.
+    ports:
+      - '127.0.0.1:3003:8090'
+    environment:
+      # 8090 is the in-container default; kept explicit so the mapping is self-documenting.
+      REALTIME_PORT: '8090'
+      # Session-cap + idle-GC knobs (Phase 6 Task 3). Tune per droplet size.
+      MAX_SESSIONS: '200'
+      IDLE_SESSION_TIMEOUT_MS: '600000'
+    restart: unless-stopped
+    # SIGTERM drain: the server notifies sessions "server restarting" then exits within its
+    # 10 s grace, so a rolling deploy never hard-kills a live room mid-tick.
+    stop_grace_period: 15s
+    healthcheck:
+      # busybox wget ships in node:alpine; /healthz returns 200 with a JSON body.
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:8090/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

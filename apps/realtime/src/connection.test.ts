@@ -28,7 +28,7 @@ class FakeSocket implements SocketLike {
 const makeHarness = () => {
   let t = 5_000_000;
   const clock = { now: () => t, advance: (ms: number) => (t += ms) };
-  const manager = new SessionManager(clock.now, silentLogger);
+  const manager = new SessionManager({ now: clock.now, log: silentLogger });
   const connect = () => {
     const socket = new FakeSocket();
     const conn = new ClientConnection(socket, manager, clock.now, silentLogger);

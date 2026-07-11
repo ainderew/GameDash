@@ -36,6 +36,15 @@ export const joinSessionSchema = z.object({
 
 export const leaveSessionSchema = z.object({ type: z.literal('leaveSession') });
 
+/** A member at the Expedition Gate pressed E → start the shared 5 s countdown (hub only). */
+export const requestZoneCountdownSchema = z.object({ type: z.literal('requestZoneCountdown') });
+
+/** Any member cancels an in-progress expedition countdown. */
+export const cancelZoneCountdownSchema = z.object({ type: z.literal('cancelZoneCountdown') });
+
+/** Return the whole party to the hub (from the hunt-failed overlay / an expedition exit). */
+export const returnToHubSchema = z.object({ type: z.literal('returnToHub') });
+
 export const pongSchema = z.object({
   type: z.literal('pong'),
   /** Echo of ping.t (server wall-clock ms) — the server derives RTT from it. */
@@ -47,6 +56,9 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   createSessionSchema,
   joinSessionSchema,
   leaveSessionSchema,
+  requestZoneCountdownSchema,
+  cancelZoneCountdownSchema,
+  returnToHubSchema,
   pongSchema,
 ]);
 
@@ -183,6 +195,18 @@ export interface ImpulseMessage {
 export interface ZoneChangedMessage {
   type: 'zoneChanged';
   zone: 'hub' | 'expedition';
+  serverTick: number;
+}
+
+/**
+ * The shared expedition-gate countdown ticking down (Phase 6 Task 2). `active` opens/holds the
+ * on-screen banner; `secondsLeft` drives it; on cancel the server sends `active:false`. When it
+ * reaches zero the server flips the zone and a `zoneChanged` follows.
+ */
+export interface ZoneCountdownMessage {
+  type: 'zoneCountdown';
+  active: boolean;
+  secondsLeft: number;
   serverTick: number;
 }
 
@@ -337,7 +361,8 @@ export type NetErrorCode =
   | 'unknown_session'
   | 'session_full'
   | 'already_in_session'
-  | 'not_in_session';
+  | 'not_in_session'
+  | 'server_full';
 
 export interface ErrorMessage {
   type: 'error';
@@ -353,6 +378,7 @@ export type ServerMessage =
   | PingMessage
   | ImpulseMessage
   | ZoneChangedMessage
+  | ZoneCountdownMessage
   | MonsterSpawnedMessage
   | MonsterDespawnedMessage
   | WaveStartedMessage

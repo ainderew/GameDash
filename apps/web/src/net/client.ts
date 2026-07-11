@@ -60,6 +60,8 @@ class NetClient {
   private ownEntityId: number | null = null;
   /** entityId → playerId for remote records. */
   private readonly entityOwners = new Map<number, string>();
+  /** Last integer HP pushed to the store per player-entity — gates HP updates to real changes. */
+  private readonly lastMemberHp = new Map<number, number>();
 
   // ── Clock sync: server TICK time ↔ performance.now() ────────────────────────
   /** serverTickTimeMs − performance.now() EWMA (fed by snapshot headers). */
@@ -93,6 +95,18 @@ class NetClient {
     this.disconnect();
   }
 
+  /** Gate interaction: any member starts / cancels the shared expedition countdown. */
+  requestZoneCountdown(): void {
+    this.transport?.send({ type: 'requestZoneCountdown' });
+  }
+  cancelZoneCountdown(): void {
+    this.transport?.send({ type: 'cancelZoneCountdown' });
+  }
+  /** Hunt-failed overlay / expedition exit: return the whole party to the hub. */
+  returnToHub(): void {
+    this.transport?.send({ type: 'returnToHub' });
+  }
+
   disconnect(): void {
     netGame.stop();
     this.transport?.close();
@@ -102,6 +116,7 @@ class NetClient {
     this.ownPlayerId = null;
     this.ownEntityId = null;
     this.entityOwners.clear();
+    this.lastMemberHp.clear();
     this.baselines.clear();
     this.remoteBuffers.clear();
     this.tickTimeOffset = null;
@@ -111,6 +126,8 @@ class NetClient {
     const store = useUIStore.getState();
     store.setSession(undefined);
     store.setConnectionState('offline');
+    store.setZoneCountdown(null);
+    store.setRelicCarrier(null);
   }
 
   /** Send an input packet on the binary hot path (SystemRunner → netGame → here). */
@@ -232,8 +249,18 @@ class NetClient {
     for (const rec of entities) patched.set(rec.id, rec);
 
     for (const [id, baseState] of base) {
-      if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: header ack path
       const playerId = this.entityOwners.get(id);
+      // HP → HUD (own player bar + teammate bars), gated to integer changes so a stable
+      // health never spams React. Runs for the local entity too (the ack path carries no HP).
+      if (playerId) {
+        const hp = Math.round(patched.get(id)?.hp ?? baseState.hp);
+        if (this.lastMemberHp.get(id) !== hp) {
+          this.lastMemberHp.set(id, hp);
+          if (playerId === this.ownPlayerId) useUIStore.getState().setHealth(hp);
+          else useUIStore.getState().setMemberHp(playerId, hp);
+        }
+      }
+      if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: header ack path
       if (!playerId) continue;
       const rec = patched.get(id);
       const state: RemoteEntityState = {
@@ -289,6 +316,9 @@ class NetClient {
         relicNet.setOwnEntity(this.ownEntityId);
         // Late join / reconnect: reconstruct the live relic (incl. an active flight arc).
         relicNet.fromWelcome(msg.relic);
+        store.setRelicCarrier(
+          msg.relic?.carrierId !== undefined ? this.entityOwners.get(msg.relic.carrierId) ?? null : null,
+        );
         // Seed the wall-clock offset; snapshots take over with tick time.
         if (this.wallOffset === null) {
           this.wallOffset = msg.serverTime - performance.now();
@@ -340,9 +370,16 @@ class NetClient {
       // ── Phase 4: server-authoritative expedition combat (reliable events) ──────
       case 'zoneChanged': {
         // The party moved zones: switch the prediction sim mode + mirror it to the HUD scene.
+        // Authoritative flip — bypasses the store's local-scene guard (server owns the zone).
         netGame.setMode(msg.zone);
-        store.setScene(msg.zone);
+        store.setSceneAuthoritative(msg.zone);
+        store.setZoneCountdown(null);
         if (msg.zone === 'expedition') store.setHuntFailed(false);
+        return;
+      }
+
+      case 'zoneCountdown': {
+        store.setZoneCountdown(msg.active ? msg.secondsLeft : null);
         return;
       }
 
@@ -389,18 +426,22 @@ class NetClient {
       // relic render + expedition networked loop that CONSUME them land in Phase 6 (WebGL/R3F).
       case 'relicLaunched':
         relicNet.onLaunched(msg);
+        store.setRelicCarrier(null); // in flight — nobody holds it
         return;
       case 'relicCaught':
         relicNet.onCaught(msg);
+        store.setRelicCarrier(this.entityOwners.get(msg.carrierId) ?? null);
         return;
       case 'relicPassFailed':
         relicNet.onPassFailed(msg);
         return;
       case 'relicDropped':
         relicNet.onDropped(msg);
+        store.setRelicCarrier(null);
         return;
       case 'relicGrounded':
         relicNet.onGrounded(msg);
+        store.setRelicCarrier(null);
         return;
       case 'passRejected':
         // The thrower's provisional local flight snaps back with the existing fail feedback.
@@ -425,15 +466,19 @@ class NetClient {
       }
 
       case 'error': {
-        if (msg.code === 'unknown_session' || msg.code === 'session_full') {
+        if (msg.code === 'unknown_session' || msg.code === 'session_full' || msg.code === 'server_full') {
           this.pending = null;
-          // A failed RESUME means the session died while we were away.
+          // A failed RESUME means the session died while we were away (past the grace window).
+          // Fall out to the menu gracefully with a rejoin-by-code hint instead of freezing.
           if (this.joined) {
             this.joined = null;
-            store.setSession(undefined);
+            this.disconnect(); // stops reconnect + clears session state (also clears netError)
+            store.setScreen('menu');
+            store.setNetError('Session ended while you were disconnected — rejoin with the code.');
+            return;
           }
         }
-        store.setNetError(msg.message);
+        store.setNetError(friendlyError(msg.code, msg.message));
         return;
       }
     }
@@ -446,6 +491,22 @@ class NetClient {
     }
   }
 }
+
+/** Player-facing copy for the join/connect error codes (Phase 6 Task 1 friendly errors). */
+const friendlyError = (code: string, fallback: string): string => {
+  switch (code) {
+    case 'unknown_session':
+      return 'No party found with that code.';
+    case 'session_full':
+      return 'That party is full (4 players).';
+    case 'server_full':
+      return 'The server is busy right now — try again in a moment.';
+    case 'version_mismatch':
+      return 'Update available — refresh the page to get the latest version.';
+    default:
+      return fallback;
+  }
+};
 
 /** Sanity-check a wire character string into a renderable id. */
 export const characterIdOf = (raw: string): CharacterId =>

@@ -35,7 +35,7 @@ const dt = MS_PER_TICK / 1000;
 const makeManager = () => {
   let t = 1_000_000;
   const clock = { now: () => t, advance: (ms: number) => (t += ms) };
-  return new SessionManager(clock.now, silentLogger);
+  return new SessionManager({ now: clock.now, log: silentLogger });
 };
 
 const neutral = (s: number): ReturnType<typeof makeInputCmd> =>

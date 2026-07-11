@@ -8,6 +8,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ainderew/gamedash
+  REALTIME_IMAGE: ainderew/gamedash-realtime
 
 jobs:
   build:
@@ -15,6 +16,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      protocol: ${{ steps.proto.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,25 +30,50 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Static SPA image (Dockerfile: pnpm build → nginx). No runtime env needed.
-      - uses: docker/build-push-action@v5
+      # Wire protocol version (packages/shared/src/net/constants.ts) — stamped onto the
+      # realtime image so an operator can see which protocol a running container speaks, and
+      # so `:proto-N` tags let a mismatched client surface "update available" cleanly.
+      - id: proto
+        run: echo "version=$(grep -oP 'PROTOCOL_VERSION = \K[0-9]+' packages/shared/src/net/constants.ts)" >> "$GITHUB_OUTPUT"
+
+      # Static SPA image (root Dockerfile: pnpm build → nginx). The realtime URL is baked in.
+      - name: Build & push web
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          build-args: |
+            VITE_REALTIME_URL=wss://gamedash.workdash.site/realtime
           tags: |
             ghcr.io/${{ env.IMAGE_NAME }}:latest
             ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      # Realtime room server (apps/realtime/Dockerfile: esbuild bundle → node:22-alpine).
+      - name: Build & push realtime
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/realtime/Dockerfile
+          push: true
+          labels: |
+            org.gamedash.protocol=${{ steps.proto.outputs.version }}
+          tags: |
+            ghcr.io/${{ env.REALTIME_IMAGE }}:latest
+            ghcr.io/${{ env.REALTIME_IMAGE }}:${{ github.sha }}
+            ghcr.io/${{ env.REALTIME_IMAGE }}:proto-${{ steps.proto.outputs.version }}
+          cache-from: type=gha,scope=realtime
+          cache-to: type=gha,mode=max,scope=realtime
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      # Same droplet + secrets as the Workdash deploy (DROPLET_IP, SSH_PRIVATE_KEY,
-      # GHCR_PAT must be set on this repo). Container publishes on loopback :3002,
-      # which the host nginx gamedash vhost proxies (deploy/gamedash.nginx.conf).
+      # Same droplet + secrets as before (DROPLET_IP, SSH_PRIVATE_KEY, GHCR_PAT). Both
+      # containers publish on loopback ports the host nginx gamedash vhost proxies:
+      # web → :3002 ( / ), realtime → :3003 ( /realtime, WS upgrade ).
       - name: Deploy to droplet
         uses: appleboy/ssh-action@v1
         env:
@@ -59,6 +87,8 @@ jobs:
           script: |
             set -e
             echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            # --- web (static SPA) ---
             docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest
             docker stop gamedash-web || true
             docker rm gamedash-web || true
@@ -67,4 +97,21 @@ jobs:
               -p 127.0.0.1:3002:80 \
               --restart unless-stopped \
               ghcr.io/${{ env.IMAGE_NAME }}:latest
+
+            # --- realtime (WS room server) ---
+            docker pull ghcr.io/${{ env.REALTIME_IMAGE }}:latest
+            # `docker stop -t 15` sends SIGTERM and waits: the server catches it, notifies live
+            # sessions "server restarting", then exits within its 10 s grace — a rolling deploy
+            # never hard-kills a room mid-tick (Phase 6 Task 4 drain).
+            docker stop -t 15 gamedash-realtime || true
+            docker rm gamedash-realtime || true
+            docker run -d \
+              --name gamedash-realtime \
+              -p 127.0.0.1:3003:8090 \
+              -e MAX_SESSIONS=200 \
+              -e IDLE_SESSION_TIMEOUT_MS=600000 \
+              --restart unless-stopped \
+              --stop-timeout 15 \
+              ghcr.io/${{ env.REALTIME_IMAGE }}:latest
+
             docker image prune -f

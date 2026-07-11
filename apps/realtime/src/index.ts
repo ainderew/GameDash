@@ -2,11 +2,15 @@ import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
+  DEFAULT_IDLE_SESSION_TIMEOUT_MS,
+  DEFAULT_MAX_SESSIONS,
   DEFAULT_REALTIME_PORT,
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
+  PROTOCOL_VERSION,
   REALTIME_PATH,
   SESSION_STATE_INTERVAL_MS,
+  SHUTDOWN_GRACE_MS,
   SIM_HZ,
   SNAPSHOT_HZ,
 } from '@shared/net/constants';
@@ -14,22 +18,30 @@ import { createSimStepper } from '@sim/loop';
 import { logger } from './log';
 import { SessionManager } from './session';
 import { ClientConnection } from './connection';
+import { TickMetrics } from './metrics';
 
 /**
- * apps/realtime entrypoint: HTTP server (/healthz) + ws upgrade on /realtime.
+ * apps/realtime entrypoint: HTTP server (/healthz, /metrics) + ws upgrade on /realtime.
  * Rooms/protocol are hand-rolled on `ws` per Decision #3 (no Colyseus).
  *
  * Phase 3: every session's GameWorld is stepped here at a FIXED 30 Hz through the same
  * `createSimStepper` the client uses (drift-corrected accumulator — wall-clock jitter in
  * the interval never leaks into sim dt), and snapshots broadcast at 20 Hz. The sim never
  * reads Date.now(); its clock is `session.tick × MS_PER_TICK`.
+ *
+ * Phase 6: rooms are stepped inside per-room try/catch (one panic can't kill the process),
+ * the manager honors MAX_SESSIONS + idle GC, tick duration is sampled for p50/p99, and a
+ * SIGTERM handler drains politely (notify sessions "server restarting" → grace → exit).
  */
 
 const port = Number(process.env.REALTIME_PORT ?? process.env.PORT ?? DEFAULT_REALTIME_PORT);
+const maxSessions = Number(process.env.MAX_SESSIONS ?? DEFAULT_MAX_SESSIONS);
+const idleTimeoutMs = Number(process.env.IDLE_SESSION_TIMEOUT_MS ?? DEFAULT_IDLE_SESSION_TIMEOUT_MS);
 const startedAt = Date.now();
 
-const manager = new SessionManager();
+const manager = new SessionManager({ maxSessions, idleTimeoutMs });
 const connections = new Map<WebSocket, ClientConnection>();
+const tickMetrics = new TickMetrics();
 
 const httpServer = http.createServer((req, res) => {
   if (req.url === '/healthz') {
@@ -37,10 +49,31 @@ const httpServer = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         ok: true,
+        protocol: PROTOCOL_VERSION,
         uptimeMs: Date.now() - startedAt,
         sessions: manager.sessionCount,
         players: manager.playerCount,
         connections: connections.size,
+      }),
+    );
+    return;
+  }
+  if (req.url === '/metrics') {
+    const m = manager.metricsSnapshot();
+    const tick = tickMetrics.summary();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        protocol: PROTOCOL_VERSION,
+        uptimeMs: Date.now() - startedAt,
+        sessions: m.sessions,
+        players: m.players,
+        connections: connections.size,
+        maxSessions,
+        // Snapshots go out at SNAPSHOT_HZ; scale last-tick bytes to a per-second rate.
+        snapshotBytesPerSec: Math.round(m.snapshotBytes * SNAPSHOT_HZ),
+        eventQueueDepth: m.eventQueueDepth,
+        tickMs: tick,
       }),
     );
     return;
@@ -89,20 +122,24 @@ wss.on('connection', (ws) => {
 // ── Authoritative sim: fixed 30 Hz over all sessions (drift-corrected). ───────
 const stepper = createSimStepper({ hz: SIM_HZ, maxStepsPerAdvance: 10 });
 let lastSimAdvance = performance.now();
-setInterval(() => {
+const simTimer = setInterval(() => {
   const now = performance.now();
   const elapsedSec = (now - lastSimAdvance) / 1000;
   lastSimAdvance = now;
-  stepper.advance(elapsedSec, (fixedDt) => manager.stepAll(fixedDt));
-}, 1000 / SIM_HZ / 2).unref();
+  stepper.advance(elapsedSec, (fixedDt) => {
+    const t0 = performance.now();
+    manager.stepAll(fixedDt); // per-room try/catch inside
+    tickMetrics.record(performance.now() - t0);
+  });
+}, 1000 / SIM_HZ / 2);
+simTimer.unref();
 
 // ── Snapshot broadcast: 20 Hz per session (keyframe cadence handled inside). ──
-setInterval(() => {
-  for (const session of manager.allSessions()) session.broadcastSnapshots();
-}, 1000 / SNAPSHOT_HZ).unref();
+const snapTimer = setInterval(() => manager.broadcastAll(), 1000 / SNAPSHOT_HZ);
+snapTimer.unref();
 
 // ── Heartbeat: 2 s ping to every connection; drop peers that stopped ponging. ──
-setInterval(() => {
+const hbTimer = setInterval(() => {
   for (const [ws, conn] of connections) {
     if (conn.isStale(HEARTBEAT_TIMEOUT_MS)) {
       logger.warn('heartbeat_timeout', { playerId: conn.player?.id });
@@ -111,10 +148,11 @@ setInterval(() => {
     }
     conn.sendHeartbeat();
   }
-}, HEARTBEAT_INTERVAL_MS).unref();
+}, HEARTBEAT_INTERVAL_MS);
+hbTimer.unref();
 
 // ── ~1 Hz roster/ping broadcast (feeds every client's PingCard). ──────────────
-setInterval(() => {
+const rosterTimer = setInterval(() => {
   const serverTime = Date.now();
   for (const session of manager.allSessions()) {
     if (session.players.size === 0) continue;
@@ -125,11 +163,45 @@ setInterval(() => {
       serverTime,
     });
   }
-}, SESSION_STATE_INTERVAL_MS).unref();
+}, SESSION_STATE_INTERVAL_MS);
+rosterTimer.unref();
 
-// ── Session GC sweep. ─────────────────────────────────────────────────────────
-setInterval(() => manager.gcSweep(), 10_000).unref();
+// ── Session GC sweep + periodic structured metrics line. ─────────────────────
+const gcTimer = setInterval(() => manager.gcSweep(), 10_000);
+gcTimer.unref();
+const metricsTimer = setInterval(() => {
+  const m = manager.metricsSnapshot();
+  logger.info('metrics', {
+    sessions: m.sessions,
+    players: m.players,
+    connections: connections.size,
+    snapshotBytesPerSec: Math.round(m.snapshotBytes * SNAPSHOT_HZ),
+    eventQueueDepth: m.eventQueueDepth,
+    tickMs: tickMetrics.summary(),
+  });
+}, 15_000);
+metricsTimer.unref();
 
 httpServer.listen(port, () => {
-  logger.info('realtime_listening', { port, path: REALTIME_PATH });
+  logger.info('realtime_listening', { port, path: REALTIME_PATH, protocol: PROTOCOL_VERSION, maxSessions });
 });
+
+// ── Graceful shutdown drain (Phase 6 Task 4): SIGTERM → notify → grace → exit. ─
+let shuttingDown = false;
+const shutdown = (signal: string): void => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.warn('shutdown_begin', { signal, sessions: manager.sessionCount });
+  // Tell every live session a restart is imminent so clients can show the notice + prep
+  // to auto-reconnect (their resume token survives the bounce).
+  manager.notifyAll({ type: 'error', code: 'not_in_session', message: 'server restarting — reconnecting shortly' });
+  // Stop accepting new sockets; keep the loops running so in-flight snapshots flush.
+  wss.close();
+  httpServer.close();
+  setTimeout(() => {
+    logger.warn('shutdown_exit', {});
+    process.exit(0);
+  }, SHUTDOWN_GRACE_MS).unref();
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

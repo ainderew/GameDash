@@ -8,6 +8,7 @@ import { Zone } from '@/game/world/Zone';
 import { PostFX } from '@/game/fx/PostFX';
 import { Player } from '@/game/entities/Player';
 import { RemotePlayers } from '@/game/entities/RemotePlayers';
+import { NetGateInteraction } from '@/game/net/NetGateInteraction';
 import { SlashFX } from '@/game/fx/SlashFX';
 import { BladeTrail } from '@/game/fx/BladeTrail';
 import { AttackArcIndicator } from '@/game/fx/AttackArcIndicator';
@@ -16,6 +17,7 @@ import { MonsterModels } from '@/game/entities/MonsterModels';
 import { MonsterHealthBars } from '@/game/entities/MonsterHealthBars';
 import { Projectiles } from '@/game/entities/Projectiles';
 import { Relic } from '@/game/entities/Relic';
+import { NetworkedRelic } from '@/game/entities/NetworkedRelic';
 import { Teammates } from '@/game/entities/Teammates';
 import { PassAimUI } from '@/game/fx/PassAimUI';
 import { RelicDrainVFX } from '@/game/fx/RelicDrainVFX';
@@ -33,6 +35,11 @@ export const GameCanvas = () => {
   const playerRef = useRef<Object3D | null>(null);
   const obstacles = useRef<Object3D[]>([]);
   const scene = useUIStore((state) => state.scene);
+  // In a session the relic is server-authoritative: render it from the network (NetworkedRelic
+  // → relicNet) and DON'T mount the solo <Relic/> (which spawns a local relic entity) — the
+  // double-spawn guard, done without touching the art component Relic.tsx. Keyed on session
+  // presence (not the connection state) so a brief reconnect blip doesn't flap the mount.
+  const networked = useUIStore((state) => state.session !== undefined);
 
   return (
     <Canvas
@@ -62,10 +69,12 @@ export const GameCanvas = () => {
           <Player playerRef={playerRef} />
           {/* Session peers in the shared hub (Phase 2 scope: hub presence only). */}
           {scene === 'hub' && <RemotePlayers />}
+          {/* Networked expedition-gate countdown control (self-gates to a live session). */}
+          {scene === 'hub' && <NetGateInteraction />}
           {scene === 'expedition' && (
             <>
               <Teammates />
-              <Relic />
+              {networked ? <NetworkedRelic /> : <Relic />}
               <PassAimUI />
               <RelicDrainVFX />
               <SlashFX />

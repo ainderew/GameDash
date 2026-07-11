@@ -1,3 +1,4 @@
+import { netClient } from '@/net/client';
 import { useUIStore } from '@/ui/store';
 
 /**
@@ -17,6 +18,20 @@ export const CombatHUD = () => {
   const comboCount = useUIStore((s) => s.comboCount);
   const comboBumpId = useUIStore((s) => s.comboBumpId);
   const pct = Math.max(0, Math.min(100, (health / maxHealth) * 100));
+
+  // Return to the hub after a failed hunt. Networked: ask the server to flip the whole party
+  // (it resets expedition state + teleports everyone). Solo: switch scene + reset locally —
+  // the same button now works in both modes (Phase 6 Task 2 fixes the solo gap).
+  const returnToHub = () => {
+    const store = useUIStore.getState();
+    store.setHuntFailed(false);
+    if (store.session) {
+      netClient.returnToHub();
+    } else {
+      store.reset();
+      store.setScene('hub');
+    }
+  };
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none">
@@ -96,12 +111,12 @@ export const CombatHUD = () => {
       {huntFailed && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/60">
           <h1 className="text-4xl font-black text-red-400">HUNT FAILED</h1>
-          <p className="text-white/60">You were downed. (Hunt lifecycle lands in Phase 5.)</p>
+          <p className="text-white/60">The party was downed. Regroup at the Haven and try again.</p>
           <button
-            className="pointer-events-auto rounded-md bg-white/10 px-5 py-2 ring-1 ring-white/20 hover:bg-white/20"
-            onClick={() => window.location.reload()}
+            className="pointer-events-auto rounded-md bg-amber-400/90 px-6 py-2 font-semibold uppercase tracking-[0.2em] text-black ring-1 ring-amber-200/40 transition-colors hover:bg-amber-300"
+            onClick={returnToHub}
           >
-            Retry
+            Return to Hub
           </button>
         </div>
       )}

@@ -82,6 +82,29 @@ export const SESSION_GC_GRACE_MS = 60_000;
 export const RESUME_WINDOW_MS = 120_000;
 /** How often the server broadcasts the member/ping roster. */
 export const SESSION_STATE_INTERVAL_MS = 1000;
+/** Shared expedition-gate countdown length (any member can cancel before it hits zero). */
+export const ZONE_COUNTDOWN_SECONDS = 5;
+/** Default cap on concurrent sessions (env MAX_SESSIONS overrides). Room-server safety valve. */
+export const DEFAULT_MAX_SESSIONS = 200;
+/** A session with connected players but no input for this long is reaped (env override). */
+export const DEFAULT_IDLE_SESSION_TIMEOUT_MS = 600_000; // 10 min
+
+// ── Per-connection rate limits (Phase 6 Task 3 hardening) ─────────────────────
+/**
+ * Fixed 1 s window caps a single socket may not exceed. The legit hot path is 30 Hz input
+ * (binary) + a 2 s pong + rare control frames, so these are ~4× headroom over honest traffic;
+ * a client that blows through them is buggy or hostile and its excess frames are dropped
+ * (the connection survives — a flood must never crash the room).
+ */
+export const RATE_LIMIT_WINDOW_MS = 1000;
+export const MAX_MSGS_PER_WINDOW = 150;
+export const MAX_BYTES_PER_WINDOW = 131_072; // 128 KiB/s
+/** Sustained windows fully over the cap before the socket is force-closed as abusive. */
+export const RATE_LIMIT_ABUSE_WINDOWS = 5;
+
+// ── Graceful shutdown (Phase 6 Task 4 deploy drain) ───────────────────────────
+/** On SIGTERM the server notifies sessions then waits this long before exiting. */
+export const SHUTDOWN_GRACE_MS = 10_000;
 
 // ── Anim flag bitmask carried in snapshot records ─────────────────────────────
 // Players use the low two bits; monsters repurpose the byte to pack their aiState + flags

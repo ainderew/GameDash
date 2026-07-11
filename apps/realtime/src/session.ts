@@ -12,6 +12,8 @@ import {
   ANIM_FLAG_AIRBORNE,
   ANIM_FLAG_DOWNED,
   ANIM_FLAG_SPRINT,
+  DEFAULT_IDLE_SESSION_TIMEOUT_MS,
+  DEFAULT_MAX_SESSIONS,
   MON_AISTATE,
   MON_FLAG_ATTACK,
   MON_FLAG_STAGGER,
@@ -21,7 +23,9 @@ import {
   RESUME_WINDOW_MS,
   SESSION_GC_GRACE_MS,
   SESSION_MAX_PLAYERS,
+  SIM_HZ,
   SNAPSHOT_KEYFRAME_INTERVAL_MS,
+  ZONE_COUNTDOWN_SECONDS,
 } from '@shared/net/constants';
 import {
   MATERIAL_PER_PICKUP,
@@ -151,6 +155,10 @@ export class Session {
   readonly departed = new Map<string, DepartedPlayer>();
   /** Set when the last player leaves; sessions are GC'd after the grace window. */
   emptySince: number | null = null;
+  /** Wall-clock ms of the last input frame from any member — feeds idle-session GC. */
+  lastActivityAt: number;
+  /** Bytes broadcast in the most recent snapshot tick (all recipients) — metrics probe. */
+  lastSnapshotBytes = 0;
 
   // ── Authoritative sim (one isolated world per session — never shared) ────────
   readonly world: GameWorld = createGameWorld();
@@ -163,6 +171,10 @@ export class Session {
   // ── Expedition combat state (Phase 4) ────────────────────────────────────────
   /** Party-wide zone. Hub = safe social space (movement only); expedition = full combat. */
   zone: SimMode = 'hub';
+  /** Tick the expedition countdown fires on (null = no countdown running). Phase 6 Task 2. */
+  private countdownEndsAtTick: number | null = null;
+  /** Last whole-second value broadcast, so ticks only emit on a change. */
+  private countdownLastSecond = -1;
   /** SHARED-POOL material tally — everyone's count. Server-authoritative (loot events only). */
   materials = 0;
   /** Confirmed hits captured from the sim this tick → DamageDealt/ParrySuccess wire events. */
@@ -204,11 +216,24 @@ export class Session {
   constructor(
     readonly code: string,
     readonly createdAt: number,
-  ) {}
+  ) {
+    this.lastActivityAt = createdAt;
+  }
 
   get simNowMs(): number {
     return this.tick * MS_PER_TICK;
   }
+
+  /** Record that a member is actively sending input (idle-GC keepalive). */
+  markActivity(nowWall: number): void {
+    this.lastActivityAt = nowWall;
+  }
+
+  /** Event-queue depth this session drained last tick — a backpressure metric. */
+  get eventQueueDepth(): number {
+    return this.lastDrainedCount;
+  }
+  private lastDrainedCount = 0;
 
   memberInfos(): SessionMemberInfo[] {
     return [...this.players.values()].map((p) => ({
@@ -268,6 +293,56 @@ export class Session {
       return [EXPEDITION_ORIGIN[0] + Math.sin(angle) * 2.5, 0, EXPEDITION_ORIGIN[2] + Math.cos(angle) * 2.5];
     }
     return spawnPos(index);
+  }
+
+  // ── Expedition-gate countdown (Phase 6 Task 2) ───────────────────────────────
+  /** True while a countdown is ticking (drives the client's cancelable banner). */
+  get countdownActive(): boolean {
+    return this.countdownEndsAtTick !== null;
+  }
+
+  /** Any member at the gate pressed E: open the shared 5 s countdown (hub only, once). */
+  startExpeditionCountdown(): void {
+    if (this.zone !== 'hub' || this.countdownEndsAtTick !== null) return;
+    this.countdownEndsAtTick = this.tick + ZONE_COUNTDOWN_SECONDS * SIM_HZ;
+    this.countdownLastSecond = ZONE_COUNTDOWN_SECONDS;
+    this.broadcast({
+      type: 'zoneCountdown',
+      active: true,
+      secondsLeft: ZONE_COUNTDOWN_SECONDS,
+      serverTick: this.tick,
+    });
+  }
+
+  /** Any member cancels the countdown before it fires. No-op if none is running. */
+  cancelCountdown(): void {
+    if (this.countdownEndsAtTick === null) return;
+    this.countdownEndsAtTick = null;
+    this.countdownLastSecond = -1;
+    this.broadcast({ type: 'zoneCountdown', active: false, secondsLeft: 0, serverTick: this.tick });
+  }
+
+  /** Return the party to the hub on demand (hunt-failed overlay / expedition exit). */
+  returnToHub(): void {
+    this.cancelCountdown();
+    this.enterZone('hub');
+  }
+
+  /** Advance a running countdown one tick; fires the zone flip at zero. Called each hub tick. */
+  private advanceCountdown(): void {
+    if (this.countdownEndsAtTick === null) return;
+    const ticksLeft = this.countdownEndsAtTick - this.tick;
+    if (ticksLeft <= 0) {
+      this.countdownEndsAtTick = null;
+      this.countdownLastSecond = -1;
+      this.enterZone('expedition');
+      return;
+    }
+    const secondsLeft = Math.ceil(ticksLeft / SIM_HZ);
+    if (secondsLeft !== this.countdownLastSecond) {
+      this.countdownLastSecond = secondsLeft;
+      this.broadcast({ type: 'zoneCountdown', active: true, secondsLeft, serverTick: this.tick });
+    }
   }
 
   /**
@@ -437,7 +512,9 @@ export class Session {
     if (this.zone === 'hub') {
       stepSim(this.world, this.events, this.intents as IntentsByPlayer, fixedDtSec, now, 'hub');
       this.captureAckStatesAndHistory(consumed);
+      this.lastDrainedCount = 0;
       this.events.reset(); // hub emits no events today; drain defensively
+      this.advanceCountdown(); // may enterZone('expedition') when it reaches zero
       return;
     }
 
@@ -461,6 +538,7 @@ export class Session {
     );
 
     this.captureAckStatesAndHistory(consumed);
+    this.lastDrainedCount = drained.length;
     this.recordMonsterHistory();
     this.emitCombatEvents(drained);
     this.detectSpawnsAndWaves();
@@ -884,6 +962,7 @@ export class Session {
       keyframe ? null : this.baseline,
     );
 
+    let bytes = 0;
     for (const player of this.players.values()) {
       // Records are shared; only the ack block differs per recipient.
       const per = buf.slice(0);
@@ -896,7 +975,9 @@ export class Session {
         player.entity.downed ? ACK_FLAG_DOWNED : 0,
       );
       player.link.sendBinary(per);
+      bytes += per.byteLength;
     }
+    this.lastSnapshotBytes = bytes;
   }
 }
 
@@ -909,16 +990,36 @@ export type JoinResult =
   | { ok: true; session: Session; player: SessionPlayer; resumed: boolean }
   | { ok: false; error: 'unknown_session' | 'session_full' };
 
+export interface SessionManagerOptions {
+  now?: () => number;
+  log?: Logger;
+  /** Hard cap on concurrent sessions (env MAX_SESSIONS). Refused creates get `server_full`. */
+  maxSessions?: number;
+  /** A session with connected players but no input for this long is reaped. */
+  idleTimeoutMs?: number;
+}
+
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
+  private readonly now: () => number;
+  private readonly log: Logger;
+  readonly maxSessions: number;
+  private readonly idleTimeoutMs: number;
 
-  constructor(
-    private readonly now: () => number = Date.now,
-    private readonly log: Logger = logger,
-  ) {}
+  constructor(opts: SessionManagerOptions = {}) {
+    this.now = opts.now ?? Date.now;
+    this.log = opts.log ?? logger;
+    this.maxSessions = opts.maxSessions ?? DEFAULT_MAX_SESSIONS;
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_SESSION_TIMEOUT_MS;
+  }
 
   get sessionCount(): number {
     return this.sessions.size;
+  }
+
+  /** True when a new session may not be created (concurrent-session cap reached). */
+  get atCapacity(): boolean {
+    return this.sessions.size >= this.maxSessions;
   }
 
   get playerCount(): number {
@@ -936,9 +1037,70 @@ export class SessionManager {
     return this.sessions.values();
   }
 
-  /** Advance every session's authoritative sim by one fixed step. */
+  /** Send one control message to every connected player across all sessions (shutdown drain). */
+  notifyAll(msg: ServerMessage): void {
+    for (const session of this.sessions.values()) {
+      for (const player of session.players.values()) {
+        try {
+          player.link.send(msg);
+        } catch {
+          // socket already dying — the ws close handler cleans up.
+        }
+      }
+    }
+  }
+
+  /**
+   * Advance every session's authoritative sim by one fixed step. Each room is stepped inside
+   * its own try/catch (panic-safe isolation, Phase 6 Task 3): a bug that throws in one room's
+   * tick tears THAT room down with a notice to its clients — it can never take the process or
+   * a sibling room down with it.
+   */
   stepAll(fixedDtSec: number): void {
-    for (const session of this.sessions.values()) session.step(fixedDtSec);
+    for (const session of [...this.sessions.values()]) {
+      try {
+        session.step(fixedDtSec);
+      } catch (err) {
+        this.log.error('room_tick_panic', { code: session.code, error: String(err) });
+        this.destroySession(session, 'internal_error');
+      }
+    }
+  }
+
+  /** Broadcast one snapshot per room, isolated the same way stepAll is. */
+  broadcastAll(): void {
+    for (const session of [...this.sessions.values()]) {
+      try {
+        session.broadcastSnapshots();
+      } catch (err) {
+        this.log.error('room_snapshot_panic', { code: session.code, error: String(err) });
+        this.destroySession(session, 'internal_error');
+      }
+    }
+  }
+
+  /** Tear a room down, notifying every connected client first (poisoned-room / idle reap). */
+  destroySession(session: Session, reason: 'internal_error' | 'idle'): void {
+    for (const player of [...session.players.values()]) {
+      try {
+        player.link.send({ type: 'error', code: 'not_in_session', message: `session ended (${reason})` });
+      } catch {
+        // socket already dying — the ws close handler will clean up.
+      }
+    }
+    this.sessions.delete(session.code);
+    this.log.warn('session_destroyed', { code: session.code, reason, players: session.players.size });
+  }
+
+  // ── Aggregate metrics for the /metrics endpoint (Phase 6 Task 5) ─────────────
+  metricsSnapshot(): { sessions: number; players: number; snapshotBytes: number; eventQueueDepth: number } {
+    let snapshotBytes = 0;
+    let eventQueueDepth = 0;
+    for (const s of this.sessions.values()) {
+      snapshotBytes += s.lastSnapshotBytes;
+      eventQueueDepth += s.eventQueueDepth;
+    }
+    return { sessions: this.sessions.size, players: this.playerCount, snapshotBytes, eventQueueDepth };
   }
 
   createSession(profile: PlayerProfile, link: PeerLink): { session: Session; player: SessionPlayer } {
@@ -1027,7 +1189,10 @@ export class SessionManager {
     this.log.info('session_left', { code: session.code, playerId, reason, players: session.players.size });
   }
 
-  /** Drop sessions that have been empty past the grace window. Returns removed count. */
+  /**
+   * Drop sessions that have been empty past the grace window OR idle (connected players but no
+   * input for the idle timeout — an abandoned/backgrounded room). Returns removed count.
+   */
   gcSweep(): number {
     const now = this.now();
     let removed = 0;
@@ -1036,6 +1201,13 @@ export class SessionManager {
         this.sessions.delete(code);
         removed += 1;
         this.log.info('session_gc', { code, ageMs: now - session.createdAt });
+        continue;
+      }
+      // Idle reap: still-populated but silent past the timeout → notify + tear down.
+      if (session.players.size > 0 && now - session.lastActivityAt >= this.idleTimeoutMs) {
+        this.destroySession(session, 'idle');
+        removed += 1;
+        continue;
       }
       // Expire stale resume tokens regardless.
       for (const [token, departed] of session.departed) {

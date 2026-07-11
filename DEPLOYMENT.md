@@ -1,24 +1,51 @@
 # Deployment
 
-The GameDash **frontend** auto-deploys to the VPS on every push to `main`.
-No manual steps — GitHub Actions builds the image, pushes it to GHCR, and the
-droplet pulls and runs it.
+GameDash deploys **two** containers to the VPS on every push to `main`, both fully
+server-side (GitHub Actions + repo secrets — no local machine involved):
 
-Live: https://gamedash.workdash.site
+1. **`gamedash-web`** — the Vite SPA served by nginx (loopback `127.0.0.1:3002`).
+2. **`gamedash-realtime`** — the multiplayer room server (loopback `127.0.0.1:3003`,
+   in-container port `8090`). Added in multiplayer Phase 6.
+
+Live: https://gamedash.workdash.site · realtime endpoint `wss://gamedash.workdash.site/realtime`.
 
 ## Pipeline
 
 `.github/workflows/deploy.yml` runs on `push` to `main` (and `workflow_dispatch`):
 
-1. **build** — builds the Docker image (Vite `dist` → nginx) and pushes it to
-   `ghcr.io/ainderew/gamedash:latest` (+ a `:${sha}` tag), using GHA layer cache.
-2. **deploy** — SSHes into the droplet and:
-   - `docker login ghcr.io` with `GHCR_PAT`
-   - `docker pull ghcr.io/ainderew/gamedash:latest`
-   - restarts the `gamedash-web` container bound to `127.0.0.1:3002`
+1. **build** — in one job:
+   - reads `PROTOCOL_VERSION` from `packages/shared/src/net/constants.ts` (stamped onto the
+     realtime image tags/labels);
+   - builds the **web** image (root `Dockerfile`: Vite `dist` → nginx) with the
+     `VITE_REALTIME_URL=wss://gamedash.workdash.site/realtime` build arg, pushing
+     `ghcr.io/ainderew/gamedash:latest` (+ `:${sha}`);
+   - builds the **realtime** image (`apps/realtime/Dockerfile`: esbuild bundle → `node:22-alpine`,
+     non-root), pushing `ghcr.io/ainderew/gamedash-realtime:latest` (+ `:${sha}` + `:proto-N`).
+   - Both use scoped GHA layer caches.
+2. **deploy** — SSHes into the droplet and, for each service:
+   - `docker login ghcr.io` with `GHCR_PAT`, `docker pull …:latest`;
+   - web: stop/rm/run `gamedash-web` on `127.0.0.1:3002:80`;
+   - realtime: `docker stop -t 15 gamedash-realtime` (SIGTERM → the server notifies live
+     sessions "server restarting" and drains within its 10 s grace), then run
+     `gamedash-realtime` on `127.0.0.1:3003:8090` with `MAX_SESSIONS` / `IDLE_SESSION_TIMEOUT_MS`.
 
-The host nginx vhost (`deploy/gamedash.nginx.conf`) proxies
-`gamedash.workdash.site` → `127.0.0.1:3002`; certbot handles TLS.
+The host nginx vhost (`deploy/gamedash.nginx.conf`) proxies `gamedash.workdash.site` →
+`127.0.0.1:3002` for the SPA, and `location /realtime` upgrades WebSocket traffic to
+`127.0.0.1:3003` (`proxy_http_version 1.1`, Upgrade/Connection headers, `proxy_buffering off`,
+120 s read timeout). Same origin as the SPA ⇒ no CORS. certbot handles TLS for both.
+
+### One-time host setup for the realtime service
+
+The nginx vhost + certbot already terminate TLS for the domain. Adding the realtime location is a
+config edit (already in `deploy/gamedash.nginx.conf`), then `nginx -t && systemctl reload nginx`.
+No new DNS, ports, or certs — realtime rides the existing `gamedash.workdash.site` cert on 443 and
+is only reachable through nginx (the container binds loopback only). First rollout can also be done
+by hand on the droplet with `docker compose -f docker-compose.vps.yml up -d --build`.
+
+### Monitoring
+
+`curl -s localhost:3003/metrics | jq` on the droplet shows sessions, players, snapshot bytes/s,
+event-queue depth, and tick p50/p99 (KPI: p99 < 15 ms). `/healthz` is the container healthcheck.
 
 ## Required repo secrets
 

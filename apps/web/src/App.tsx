@@ -8,6 +8,8 @@ import { HubHUD } from '@/ui/HubHUD';
 import { MainMenu } from '@/ui/MainMenu';
 import { NetDebugOverlay } from '@/ui/NetDebugOverlay';
 import { PingCard } from '@/ui/PingCard';
+import { PartyHUD } from '@/ui/PartyHUD';
+import { ReconnectOverlay } from '@/ui/ReconnectOverlay';
 import { IntroSequence } from '@/ui/intro/IntroSequence';
 import { useUIStore } from '@/ui/store';
 
@@ -45,8 +47,12 @@ export const App = () => {
         <GameCanvas />
       </ErrorBoundary>
       {scene === 'hub' ? <HubHUD /> : <CombatHUD />}
+      {/* Party roster: teammate names, HP, relic carrier, live ping (self-hides when solo). */}
+      <PartyHUD />
       {/* Session ping card (DOM overlay, self-hides when not in a session). */}
       <PingCard />
+      {/* Mid-game reconnect scrim (self-hides unless reconnecting inside a session). */}
+      <ReconnectOverlay />
       {/* F3 netcode telemetry (ping/interp/snapshot/corrections KPI). */}
       <NetDebugOverlay />
       {/* Live combat-feel + weapon tuning panels + debug menu (dev only). */}
