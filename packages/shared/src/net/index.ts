@@ -8,3 +8,6 @@
 export * from './constants';
 export * from './ids';
 export * from './messages';
+export * from './character';
+export * from './input';
+export * from './snapshot';

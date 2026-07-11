@@ -5,7 +5,6 @@ import { useWeaponStore } from '@/game/combat/weaponStore';
 import { heroTransform } from '@/game/entities/heroConfig';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
 import { useUIStore } from '@/ui/store';
-import { ATTACK_TIMESCALE, COMBO_MOVES } from '@sim/combat/combo';
 
 /**
  * WEAPON picker + grip tuning (leva, dev-only). Swap the wielded weapon and dial its grip
@@ -32,24 +31,11 @@ export const WeaponControls = () => {
     scale: { value: heroTransform.scaleMul, min: 0.1, max: 4, step: 0.05, onChange: (v: number) => (heroTransform.scaleMul = v) },
   });
 
-  // Attack playback speeds — clips carry Mixamo Overdrive baked in, so tune the runtime
-  // multiplier here while mashing, then bake the values into ATTACK_TIMESCALE (combo.ts).
-  // Speed also SETS the swing's gameplay duration (clip length ÷ speed) — anim always matches.
-  useControls('Attack · speed', {
-    light1: { value: ATTACK_TIMESCALE.light1, min: 0.5, max: 4, step: 0.05, onChange: (v: number) => (ATTACK_TIMESCALE.light1 = v) },
-    light2: { value: ATTACK_TIMESCALE.light2, min: 0.5, max: 4, step: 0.05, onChange: (v: number) => (ATTACK_TIMESCALE.light2 = v) },
-    spin: { value: ATTACK_TIMESCALE.spin, min: 0.5, max: 4, step: 0.05, onChange: (v: number) => (ATTACK_TIMESCALE.spin = v) },
-    finisher: { value: ATTACK_TIMESCALE.finisher, min: 0.5, max: 4, step: 0.05, onChange: (v: number) => (ATTACK_TIMESCALE.finisher = v) },
-  });
-
-  // Root-motion stride per combo move, world units — how far the swing itself carries you
-  // (× weapon reachMul). Tune while fighting, then bake into COMBO_MOVES lungeDist.
-  useControls('Attack · lunge', {
-    slash: { value: COMBO_MOVES[0]!.lungeDist, min: 0, max: 3, step: 0.05, onChange: (v: number) => (COMBO_MOVES[0]!.lungeDist = v) },
-    altSlash: { value: COMBO_MOVES[1]!.lungeDist, min: 0, max: 3, step: 0.05, onChange: (v: number) => (COMBO_MOVES[1]!.lungeDist = v) },
-    spin: { value: COMBO_MOVES[2]!.lungeDist, min: 0, max: 3, step: 0.05, onChange: (v: number) => (COMBO_MOVES[2]!.lungeDist = v) },
-    uppercut: { value: COMBO_MOVES[3]!.lungeDist, min: 0, max: 3, step: 0.05, onChange: (v: number) => (COMBO_MOVES[3]!.lungeDist = v) },
-  });
+  // NOTE (Phase 3): the "Attack · speed" (ATTACK_TIMESCALE) and "Attack · lunge"
+  // (COMBO_MOVES[].lungeDist) leva panels are GONE — they live-mutated SIM data that the
+  // room server also simulates; a client-side tweak would make prediction diverge from
+  // authority and reconciliation would fight it (the no-rubberband contract treats that
+  // as a correctness bug). Tune those numbers in packages/sim/src/combat/combo.ts.
 
   useControls(
     'Weapon',

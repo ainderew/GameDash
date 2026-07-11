@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { performance } from 'node:perf_hooks';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   DEFAULT_REALTIME_PORT,
@@ -6,16 +7,22 @@ import {
   HEARTBEAT_TIMEOUT_MS,
   REALTIME_PATH,
   SESSION_STATE_INTERVAL_MS,
-  TRANSFORM_RELAY_HZ,
+  SIM_HZ,
+  SNAPSHOT_HZ,
 } from '@shared/net/constants';
+import { createSimStepper } from '@sim/loop';
 import { logger } from './log';
 import { SessionManager } from './session';
 import { ClientConnection } from './connection';
-import { flushTransforms } from './relay';
 
 /**
  * apps/realtime entrypoint: HTTP server (/healthz) + ws upgrade on /realtime.
  * Rooms/protocol are hand-rolled on `ws` per Decision #3 (no Colyseus).
+ *
+ * Phase 3: every session's GameWorld is stepped here at a FIXED 30 Hz through the same
+ * `createSimStepper` the client uses (drift-corrected accumulator — wall-clock jitter in
+ * the interval never leaks into sim dt), and snapshots broadcast at 20 Hz. The sim never
+ * reads Date.now(); its clock is `session.tick × MS_PER_TICK`.
  */
 
 const port = Number(process.env.REALTIME_PORT ?? process.env.PORT ?? DEFAULT_REALTIME_PORT);
@@ -62,7 +69,15 @@ wss.on('connection', (ws) => {
   connections.set(ws, conn);
   logger.info('ws_connected', { connections: connections.size });
 
-  ws.on('message', (data) => conn.handleRaw(data.toString()));
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      // ws hands us a Buffer — slice out the exact ArrayBuffer region it views.
+      const buf = data as Buffer;
+      conn.handleBinary(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
+    } else {
+      conn.handleRaw(data.toString());
+    }
+  });
   ws.on('close', () => {
     connections.delete(ws);
     conn.handleClose();
@@ -70,6 +85,21 @@ wss.on('connection', (ws) => {
   });
   ws.on('error', (err) => logger.warn('ws_error', { error: String(err) }));
 });
+
+// ── Authoritative sim: fixed 30 Hz over all sessions (drift-corrected). ───────
+const stepper = createSimStepper({ hz: SIM_HZ, maxStepsPerAdvance: 10 });
+let lastSimAdvance = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const elapsedSec = (now - lastSimAdvance) / 1000;
+  lastSimAdvance = now;
+  stepper.advance(elapsedSec, (fixedDt) => manager.stepAll(fixedDt));
+}, 1000 / SIM_HZ / 2).unref();
+
+// ── Snapshot broadcast: 20 Hz per session (keyframe cadence handled inside). ──
+setInterval(() => {
+  for (const session of manager.allSessions()) session.broadcastSnapshots();
+}, 1000 / SNAPSHOT_HZ).unref();
 
 // ── Heartbeat: 2 s ping to every connection; drop peers that stopped ponging. ──
 setInterval(() => {
@@ -82,9 +112,6 @@ setInterval(() => {
     conn.sendHeartbeat();
   }
 }, HEARTBEAT_INTERVAL_MS).unref();
-
-// ── TEMPORARY Phase 2: 15 Hz hub transform relay flush (relay.ts — deleted in Phase 3).
-setInterval(() => flushTransforms(manager), 1000 / TRANSFORM_RELAY_HZ).unref();
 
 // ── ~1 Hz roster/ping broadcast (feeds every client's PingCard). ──────────────
 setInterval(() => {

@@ -6,7 +6,12 @@ import type { Group, Mesh } from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { world } from '@/game/ecs/world';
 import type { Entity } from '@sim/components';
-import { ANIM_FLAG_AIRBORNE, INTERP_DELAY_MS } from '@shared/net/constants';
+import { sampleWithUnderrunPolicy } from '@sim/interp';
+import {
+  ANIM_FLAG_AIRBORNE,
+  INTERP_UNDERRUN_DEADRECKON_MS,
+  INTERP_UNDERRUN_HOLD_MS,
+} from '@shared/net/constants';
 import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
 import { deMetalize } from '@/lib/materials';
@@ -109,10 +114,14 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
     const entity = entityRef.current;
     if (!g || !entity?.transform) return;
 
-    // Sample the shared timeline INTERP_DELAY_MS in the past — replayed, never guessed.
+    // Sample the shared SERVER-TICK timeline an (adaptive) interp delay in the past —
+    // replayed, never guessed. Underruns hold → dead-reckon briefly → hold (Task 5).
     const buffer = netClient.remoteBuffer(member.id);
-    const renderT = netClient.serverNow() - INTERP_DELAY_MS;
-    const sample = buffer.sample(renderT);
+    const renderT = netClient.serverNow() - netClient.interpDelayMs();
+    const sample = sampleWithUnderrunPolicy(buffer, renderT, {
+      holdMs: INTERP_UNDERRUN_HOLD_MS,
+      deadReckonMs: INTERP_UNDERRUN_DEADRECKON_MS,
+    });
     if (!sample) {
       g.visible = false; // nothing relayed yet — stay hidden rather than at origin
       return;

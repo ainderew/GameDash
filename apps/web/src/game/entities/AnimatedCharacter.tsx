@@ -234,9 +234,18 @@ export const AnimatedCharacter = ({
       .filter((n): n is [CharState, AnimationClip] => n[1] !== undefined)
       .map(([name, clip]) => {
         const c = prepareClip(clip, name, rigBones);
-        // Publish the REAL clip length so combat derives swing duration from the animation.
+        // NOTE (Phase 3): attack-clip durations are FROZEN in @sim ATTACK_CLIP_S — the
+        // server computes swing windows from the same constants, so stamping measured
+        // durations here again is BANNED (it would desync sim data from the authority).
+        // If a clip's real length drifts from the constant, warn loudly in dev.
         const combatClip = ATTACK_CLIP_FOR_STATE[name];
-        if (combatClip) ATTACK_CLIP_S[combatClip] = c.duration;
+        if (import.meta.env.DEV && combatClip && Math.abs(ATTACK_CLIP_S[combatClip] - c.duration) > 0.01) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[combat] ${name} clip is ${c.duration.toFixed(4)}s but ATTACK_CLIP_S.${combatClip} is ` +
+              `${ATTACK_CLIP_S[combatClip]}s — re-measure and update packages/sim/src/combat/combo.ts`,
+          );
+        }
         return c;
       });
   }, [

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InterpBuffer, shortestArcLerp } from './interp';
+import { InterpBuffer, sampleWithUnderrunPolicy, shortestArcLerp } from './interp';
 
 const snap = (t: number, x: number, rotY = 0, flags?: number) => ({
   t,
@@ -103,5 +103,56 @@ describe('shortestArcLerp', () => {
   it('is exact at the endpoints', () => {
     expect(shortestArcLerp(0.3, 1.1, 0)).toBeCloseTo(0.3);
     expect(shortestArcLerp(0.3, 1.1, 1)).toBeCloseTo(1.1);
+  });
+});
+
+describe('sampleWithUnderrunPolicy (Phase 3, Task 5)', () => {
+  const POLICY = { holdMs: 100, deadReckonMs: 150 };
+  // Entity moving +1 unit per 100 ms → segment velocity 10 u/s.
+  const filled = () => {
+    const b = new InterpBuffer();
+    b.push(snap(0, 0));
+    b.push(snap(100, 1));
+    b.push(snap(200, 2));
+    return b;
+  };
+
+  it('inside the buffered range it is exactly buffer.sample', () => {
+    const b = filled();
+    expect(sampleWithUnderrunPolicy(b, 150, POLICY)!.pos[0]).toBeCloseTo(1.5);
+  });
+
+  it('holds the newest snapshot for the first 100 ms of underrun', () => {
+    const b = filled();
+    expect(sampleWithUnderrunPolicy(b, 250, POLICY)!.pos[0]).toBeCloseTo(2);
+    expect(sampleWithUnderrunPolicy(b, 300, POLICY)!.pos[0]).toBeCloseTo(2);
+  });
+
+  it('dead-reckons on the last segment velocity for the next 150 ms', () => {
+    const b = filled();
+    // 50 ms into the dead-reckon window at 10 u/s → +0.5.
+    const s = sampleWithUnderrunPolicy(b, 350, POLICY)!;
+    expect(s.pos[0]).toBeCloseTo(2.5);
+    expect(s.velocity[0]).toBeCloseTo(10);
+  });
+
+  it('caps extrapolation and holds forever after — never wild guesses', () => {
+    const b = filled();
+    const atCap = sampleWithUnderrunPolicy(b, 450, POLICY)!;
+    expect(atCap.pos[0]).toBeCloseTo(3.5); // 2 + 10 u/s × 0.15 s
+    const wayPast = sampleWithUnderrunPolicy(b, 5000, POLICY)!;
+    expect(wayPast.pos[0]).toBeCloseTo(3.5); // frozen at the cap
+    expect(wayPast.velocity[0]).toBe(0); // reads as stopped
+  });
+
+  it('a single-entry buffer holds without inventing velocity', () => {
+    const b = new InterpBuffer();
+    b.push(snap(0, 7));
+    const s = sampleWithUnderrunPolicy(b, 400, POLICY)!;
+    expect(s.pos[0]).toBeCloseTo(7);
+  });
+
+  it('null while empty', () => {
+    expect(sampleWithUnderrunPolicy(new InterpBuffer(), 100, POLICY)).toBeNull();
   });
 });

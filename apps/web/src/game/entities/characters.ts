@@ -1,3 +1,4 @@
+import type { CharacterId } from '@shared/net/character';
 import { heroTransform } from '@/game/entities/heroConfig';
 
 /**
@@ -5,8 +6,11 @@ import { heroTransform } from '@/game/entities/heroConfig';
  * so the ONE hero clip set (models/hero/anim-*.glb) binds to any of them by bone name —
  * no per-character animations. Rigs may lack bones the clips animate (the druid has no
  * thumb joints); prepareClip drops those tracks, so they just don't move.
+ *
+ * The id set is the WIRE enum (@shared/net/character) — adding a character means adding
+ * it there first, so the protocol, the server and this registry can never drift.
  */
-export type PlayerCharacterId = 'hero' | 'druid';
+export type PlayerCharacterId = CharacterId;
 
 /**
  * Layer for the player-only fill light: the light has ONLY this layer, character meshes

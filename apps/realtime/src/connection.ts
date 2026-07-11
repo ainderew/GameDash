@@ -6,20 +6,25 @@ import {
 } from '@shared/net/messages';
 import { normalizeSessionCode } from '@shared/net/ids';
 import { PING_EWMA_ALPHA, PROTOCOL_VERSION } from '@shared/net/constants';
+import { decodeInputPacket, MSG_INPUT } from '@shared/net/input';
+import type { CharacterId } from '@shared/net/character';
 import { logger, type Logger } from './log';
 import type { PeerLink, Session, SessionManager, SessionPlayer } from './session';
-import { clampRelayTransform } from './relay';
 
 /**
  * Per-socket protocol handler: hello/version handshake → session attach → message
  * dispatch. Transport-thin — takes any `SocketLike`, so unit tests drive it with fakes
- * while index.ts binds it to real ws sockets. Every inbound frame is zod-validated;
- * malformed traffic is answered with an `error` and the connection SURVIVES (a buggy
- * or hostile client must never crash the room).
+ * while index.ts binds it to real ws sockets. Every inbound JSON frame is zod-validated
+ * and every binary frame length-validated; malformed traffic is answered with an `error`
+ * (JSON) or silently dropped (binary hot path) and the connection SURVIVES (a buggy or
+ * hostile client must never crash the room).
+ *
+ * Phase 3: clients may send exactly ONE binary frame type — MSG_INPUT (intent). There is
+ * NO message that carries a client transform; state only ever flows server → client.
  */
 
 export interface SocketLike {
-  send(data: string): void;
+  send(data: string | ArrayBuffer): void;
   close(code?: number, reason?: string): void;
 }
 
@@ -30,7 +35,7 @@ type Phase = 'awaitingHello' | 'ready' | 'inSession' | 'closed';
 
 export class ClientConnection implements PeerLink {
   private phase: Phase = 'awaitingHello';
-  private profile: { name: string; character: string } | null = null;
+  private profile: { name: string; character: CharacterId } | null = null;
   session: Session | null = null;
   player: SessionPlayer | null = null;
 
@@ -55,7 +60,30 @@ export class ClientConnection implements PeerLink {
     }
   }
 
-  // ── Inbound ────────────────────────────────────────────────────────────────
+  sendBinary(data: ArrayBuffer): void {
+    try {
+      this.socket.send(data);
+    } catch {
+      // Socket already dying — the close handler cleans up.
+    }
+  }
+
+  // ── Inbound: binary hot path (InputCmds) ────────────────────────────────────
+  /**
+   * Binary frames carry ONLY input packets. Malformed/unexpected binary is dropped
+   * without a reply — answering a 30 Hz hot path with JSON errors would amplify abuse.
+   */
+  handleBinary(data: ArrayBufferLike): void {
+    if (this.phase !== 'inSession' || !this.player) return;
+    const view = new DataView(data);
+    if (view.byteLength < 1 || view.getUint8(0) !== MSG_INPUT) return;
+    const cmds = decodeInputPacket(data);
+    if (!cmds) return;
+    const now = this.now();
+    for (const cmd of cmds) this.player.input.offer(cmd, now);
+  }
+
+  // ── Inbound: JSON control channel ───────────────────────────────────────────
   handleRaw(raw: unknown): void {
     if (this.phase === 'closed') return;
 
@@ -115,18 +143,6 @@ export class ClientConnection implements PeerLink {
 
       case 'leaveSession': {
         this.detachFromSession('left');
-        return;
-      }
-
-      case 'transformUpdate': {
-        // TEMPORARY Phase 2 relay path — see relay.ts banner.
-        if (this.phase !== 'inSession' || !this.player) {
-          this.sendError('not_in_session', 'transformUpdate before joining a session');
-          return;
-        }
-        const now = this.now();
-        const clamped = clampRelayTransform(this.player.transform, msg, now);
-        this.player.transform = { ...clamped, t: now, dirty: true };
         return;
       }
 

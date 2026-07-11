@@ -70,6 +70,18 @@ export const advanceTime = (rawDtSec: number): { scaledDt: number } => {
   return { scaledDt: rawDtSec * scale };
 };
 
+/**
+ * NETWORKED driver override (Phase 3): in a multiplayer session the sim clock is the
+ * fixed-tick timeline (clientTick × MS_PER_TICK), not the accumulated frame clock —
+ * entity timers must be stamped in tick time so prediction replay is deterministic.
+ * SystemRunner calls this once per frame with tickTime + alpha remainder so renderers
+ * reading gameNow() (animation gates, footsteps) stay smooth and consistent with the
+ * ECS timers. Hitstop/slow-mo never run in the hub, so nothing is lost while networked.
+ */
+export const syncGameTime = (ms: number): void => {
+  gameTimeMs = ms;
+};
+
 /** Test/lifecycle reset. */
 export const resetTime = (): void => {
   gameTimeMs = 0;

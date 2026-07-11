@@ -25,8 +25,10 @@ export type ConnectionState = 'offline' | 'connecting' | 'connected' | 'reconnec
 export interface SessionMemberUI {
   id: string;
   name: string;
-  /** PlayerCharacterId string from the wire (validated at render time). */
+  /** CharacterId string from the wire (validated at render time). */
   character: string;
+  /** The member's avatar entity id in the session world (snapshot records address it). */
+  entityId: number;
   /** EWMA RTT ms; null until the first heartbeat round-trip / while unknown. */
   ping: number | null;
   connected: boolean;

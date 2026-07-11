@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerMessage } from '@shared/net/messages';
-import { HUB_BOUNDS_RADIUS, PROTOCOL_VERSION, RELAY_MAX_SPEED, RELAY_SPEED_TOLERANCE } from '@shared/net/constants';
+import { PROTOCOL_VERSION } from '@shared/net/constants';
+import { encodeInputPacket, makeInputCmd } from '@shared/net/input';
 import { SessionManager } from './session';
 import { ClientConnection, type SocketLike } from './connection';
-import { clampRelayTransform, flushTransforms } from './relay';
 import { silentLogger } from './log';
 
 class FakeSocket implements SocketLike {
   sent: ServerMessage[] = [];
+  binary: ArrayBuffer[] = [];
   closed: { code?: number; reason?: string } | null = null;
-  send(data: string): void {
-    this.sent.push(JSON.parse(data) as ServerMessage);
+  send(data: string | ArrayBuffer): void {
+    if (typeof data === 'string') this.sent.push(JSON.parse(data) as ServerMessage);
+    else this.binary.push(data);
   }
   close(code?: number, reason?: string): void {
     this.closed = { code, reason };
@@ -37,6 +39,9 @@ const makeHarness = () => {
 
 const hello = (version = PROTOCOL_VERSION) =>
   JSON.stringify({ type: 'hello', protocolVersion: version, name: 'Tester', character: 'hero' });
+
+const moveCmd = (seq: number) =>
+  makeInputCmd(seq, seq, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: false });
 
 describe('ClientConnection handshake', () => {
   it('rejects a protocol version mismatch with an error and closes', () => {
@@ -65,6 +70,7 @@ describe('ClientConnection handshake', () => {
     expect(welcome.resumeToken).toMatch(/^rt_/);
     expect(welcome.session.code).toHaveLength(6);
     expect(welcome.session.members).toHaveLength(1);
+    expect(welcome.session.members[0]!.entityId).toBeGreaterThan(0);
     expect(typeof welcome.serverTime).toBe('number');
   });
 
@@ -107,20 +113,52 @@ describe('ClientConnection resilience (malformed messages)', () => {
     const { connect } = makeHarness();
     const { socket, conn } = connect();
     conn.handleRaw(hello());
-    conn.handleRaw(JSON.stringify({ type: 'transformUpdate', p: ['a', 'b', 'c'], r: 0, a: 0 }));
     conn.handleRaw(JSON.stringify({ type: 'noSuchType' }));
-    conn.handleRaw(JSON.stringify({ type: 'transformUpdate', p: [1, 2, Infinity], r: 0, a: 0 }));
+    conn.handleRaw(JSON.stringify({ type: 'hello', protocolVersion: 'x' }));
     expect(socket.ofType('error').every((e) => e.code === 'bad_message')).toBe(true);
-    expect(socket.ofType('error')).toHaveLength(3);
+    expect(socket.ofType('error')).toHaveLength(2);
     expect(socket.closed).toBeNull();
   });
 
-  it('transformUpdate outside a session is refused with not_in_session', () => {
+  it('REJECTS client transforms: the v1 transformUpdate is no longer in the protocol', () => {
     const { connect } = makeHarness();
     const { socket, conn } = connect();
     conn.handleRaw(hello());
-    conn.handleRaw(JSON.stringify({ type: 'transformUpdate', p: [0, 0, 0], r: 0, a: 0 }));
-    expect(socket.ofType('error')[0]?.code).toBe('not_in_session');
+    conn.handleRaw(JSON.stringify({ type: 'createSession' }));
+    conn.handleRaw(JSON.stringify({ type: 'transformUpdate', p: [1, 0, 2], r: 0.5, a: 1 }));
+    expect(socket.ofType('error')[0]?.code).toBe('bad_message');
+    // And nothing moved: the avatar stays exactly where the server put it.
+    const e = conn.player!.entity;
+    expect(e.transform!.position[1]).toBe(0);
+    expect(Math.hypot(e.transform!.position[0], e.transform!.position[2])).toBeCloseTo(3.2, 5);
+  });
+});
+
+describe('binary input path', () => {
+  it('routes decoded InputCmds into the player queue', () => {
+    const { connect } = makeHarness();
+    const { conn } = connect();
+    conn.handleRaw(hello());
+    conn.handleRaw(JSON.stringify({ type: 'createSession' }));
+    conn.handleBinary(encodeInputPacket([moveCmd(1), moveCmd(2), moveCmd(3)]));
+    expect(conn.player!.input.depth).toBe(3);
+    // Redundant re-send de-dups.
+    conn.handleBinary(encodeInputPacket([moveCmd(2), moveCmd(3), moveCmd(4)]));
+    expect(conn.player!.input.depth).toBe(4);
+    expect(conn.player!.input.duplicatesDropped).toBe(2);
+  });
+
+  it('drops binary before a session, malformed frames, and wrong types without crashing', () => {
+    const { connect } = makeHarness();
+    const { socket, conn } = connect();
+    conn.handleBinary(encodeInputPacket([moveCmd(1)])); // not in a session
+    conn.handleRaw(hello());
+    conn.handleRaw(JSON.stringify({ type: 'createSession' }));
+    conn.handleBinary(new ArrayBuffer(0));
+    conn.handleBinary(new Uint8Array([99, 1, 2, 3]).buffer); // unknown type byte
+    conn.handleBinary(new Uint8Array([1, 3, 0]).buffer); // truncated MSG_INPUT
+    expect(conn.player!.input.depth).toBe(0);
+    expect(socket.closed).toBeNull();
   });
 });
 
@@ -156,80 +194,7 @@ describe('heartbeat / RTT EWMA', () => {
   });
 });
 
-describe('relay clamps (TEMPORARY Phase 2)', () => {
-  const prevAt = (x: number, z: number, t: number) => ({
-    p: [x, 0, z] as [number, number, number],
-    r: 0,
-    a: 0,
-    t,
-    dirty: false,
-  });
-
-  it('passes plausible movement through unclamped', () => {
-    // 66 ms at 6 u/s sprint = 0.4 u — well inside the allowance.
-    const out = clampRelayTransform(prevAt(0, 0, 1000), { type: 'transformUpdate', p: [0.4, 0, 0], r: 1, a: 1 }, 1066);
-    expect(out.p[0]).toBeCloseTo(0.4);
-    expect(out.r).toBe(1);
-    expect(out.a).toBe(1);
-  });
-
-  it('clamps a teleport to the max plausible displacement', () => {
-    const dtSec = 0.066;
-    const out = clampRelayTransform(
-      prevAt(0, 0, 1000),
-      { type: 'transformUpdate', p: [100, 0, 0], r: 0, a: 0 },
-      1066,
-    );
-    const maxDist = RELAY_MAX_SPEED * RELAY_SPEED_TOLERANCE * dtSec;
-    expect(out.p[0]).toBeLessThanOrEqual(maxDist + 0.01);
-    expect(out.p[0]).toBeGreaterThan(0);
-  });
-
-  it('caps the elapsed-time allowance so long gaps cannot authorize teleports', () => {
-    const out = clampRelayTransform(
-      prevAt(0, 0, 0),
-      { type: 'transformUpdate', p: [100, 0, 0], r: 0, a: 0 },
-      60_000, // a minute later
-    );
-    expect(out.p[0]).toBeLessThanOrEqual(RELAY_MAX_SPEED * RELAY_SPEED_TOLERANCE * 0.5 + 0.01);
-  });
-
-  it('keeps positions inside the hub clearing radius', () => {
-    const out = clampRelayTransform(null, { type: 'transformUpdate', p: [100, 0, 100], r: 0, a: 0 }, 0);
-    expect(Math.hypot(out.p[0], out.p[2])).toBeLessThanOrEqual(HUB_BOUNDS_RADIUS + 1e-6);
-  });
-
-  it('clamps vertical position into the sane range', () => {
-    const out = clampRelayTransform(null, { type: 'transformUpdate', p: [0, 500, 0], r: 0, a: 0 }, 0);
-    expect(out.p[1]).toBeLessThanOrEqual(40);
-  });
-});
-
-describe('transform relay end-to-end (manager level)', () => {
-  it('relays clamped transforms to session peers, excluding the sender', () => {
-    const { connect, clock, manager } = makeHarness();
-    const a = connect();
-    a.conn.handleRaw(hello());
-    a.conn.handleRaw(JSON.stringify({ type: 'createSession' }));
-    const code = a.socket.ofType('welcome')[0]!.session.code;
-    const b = connect();
-    b.conn.handleRaw(hello());
-    b.conn.handleRaw(JSON.stringify({ type: 'joinSession', code }));
-
-    clock.advance(66);
-    a.conn.handleRaw(JSON.stringify({ type: 'transformUpdate', p: [1, 0, 2], r: 0.5, a: 1 }));
-    flushTransforms(manager);
-
-    const bBatches = b.socket.ofType('transformBatch');
-    expect(bBatches).toHaveLength(1);
-    expect(bBatches[0]!.transforms[0]).toMatchObject({ id: a.conn.player!.id, p: [1, 0, 2], r: 0.5, a: 1 });
-    // Sender got no echo of its own transform.
-    expect(a.socket.ofType('transformBatch')).toHaveLength(0);
-    // Dirty flag cleared — second flush without updates sends nothing.
-    flushTransforms(manager);
-    expect(b.socket.ofType('transformBatch')).toHaveLength(1);
-  });
-
+describe('lifecycle', () => {
   it('disconnect removes the player and notifies the peer', () => {
     const { connect } = makeHarness();
     const a = connect();

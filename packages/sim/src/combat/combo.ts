@@ -30,16 +30,18 @@ export interface ComboMove {
   cancelAt: number;
   /**
    * Root motion: forward distance (world units) the swing itself carries the character.
-   * MUTABLE — the leva "Attack · lunge" panel writes here live; bake tuned values back.
+   * FROZEN sim data (Phase 3): the server and every client must integrate the identical
+   * lunge or reconciliation fires corrections — never mutate at runtime. (The old leva
+   * "Attack · lunge" live panel is gone for this reason; tune here, in source.)
    */
-  lungeDist: number;
+  readonly lungeDist: number;
   /** Mocap clip this move plays. */
   clip: ComboClip;
 }
 
 // Every move plays its OWN self-contained single-swing clip (each starts/ends near the
 // guard stance), so chained crossfades line up and mashing reads as a choreographed chain.
-export const COMBO_MOVES: ComboMove[] = [
+export const COMBO_MOVES: readonly ComboMove[] = [
   { key: 'slash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.32, 0.45], cancelAt: 0.88, lungeDist: 1.6, clip: 'light1' },
   { key: 'altSlash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.34, 0.48], cancelAt: 0.88, lungeDist: 1.6, clip: 'light2' },
   { key: 'spin', weight: 'heavy', halfArc: Math.PI, damageMul: 1.15, hitWindow: [0.38, 0.62], cancelAt: 0.9, lungeDist: 0.35, clip: 'spin' },
@@ -56,22 +58,30 @@ export const comboAt = (index: number): ComboMove =>
 // ── Animation-true durations ─────────────────────────────────────────────────
 
 /**
- * Source attack-clip lengths, seconds. Stamped with the REAL durations by AnimatedCharacter
- * when the glbs load; these fallbacks are the measured export lengths (used headless/in tests).
+ * Source attack-clip lengths, seconds — FROZEN sim constants (Phase 3).
+ * These are the MEASURED animation durations of the shipped hero GLBs
+ * (apps/web/public/models/hero/anim-*.glb, max keyframe time of the mixamo.com clip):
+ *   anim-attack-l1.glb 1.6667 s · anim-attack-l2.glb 1.5 s ·
+ *   anim-spin.glb 2.25 s · anim-finisher.glb 2.625 s
+ * Through Phase 2 the client STAMPED these at GLB-load time, which meant a headless
+ * server would compute different swing windows/root motion than its clients and
+ * reconciliation would fight the difference. Never stamp at runtime again — if a clip
+ * is re-exported, re-measure and update HERE.
  */
-export const ATTACK_CLIP_S: Record<ComboClip, number> = {
-  light1: 1.13,
-  light2: 1.2,
-  spin: 1.6,
-  finisher: 1.8,
+export const ATTACK_CLIP_S: Readonly<Record<ComboClip, number>> = {
+  light1: 1.6667,
+  light2: 1.5,
+  spin: 2.25,
+  finisher: 2.625,
 };
 
 /**
- * Attack playback speed per clip. MUTABLE — the leva "Attack · speed" panel writes here live;
- * the renderer reads it at swing start and moveAnimMs reads it when stamping the swing window,
- * so gameplay duration and animation stay locked together while tuning.
+ * Attack playback speed per clip — FROZEN sim constants (Phase 3; the leva
+ * "Attack · speed" live panel is gone: it mutated shared sim data the server can't see).
+ * The renderer reads it at swing start and moveAnimMs derives the swing window from it,
+ * so gameplay duration and animation stay locked together.
  */
-export const ATTACK_TIMESCALE: Record<ComboClip, number> = {
+export const ATTACK_TIMESCALE: Readonly<Record<ComboClip, number>> = {
   // Let the contact and follow-through read. These are still responsive, but no longer
   // compress the mocap so far that the weapon appears to stop short of its full arc.
   light1: 1.4,

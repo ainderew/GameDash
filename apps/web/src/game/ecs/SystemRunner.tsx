@@ -16,7 +16,11 @@ import { playPassChime, playPassFail, playRelicPickup, playWhoosh } from '@/game
 import { RELIC_AIM_MOVE_SCALE } from '@shared/balance';
 import { useInput } from '@/game/input/useInput';
 import { useUIStore, COMBO_WINDOW_MS, type GameScene } from '@/ui/store';
-import { advanceTime, gameNow } from '@/game/feel/time';
+import { advanceTime, gameNow, syncGameTime } from '@/game/feel/time';
+import { createSimStepper } from '@sim/loop';
+import { MS_PER_TICK, SIM_HZ } from '@shared/net/constants';
+import { netGame } from '@/net/netGame';
+import { netClient } from '@/net/client';
 
 /** Bridge ECS player HP → store at ~10Hz, not every frame. */
 const HP_BRIDGE_INTERVAL = 0.1;
@@ -48,6 +52,37 @@ const aimVec = new Vector3();
 const CENTER_NDC = new Vector2(0, 0);
 
 /**
+ * Local input → world-space movement intent. WASD is CAMERA-RELATIVE: rotate the input
+ * axes by the orbit yaw so "forward" is always away from the camera, wherever the mouse
+ * spun it. The vector is pre-normalized (or zero). Shared by BOTH drivers — networked
+ * play quantizes exactly this vector onto the wire.
+ */
+const buildMoveIntent = (i: {
+  forward: boolean;
+  backward: boolean;
+  left: boolean;
+  right: boolean;
+  jump: boolean;
+  dodge: boolean;
+  sprint: boolean;
+}): { moveX: number; moveZ: number; jump: boolean; dodge: boolean; sprint: boolean } => {
+  const ix = (i.right ? 1 : 0) - (i.left ? 1 : 0);
+  const iz = (i.forward ? 1 : 0) - (i.backward ? 1 : 0);
+  const fwdX = -Math.sin(cameraRig.yaw); // ground-projected camera forward
+  const fwdZ = -Math.cos(cameraRig.yaw);
+  const rightX = -fwdZ; // forward × up
+  const rightZ = fwdX;
+  let moveX = rightX * ix + fwdX * iz;
+  let moveZ = rightZ * ix + fwdZ * iz;
+  const len = Math.hypot(moveX, moveZ);
+  if (len > 0) {
+    moveX /= len;
+    moveZ /= len;
+  }
+  return { moveX, moveZ, jump: i.jump, dodge: i.dodge, sprint: i.sprint };
+};
+
+/**
  * World-space ground point (XZ) attacks aim at: the camera ray through the mouse cursor
  * intersected with the horizontal plane at the player's feet. While the pointer is LOCKED
  * (mouse-look mode) there is no cursor — aim through the screen center instead, i.e.
@@ -70,8 +105,49 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
   // Reused per frame — one local player, one intent. (Melee buffering lives ON the
   // entity inside the sim now, so a pressed-but-locked-out swing still never drops.)
   const intents = useRef(new Map<Entity, PlayerIntent>());
+  // Networked driver state: fixed 30 Hz stepper (same code the server ticks with).
+  const stepper = useRef(createSimStepper({ hz: SIM_HZ }));
+  const wasNetworked = useRef(false);
 
   useFrame((state, rawDt) => {
+    // ── DRIVER SPLIT (Phase 3, Task 7) ─────────────────────────────────────────
+    // 'networked': in a connected session (hub scope for now) the server owns the sim;
+    // this client sends InputCmds at a fixed 30 Hz and PREDICTS the local player through
+    // the same stepSim. 'local': solo play keeps the exact per-frame variable-dt path
+    // below — same sim, no transport.
+    const session = useUIStore.getState().session;
+    const networked =
+      mode === 'hub' && session !== undefined && useUIStore.getState().connectionState === 'connected';
+
+    if (networked) {
+      const player = localPlayers.first;
+      if (!player) return;
+      if (!netGame.active) {
+        netGame.start(world, events, player, netClient.sendInput);
+        stepper.current.reset();
+        wasNetworked.current = true;
+      }
+      const i = input.current;
+      stepper.current.advance(Math.min(rawDt, 1 / 20), () => {
+        // Movement intent (camera-relative, pre-normalized) — combat verbs are hub-muted.
+        const intent = buildMoveIntent(i);
+        i.jump = false;
+        i.pass = false;
+        i.melee = false;
+        i.ranged = false;
+        i.parry = false;
+        i.drop = false;
+        netGame.clientTick(intent);
+      });
+      // Renderers read gameNow(): keep it on the tick timeline (+ remainder for smoothness).
+      syncGameTime(netGame.tickTimeMs + stepper.current.alpha * MS_PER_TICK);
+      return;
+    }
+    if (wasNetworked.current) {
+      wasNetworked.current = false;
+      netGame.stop();
+    }
+
     // Advance the game clock; hitstop/slow-mo live inside advanceTime. LOCAL-ONLY:
     // freezing the sim clock is single-player juice — a shared world must never stop
     // (Phase 4 moves hitstop to the presentation layer; the server ticks via @sim/loop).
@@ -87,34 +163,15 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
     // Loadout sync: the sim reads melee reach from the entity, not the zustand store.
     player.weaponReachMul = currentWeapon().reachMul;
 
-    // Local input → PlayerIntent. WASD is CAMERA-RELATIVE: rotate the input axes by the
-    // orbit yaw so "forward" is always away from the camera, wherever the mouse spun it.
-    const ix = (i.right ? 1 : 0) - (i.left ? 1 : 0);
-    const iz = (i.forward ? 1 : 0) - (i.backward ? 1 : 0);
-    const fwdX = -Math.sin(cameraRig.yaw); // ground-projected camera forward
-    const fwdZ = -Math.cos(cameraRig.yaw);
-    const rightX = -fwdZ; // forward × up
-    const rightZ = fwdX;
-    let moveX = rightX * ix + fwdX * iz;
-    let moveZ = rightZ * ix + fwdZ * iz;
-    const len = Math.hypot(moveX, moveZ);
-    if (len > 0) {
-      moveX /= len;
-      moveZ /= len;
-    }
+    // Local input → PlayerIntent (camera-relative WASD via the shared helper).
+    const move = buildMoveIntent(i);
     // Aiming a pass steadies the carrier: 80% speed, still fully mobile.
     if (passAim.aiming) {
-      moveX *= RELIC_AIM_MOVE_SCALE;
-      moveZ *= RELIC_AIM_MOVE_SCALE;
+      move.moveX *= RELIC_AIM_MOVE_SCALE;
+      move.moveZ *= RELIC_AIM_MOVE_SCALE;
     }
 
-    const intent: PlayerIntent = {
-      moveX,
-      moveZ,
-      jump: i.jump,
-      dodge: i.dodge,
-      sprint: i.sprint,
-    };
+    const intent: PlayerIntent = move;
 
     if (mode === 'hub') {
       // The hub is the safe social space — combat/relic inputs are swallowed here and

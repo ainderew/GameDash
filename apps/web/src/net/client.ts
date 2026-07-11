@@ -2,24 +2,26 @@ import { InterpBuffer } from '@sim/interp';
 import type { ServerMessage, SessionMemberInfo } from '@shared/net/messages';
 import { makeHello } from '@shared/net/messages';
 import {
-  ANIM_FLAG_AIRBORNE,
-  ANIM_FLAG_SPRINT,
+  INTERP_DELAY_MS,
+  INTERP_DELAY_MAX_MS,
+  INTERP_DELAY_SHRINK_PER_S,
   PING_EWMA_ALPHA,
-  TRANSFORM_RELAY_HZ,
 } from '@shared/net/constants';
-import { heightAt } from '@sim/terrain/terrainHeight';
-import { localPlayers } from '@/game/ecs/world';
+import { decodeSnapshot, type DecodedEntityRecord } from '@shared/net/snapshot';
+import { DEFAULT_CHARACTER_ID, isCharacterId, type CharacterId } from '@shared/net/character';
 import { useUIStore, type SessionMemberUI } from '@/ui/store';
-import { realtimeUrl, WebSocketTransport, type Transport } from '@/net/transport';
+import { realtimeUrl, createTransport, type Transport } from '@/net/transport';
+import { netGame } from '@/net/netGame';
+import { netStats } from '@/net/netStats';
 
 /**
  * THE session client: connection state machine (idle → connecting → joined), message
- * dispatch, clock-sync EWMA, the remote-transform interpolation registry, and the
- * TEMPORARY 15 Hz local-transform publisher (Phase 3 replaces publishing with binary
- * InputCmds; everything else here survives).
+ * dispatch, the binary snapshot pipeline (Phase 3 — decode, feed the local player's
+ * reconciliation and the remote interp buffers), tick-domain clock sync, and the
+ * adaptive interpolation delay.
  *
  * Doctrine split: session/roster/ping → zustand (UI, inherently ≤1 Hz updates);
- * remote TRANSFORMS → interp buffers read by the render loop (never React state).
+ * remote SNAPSHOT STATE → interp buffers read by the render loop (never React state).
  */
 
 type PendingIntent =
@@ -31,31 +33,57 @@ const toMemberUI = (m: SessionMemberInfo): SessionMemberUI => ({
   id: m.id,
   name: m.name,
   character: m.character,
+  entityId: m.entityId,
   ping: m.ping,
   connected: m.connected,
 });
 
+/** Full remote state per snapshot: keyframe baseline patched by stateless deltas. */
+interface RemoteEntityState {
+  pos: [number, number, number];
+  rotY: number;
+  hp: number;
+  vel: [number, number, number];
+  flags: number;
+}
+
 class NetClient {
   private transport: Transport | null = null;
-  private profile = { name: 'Adventurer', character: 'hero' };
+  private profile: { name: string; character: CharacterId } = { name: 'Adventurer', character: DEFAULT_CHARACTER_ID };
   private pending: PendingIntent | null = null;
   /** Set once joined — reused to resume across reconnects. */
   private joined: { code: string; resumeToken: string } | null = null;
 
-  /** serverTime(ms) − performance.now() EWMA — remote timelines sample through this. */
-  private serverTimeOffset: number | null = null;
+  /** OUR playerId + avatar entity id in the session world (from welcome/roster). */
+  private ownPlayerId: string | null = null;
+  private ownEntityId: number | null = null;
+  /** entityId → playerId for remote records. */
+  private readonly entityOwners = new Map<number, string>();
+
+  // ── Clock sync: server TICK time ↔ performance.now() ────────────────────────
+  /** serverTickTimeMs − performance.now() EWMA (fed by snapshot headers). */
+  private tickTimeOffset: number | null = null;
+  /** Wall-clock fallback offset (heartbeats) — used before the first snapshot. */
+  private wallOffset: number | null = null;
+
+  // ── Adaptive interp delay ────────────────────────────────────────────────────
+  private interpDelay = INTERP_DELAY_MS;
+  private lastSnapshotAt: number | null = null;
+  private readonly arrivalGaps: number[] = [];
+  private lastDelayUpdateAt = 0;
+
+  // ── Snapshot baselines (keyframes), keyed by keyframe tick — keep the last 2 ──
+  private readonly baselines = new Map<number, Map<number, RemoteEntityState>>();
 
   /** Per-remote-player snapshot buffers, keyed by PlayerId. */
   private readonly remoteBuffers = new Map<string, InterpBuffer>();
 
-  private publishTimer: ReturnType<typeof setInterval> | null = null;
-
-  // ── Public API (used by useSession / MainMenu) ─────────────────────────────
-  createSession(name: string, character: string): void {
+  // ── Public API (used by useSession / MainMenu / SystemRunner) ───────────────
+  createSession(name: string, character: CharacterId): void {
     this.start({ kind: 'create' }, name, character);
   }
 
-  joinSession(code: string, name: string, character: string): void {
+  joinSession(code: string, name: string, character: CharacterId): void {
     this.start({ kind: 'join', code }, name, character);
   }
 
@@ -65,22 +93,41 @@ class NetClient {
   }
 
   disconnect(): void {
-    this.stopPublishing();
+    netGame.stop();
     this.transport?.close();
     this.transport = null;
     this.pending = null;
     this.joined = null;
+    this.ownPlayerId = null;
+    this.ownEntityId = null;
+    this.entityOwners.clear();
+    this.baselines.clear();
     this.remoteBuffers.clear();
+    this.tickTimeOffset = null;
+    this.wallOffset = null;
     const store = useUIStore.getState();
     store.setSession(undefined);
     store.setConnectionState('offline');
   }
 
-  /** Estimated server wall-clock "now", ms. Falls back to local time before sync. */
+  /** Send an input packet on the binary hot path (SystemRunner → netGame → here). */
+  sendInput = (data: ArrayBuffer): void => {
+    this.transport?.sendBinary(data);
+  };
+
+  /**
+   * Estimated server "now" on the shared timeline, ms. Server-TICK time once snapshots
+   * flow (the timeline snapshot states are stamped with); wall-clock estimate before.
+   */
   serverNow(): number {
-    return this.serverTimeOffset === null
-      ? Date.now()
-      : performance.now() + this.serverTimeOffset;
+    if (this.tickTimeOffset !== null) return performance.now() + this.tickTimeOffset;
+    if (this.wallOffset !== null) return performance.now() + this.wallOffset;
+    return Date.now();
+  }
+
+  /** Current adaptive interpolation delay, ms (RemotePlayers samples serverNow − this). */
+  interpDelayMs(): number {
+    return this.interpDelay;
   }
 
   /** Interp buffer for a remote player (created lazily) — RemotePlayers samples these. */
@@ -94,15 +141,16 @@ class NetClient {
   }
 
   // ── Connection ──────────────────────────────────────────────────────────────
-  private start(intent: PendingIntent, name: string, character: string): void {
+  private start(intent: PendingIntent, name: string, character: CharacterId): void {
     this.profile = { name, character };
     this.pending = intent;
     useUIStore.getState().setNetError(undefined);
 
     if (!this.transport) {
-      const transport = new WebSocketTransport(realtimeUrl());
+      const transport = createTransport(realtimeUrl());
       this.transport = transport;
       transport.onMessage((msg) => this.handle(msg));
+      transport.onBinary((data) => this.handleBinary(data));
       transport.onState((state) => {
         const store = useUIStore.getState();
         if (state === 'open') {
@@ -138,16 +186,106 @@ class NetClient {
     }
   }
 
-  // ── Dispatch ────────────────────────────────────────────────────────────────
+  // ── Binary hot path: snapshots ──────────────────────────────────────────────
+  private handleBinary(data: ArrayBuffer): void {
+    const snap = decodeSnapshot(data);
+    if (!snap) return;
+    const { header, entities } = snap;
+    const now = performance.now();
+
+    // Clock sync (tick domain): EWMA with outlier rejection — a late packet only ever
+    // pulls the offset down, so clamp wild samples instead of chasing them.
+    const sample = header.serverTimeMs - now;
+    if (this.tickTimeOffset === null) {
+      this.tickTimeOffset = sample;
+    } else if (Math.abs(sample - this.tickTimeOffset) > 500) {
+      this.tickTimeOffset = sample; // genuine clock jump (reconnect/resume)
+    } else {
+      this.tickTimeOffset += 0.1 * (sample - this.tickTimeOffset);
+    }
+    netStats.clockOffsetMs = this.tickTimeOffset;
+
+    // Snapshot arrival stats → adaptive interp delay.
+    this.trackArrival(now);
+
+    // Local player reconciliation — the header ack block is ours by construction.
+    netGame.onAuthoritative(header);
+
+    // Remote entity states: keyframe → new baseline; delta → patch stateless vs baseline.
+    if (header.keyframe) {
+      const base = new Map<number, RemoteEntityState>();
+      for (const rec of entities) base.set(rec.id, recordToState(rec));
+      this.baselines.set(header.baselineTick, base);
+      // Keep the newest two baselines (a delayed delta may reference the previous one).
+      const ticks = [...this.baselines.keys()].sort((a, b) => b - a);
+      for (const t of ticks.slice(2)) this.baselines.delete(t);
+    }
+    const base = this.baselines.get(header.baselineTick);
+    if (!base) {
+      netStats.unknownBaselines += 1;
+      return; // can't resolve deltas — the next keyframe (≤2 s) resyncs
+    }
+    const patched = new Map<number, DecodedEntityRecord>();
+    for (const rec of entities) patched.set(rec.id, rec);
+
+    for (const [id, baseState] of base) {
+      if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: header ack path
+      const playerId = this.entityOwners.get(id);
+      if (!playerId) continue;
+      const rec = patched.get(id);
+      const state: RemoteEntityState = {
+        pos: rec?.pos ?? baseState.pos,
+        rotY: rec?.rotY ?? baseState.rotY,
+        hp: rec?.hp ?? baseState.hp,
+        vel: rec?.vel ?? baseState.vel,
+        flags: rec?.flags ?? baseState.flags,
+      };
+      this.remoteBuffer(playerId).push({
+        t: header.serverTimeMs,
+        pos: [state.pos[0], state.pos[1], state.pos[2]],
+        rotY: state.rotY,
+        flags: state.flags,
+      });
+    }
+  }
+
+  private trackArrival(now: number): void {
+    netStats.snapshotsReceived += 1;
+    if (this.lastSnapshotAt !== null) {
+      const gap = now - this.lastSnapshotAt;
+      this.arrivalGaps.push(gap);
+      if (this.arrivalGaps.length > 64) this.arrivalGaps.shift();
+      const rate = 1000 / Math.max(gap, 1);
+      netStats.snapshotRateHz += 0.1 * (rate - netStats.snapshotRateHz);
+
+      // Adaptive delay: grow instantly to p95 inter-arrival + margin, shrink slowly.
+      const sorted = [...this.arrivalGaps].sort((a, b) => a - b);
+      const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!;
+      const target = Math.min(INTERP_DELAY_MAX_MS, Math.max(INTERP_DELAY_MS, p95 * 1.5 + 20));
+      if (target > this.interpDelay) {
+        this.interpDelay = target;
+      } else {
+        const dtSec = (now - this.lastDelayUpdateAt) / 1000;
+        this.interpDelay = Math.max(target, this.interpDelay - INTERP_DELAY_SHRINK_PER_S * dtSec);
+      }
+      this.lastDelayUpdateAt = now;
+      netStats.interpDelayMs = this.interpDelay;
+    }
+    this.lastSnapshotAt = now;
+  }
+
+  // ── JSON dispatch ───────────────────────────────────────────────────────────
   private handle(msg: ServerMessage): void {
     const store = useUIStore.getState();
     switch (msg.type) {
       case 'welcome': {
         this.pending = null;
         this.joined = { code: msg.session.code, resumeToken: msg.resumeToken };
-        // Seed the clock offset; heartbeats refine it (RTT correction included there).
-        if (this.serverTimeOffset === null) {
-          this.serverTimeOffset = msg.serverTime - performance.now();
+        this.ownPlayerId = msg.playerId;
+        this.syncEntityMap(msg.session.members);
+        // Seed the wall-clock offset; snapshots take over with tick time.
+        if (this.wallOffset === null) {
+          this.wallOffset = msg.serverTime - performance.now();
         }
         store.setSession({
           code: msg.session.code,
@@ -155,20 +293,24 @@ class NetClient {
           members: msg.session.members.map(toMemberUI),
         });
         store.setConnectionState('connected');
-        this.startPublishing();
         return;
       }
 
       case 'playerJoined':
+        this.entityOwners.set(msg.member.entityId, msg.member.id);
         store.addSessionMember(toMemberUI(msg.member));
         return;
 
       case 'playerLeft':
         store.removeSessionMember(msg.playerId);
         this.remoteBuffers.delete(msg.playerId);
+        for (const [entityId, owner] of this.entityOwners) {
+          if (owner === msg.playerId) this.entityOwners.delete(entityId);
+        }
         return;
 
       case 'sessionState': {
+        this.syncEntityMap(msg.members);
         // ~1 Hz roster/ping refresh — the PingCard's data source for OTHER members.
         const ownId = store.session?.playerId;
         const own = store.session?.members.find((m) => m.id === ownId);
@@ -183,24 +325,26 @@ class NetClient {
         return;
       }
 
-      case 'transformBatch':
-        // TEMPORARY Phase 2 relay input — feeds the interpolation buffers.
-        for (const tf of msg.transforms) {
-          this.remoteBuffer(tf.id).push({ t: tf.t, pos: tf.p, rotY: tf.r, flags: tf.a });
-        }
+      case 'impulse': {
+        // Owner copies carry the replay seq; remote shoves arrive via snapshots anyway.
+        if (msg.seq !== undefined) netGame.onImpulse(msg.seq, msg.impulse);
         return;
+      }
 
       case 'ping': {
         this.transport?.send({ type: 'pong', t: msg.t });
         // Own ping display updates on EVERY heartbeat (spec: "from every pong").
-        if (msg.yourPing !== null) store.setOwnPing(Math.round(msg.yourPing));
-        // Clock sync EWMA: server stamped t at send; it is ~halfRtt old on arrival.
+        if (msg.yourPing !== null) {
+          store.setOwnPing(Math.round(msg.yourPing));
+          netStats.pingMs = msg.yourPing;
+        }
+        // Wall-clock sync EWMA (pre-snapshot fallback only).
         const halfRtt = (msg.yourPing ?? 0) / 2;
         const sample = msg.t + halfRtt - performance.now();
-        this.serverTimeOffset =
-          this.serverTimeOffset === null
+        this.wallOffset =
+          this.wallOffset === null
             ? sample
-            : this.serverTimeOffset + PING_EWMA_ALPHA * (sample - this.serverTimeOffset);
+            : this.wallOffset + PING_EWMA_ALPHA * (sample - this.wallOffset);
         return;
       }
 
@@ -219,28 +363,25 @@ class NetClient {
     }
   }
 
-  // ── TEMPORARY Phase 2: 15 Hz local transform publisher (Phase 3: InputCmds) ──
-  private startPublishing(): void {
-    if (this.publishTimer) return;
-    this.publishTimer = setInterval(() => {
-      const store = useUIStore.getState();
-      if (store.scene !== 'hub' || store.screen !== 'playing') return;
-      const player = localPlayers.first;
-      if (!player?.transform || !player.velocity) return;
-      const [x, y, z] = player.transform.position;
-      const speed = Math.hypot(player.velocity.linear[0], player.velocity.linear[2]);
-      let flags = 0;
-      if (speed > 4.4) flags |= ANIM_FLAG_SPRINT;
-      if (y > heightAt(x, z) + 0.06) flags |= ANIM_FLAG_AIRBORNE;
-      this.transport?.send({ type: 'transformUpdate', p: [x, y, z], r: player.transform.rotationY, a: flags });
-    }, 1000 / TRANSFORM_RELAY_HZ);
-  }
-
-  private stopPublishing(): void {
-    if (this.publishTimer) clearInterval(this.publishTimer);
-    this.publishTimer = null;
+  private syncEntityMap(members: SessionMemberInfo[]): void {
+    for (const m of members) {
+      this.entityOwners.set(m.entityId, m.id);
+      if (m.id === this.ownPlayerId) this.ownEntityId = m.entityId;
+    }
   }
 }
 
+/** Sanity-check a wire character string into a renderable id. */
+export const characterIdOf = (raw: string): CharacterId =>
+  isCharacterId(raw) ? raw : DEFAULT_CHARACTER_ID;
+
 /** The client-singleton session connection (one per tab, like the ECS world). */
 export const netClient = new NetClient();
+
+const recordToState = (rec: DecodedEntityRecord): RemoteEntityState => ({
+  pos: rec.pos ?? [0, 0, 0],
+  rotY: rec.rotY ?? 0,
+  hp: rec.hp ?? 0,
+  vel: rec.vel ?? [0, 0, 0],
+  flags: rec.flags ?? 0,
+});

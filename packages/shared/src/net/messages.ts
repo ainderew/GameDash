@@ -1,16 +1,20 @@
 import { z } from 'zod';
 import type { PlayerId } from '../types';
 import { PROTOCOL_VERSION } from './constants';
+import { CHARACTER_IDS, type CharacterId } from './character';
 
 /**
- * Protocol v1 control messages — JSON envelopes for everything in Phase 2 (the binary
- * hot path arrives in Phase 3). CLIENT → SERVER messages carry zod schemas because the
- * browser is hostile: the server safe-parses every inbound frame and never trusts shape.
- * SERVER → CLIENT messages are plain interfaces — clients import the *types* only, so
- * zod stays out of the web bundle's hot path.
+ * Protocol v2 control messages — JSON envelopes for the reliable channel. The hot path
+ * (InputCmds, snapshots) is BINARY and lives in ./input.ts + ./snapshot.ts. CLIENT →
+ * SERVER messages carry zod schemas because the browser is hostile: the server
+ * safe-parses every inbound frame and never trusts shape. SERVER → CLIENT messages are
+ * plain interfaces — clients import the *types* only, so zod stays out of the web
+ * bundle's hot path.
+ *
+ * Phase 3 note: the Phase 2 transform relay (`transformUpdate`/`transformBatch`) is GONE.
+ * Clients send intent, never state — a v1 client's transformUpdate now fails schema
+ * validation outright (the server rejects client transforms by construction).
  */
-
-const vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 
 // ── Client → Server ──────────────────────────────────────────────────────────
 
@@ -18,8 +22,7 @@ export const helloSchema = z.object({
   type: z.literal('hello'),
   protocolVersion: z.number().int(),
   name: z.string().min(1).max(24),
-  /** PlayerCharacterId on the client; opaque string on the wire. */
-  character: z.string().min(1).max(32),
+  character: z.enum(CHARACTER_IDS),
 });
 
 export const createSessionSchema = z.object({ type: z.literal('createSession') });
@@ -33,17 +36,6 @@ export const joinSessionSchema = z.object({
 
 export const leaveSessionSchema = z.object({ type: z.literal('leaveSession') });
 
-/** TEMPORARY (Phase 2 hub relay) — Phase 3 replaces this with binary InputCmds. */
-export const transformUpdateSchema = z.object({
-  type: z.literal('transformUpdate'),
-  /** Position, world units. */
-  p: vec3,
-  /** Y-axis facing, radians. */
-  r: z.number().finite(),
-  /** ANIM_FLAG_* bitmask. */
-  a: z.number().int().nonnegative().max(0xff),
-});
-
 export const pongSchema = z.object({
   type: z.literal('pong'),
   /** Echo of ping.t (server wall-clock ms) — the server derives RTT from it. */
@@ -55,16 +47,14 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   createSessionSchema,
   joinSessionSchema,
   leaveSessionSchema,
-  transformUpdateSchema,
   pongSchema,
 ]);
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HelloMessage = z.infer<typeof helloSchema>;
-export type TransformUpdateMessage = z.infer<typeof transformUpdateSchema>;
 
 /** Convenience for building a spec-correct hello. */
-export const makeHello = (name: string, character: string): HelloMessage => ({
+export const makeHello = (name: string, character: CharacterId): HelloMessage => ({
   type: 'hello',
   protocolVersion: PROTOCOL_VERSION,
   name,
@@ -76,7 +66,9 @@ export const makeHello = (name: string, character: string): HelloMessage => ({
 export interface SessionMemberInfo {
   id: PlayerId;
   name: string;
-  character: string;
+  character: CharacterId;
+  /** The member's avatar entity id inside the session world — snapshot records use it. */
+  entityId: number;
   /** EWMA RTT in ms; null until the first heartbeat round-trip completes. */
   ping: number | null;
   connected: boolean;
@@ -110,27 +102,32 @@ export interface SessionStateMessage {
   serverTime: number;
 }
 
-export interface RelayedTransform {
-  id: PlayerId;
-  p: [number, number, number];
-  r: number;
-  a: number;
-  /** Server wall-clock ms when this transform was accepted — the interp timeline. */
-  t: number;
-}
-
-/** TEMPORARY (Phase 2 hub relay) — batched peer transforms at TRANSFORM_RELAY_HZ. */
-export interface TransformBatchMessage {
-  type: 'transformBatch';
-  transforms: RelayedTransform[];
-}
-
 export interface PingMessage {
   type: 'ping';
   /** Server wall-clock ms at send. Client echoes it back in pong. */
   t: number;
   /** The recipient's own EWMA RTT as of the last round-trip (null before the first). */
   yourPing: number | null;
+}
+
+/**
+ * A server-initiated force on an entity (knockback, stagger shove, catch shockwave),
+ * applied by the server sim at `tick`. The owning client applies it immediately AND
+ * injects it into its prediction replay stream keyed by tick, so reconciliation replays
+ * it alongside inputs instead of fighting it (no-rubberband contract #3).
+ */
+export interface ImpulseMessage {
+  type: 'impulse';
+  tick: number;
+  entityId: number;
+  /** World units/sec: XZ enters the knockback decay, Y adds to vertical velocity. */
+  impulse: [number, number, number];
+  /**
+   * Present ONLY on the copy sent to the entity's owner: the input seq the impulse is
+   * applied before (server-known, so the client keys its replay stream without
+   * tick↔seq estimation error).
+   */
+  seq?: number;
 }
 
 export type NetErrorCode =
@@ -153,6 +150,6 @@ export type ServerMessage =
   | PlayerJoinedMessage
   | PlayerLeftMessage
   | SessionStateMessage
-  | TransformBatchMessage
   | PingMessage
+  | ImpulseMessage
   | ErrorMessage;

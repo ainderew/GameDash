@@ -126,4 +126,62 @@ export class InterpBuffer {
   clear(): void {
     this.entries = [];
   }
+
+  /** Velocity of the newest buffered segment, units/sec (dead-reckoning input). */
+  latestVelocity(): Vector3Tuple {
+    const n = this.entries.length;
+    if (n < 2) return [0, 0, 0];
+    const a = this.entries[n - 2]!;
+    const b = this.entries[n - 1]!;
+    const dtSec = Math.max((b.t - a.t) / 1000, 1e-6);
+    return [
+      (b.pos[0] - a.pos[0]) / dtSec,
+      (b.pos[1] - a.pos[1]) / dtSec,
+      (b.pos[2] - a.pos[2]) / dtSec,
+    ];
+  }
 }
+
+export interface UnderrunPolicy {
+  /** Overrun ≤ this: hold the last snapshot (a beat of stillness beats a guess). */
+  holdMs: number;
+  /** Then dead-reckon on the last segment velocity for at most this long. */
+  deadReckonMs: number;
+}
+
+/**
+ * Buffer-underrun sampling (Phase 3, Task 5): when `renderT` runs past the newest
+ * snapshot (a late/stalled snapshot stream), degrade gracefully —
+ *   hold ≤ holdMs → dead-reckon on last velocity ≤ deadReckonMs → hold forever.
+ * Never wild extrapolation: the dead-reckon window is bounded and velocity-linear.
+ * Inside the buffered range this is exactly `buffer.sample`.
+ */
+export const sampleWithUnderrunPolicy = (
+  buffer: InterpBuffer,
+  renderT: number,
+  policy: UnderrunPolicy,
+): InterpSample | null => {
+  const newest = buffer.latest;
+  if (!newest) return null;
+  const overrunMs = renderT - newest.t;
+  if (overrunMs <= 0) return buffer.sample(renderT);
+
+  const held = buffer.sample(newest.t);
+  if (!held) return null;
+  if (overrunMs <= policy.holdMs) return held; // phase 1: hold
+
+  // Phase 2: dead-reckon from the hold point, capped; phase 3: hold the capped point.
+  const drMs = Math.min(overrunMs - policy.holdMs, policy.deadReckonMs);
+  const vel = buffer.latestVelocity();
+  const dtSec = drMs / 1000;
+  return {
+    pos: [
+      held.pos[0] + vel[0] * dtSec,
+      held.pos[1] + vel[1] * dtSec,
+      held.pos[2] + vel[2] * dtSec,
+    ],
+    rotY: held.rotY,
+    flags: held.flags,
+    velocity: drMs < policy.deadReckonMs ? vel : [0, 0, 0],
+  };
+};

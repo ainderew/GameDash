@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerMessage } from '@shared/net/messages';
-import { SESSION_GC_GRACE_MS } from '@shared/net/constants';
-import { SessionManager, type PeerLink } from './session';
+import { MS_PER_TICK, POSITION_HISTORY_TICKS, SESSION_GC_GRACE_MS } from '@shared/net/constants';
+import { decodeSnapshot } from '@shared/net/snapshot';
+import { makeInputCmd } from '@shared/net/input';
+import { SessionManager, type PeerLink, type PlayerProfile } from './session';
 import { silentLogger } from './log';
 
 class FakeLink implements PeerLink {
   messages: ServerMessage[] = [];
+  binary: ArrayBuffer[] = [];
   send(msg: ServerMessage): void {
     this.messages.push(msg);
+  }
+  sendBinary(data: ArrayBuffer): void {
+    this.binary.push(data);
   }
   ofType<T extends ServerMessage['type']>(type: T) {
     return this.messages.filter((m) => m.type === type) as Extract<ServerMessage, { type: T }>[];
   }
 }
 
-const profile = (name: string) => ({ name, character: 'hero' });
+const profile = (name: string): PlayerProfile => ({ name, character: 'hero' });
 
 const makeManager = () => {
   let t = 1_000_000;
@@ -115,5 +121,95 @@ describe('SessionManager', () => {
       expect(rejoin.player.id).not.toBe(player.id);
       expect(rejoin.resumed).toBe(false);
     }
+  });
+});
+
+describe('Session authoritative sim (Phase 3)', () => {
+  const dt = MS_PER_TICK / 1000;
+
+  it('spawns an avatar entity on join and despawns it on leave', () => {
+    const { manager } = makeManager();
+    const { session, player } = manager.createSession(profile('Ana'), new FakeLink());
+    expect(player.entity.id).toBeGreaterThan(0);
+    expect(session.world.with('playerControlled').entities).toHaveLength(1);
+    const join = manager.joinSession(session.code, profile('Ben'), new FakeLink());
+    expect(session.world.with('playerControlled').entities).toHaveLength(2);
+    if (join.ok) manager.removePlayer(session, join.player.id, 'left');
+    expect(session.world.with('playerControlled').entities).toHaveLength(1);
+  });
+
+  it('keeps each session world FULLY isolated (no cross-session entity leaks)', () => {
+    const { manager } = makeManager();
+    const a = manager.createSession(profile('Ana'), new FakeLink());
+    const b = manager.createSession(profile('Ben'), new FakeLink());
+    expect(a.session.world).not.toBe(b.session.world);
+    expect(a.session.world.with('playerControlled').entities).toHaveLength(1);
+    expect(b.session.world.with('playerControlled').entities).toHaveLength(1);
+    // Step one session 50 ticks with movement — the other world must not move at all.
+    for (let s = 1; s <= 50; s += 1) {
+      a.player.input.offer(makeInputCmd(s, s, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: true }));
+    }
+    const bBefore = [...b.player.entity.transform!.position];
+    for (let t = 0; t < 50; t += 1) a.session.step(dt);
+    expect(a.player.entity.transform!.position[0]).not.toBeCloseTo(0, 1);
+    expect(b.player.entity.transform!.position).toEqual(bBefore);
+    expect(b.session.tick).toBe(0);
+  });
+
+  it('advances lastProcessedSeq only when real cmds are consumed and records 8-tick history', () => {
+    const { manager } = makeManager();
+    const { session, player } = manager.createSession(profile('Ana'), new FakeLink());
+    for (let s = 1; s <= 20; s += 1) {
+      player.input.offer(makeInputCmd(s, s, { moveX: 0, moveZ: 1, jump: false, dodge: false, sprint: false }));
+    }
+    for (let t = 0; t < 20; t += 1) session.step(dt);
+    expect(player.input.lastProcessedSeq).toBeGreaterThan(0);
+    expect(player.ackState.seq).toBe(player.input.lastProcessedSeq);
+    expect(player.posHistory).toHaveLength(POSITION_HISTORY_TICKS);
+    // History is the last 8 CONSECUTIVE ticks.
+    const ticks = player.posHistory.map((h) => h.tick);
+    expect(ticks[ticks.length - 1]).toBe(session.tick);
+    expect(ticks[0]).toBe(session.tick - POSITION_HISTORY_TICKS + 1);
+  });
+
+  it('broadcasts a keyframe snapshot first, then deltas, keyframes on membership change', () => {
+    const { manager } = makeManager();
+    const link = new FakeLink();
+    const { session, player } = manager.createSession(profile('Ana'), link);
+    session.step(dt);
+    session.broadcastSnapshots();
+    const first = decodeSnapshot(link.binary[0]!)!;
+    expect(first.header.keyframe).toBe(true);
+    expect(first.entities.map((e) => e.id)).toContain(player.entity.id);
+
+    session.step(dt);
+    session.broadcastSnapshots();
+    const second = decodeSnapshot(link.binary[1]!)!;
+    expect(second.header.keyframe).toBe(false);
+    expect(second.header.baselineTick).toBe(first.header.serverTick);
+
+    manager.joinSession(session.code, profile('Ben'), new FakeLink());
+    session.broadcastSnapshots();
+    const third = decodeSnapshot(link.binary[2]!)!;
+    expect(third.header.keyframe).toBe(true);
+    expect(third.entities).toHaveLength(2);
+  });
+
+  it('impulse messages carry the replay seq only to the owner', () => {
+    const { manager } = makeManager();
+    const aLink = new FakeLink();
+    const bLink = new FakeLink();
+    const { session, player: ana } = manager.createSession(profile('Ana'), aLink);
+    manager.joinSession(session.code, profile('Ben'), bLink);
+    session.queueImpulse(ana.id, [5, 0, 0]);
+    const aImp = aLink.ofType('impulse')[0]!;
+    const bImp = bLink.ofType('impulse')[0]!;
+    expect(aImp.seq).toBe(ana.input.lastProcessedSeq + 1);
+    expect(bImp.seq).toBeUndefined();
+    expect(aImp.entityId).toBe(ana.entity.id);
+    // Applied at the next tick: the avatar gets shoved.
+    const before = ana.entity.transform!.position[0];
+    session.step(dt);
+    expect(ana.entity.transform!.position[0]).toBeGreaterThan(before);
   });
 });

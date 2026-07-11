@@ -11,6 +11,7 @@ export * from './hooks';
 export * from './step';
 export * from './loop';
 export * from './interp';
+export * from './prediction';
 
 export * from './terrain/terrainHeight';
 export * from './terrain/hubCollision';

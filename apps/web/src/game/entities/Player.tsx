@@ -17,6 +17,7 @@ import { comboAt, type ComboClip } from '@sim/combat/combo';
 import { getWeapon } from '@/game/combat/weapons';
 import { useWeaponStore } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';
+import { netGame } from '@/net/netGame';
 import { feel } from '@/game/feel/config';
 import { playFootstep } from '@/game/feel/audio';
 import { heightAt } from '@sim/terrain/terrainHeight';
@@ -162,7 +163,14 @@ export const Player = ({ playerRef }: Props) => {
     const now = gameNow();
 
     const [x, y, z] = e.transform.position;
-    g.position.set(x, y, z);
+    // Reconciliation residue folds into the PRESENTATION transform only (~100 ms) —
+    // the sim corrected instantly, the mesh never snaps (no-rubberband contract #4).
+    if (netGame.active) {
+      const off = netGame.presentationOffset();
+      g.position.set(x + off[0], y + off[1], z + off[2]);
+    } else {
+      g.position.set(x, y, z);
+    }
     g.rotation.y = e.transform.rotationY;
     playerRef.current = g;
 

@@ -473,49 +473,14 @@ export const Scatter = ({
         true,
         0,
       );
-      // Clover tufts creeping out of the packed ground in clusters.
-      add(
-        [clover1.scene, clover2.scene],
-        scatter(rng, 82, inner, outer, 0.12, 0.3, {
-          avoidPath: false,
-          avoid: plazaAvoid,
-          clump: { size: 7, offset: 4.1, power: 2 },
-        }),
-        false,
-        true,
-        0,
-      );
-      // Low broadleaf weeds pushing through, varied heights.
+      // Only a few low weeds survive around the plaza margins.
       add(
         [plant.scene],
-        scatter(rng, 92, inner, outer, 0.55, 1.5, {
+        scatter(rng, 26, inner, outer, 0.45, 1.15, {
           avoidPath: false,
           avoid: plazaAvoid,
           yStretch: [0.6, 1.5],
           clump: { size: 9, offset: 6.3, bias: 0.1 },
-        }),
-        false,
-        true,
-        0,
-      );
-      // Flower accents so the plaza reads as lived-in, not just weedy.
-      add(
-        [flower3.scene],
-        scatter(rng, 30, inner, outer, 0.24, 0.5, {
-          avoidPath: false,
-          avoid: plazaAvoid,
-          clump: { size: 6, offset: 8.8, power: 2.5 },
-        }),
-        false,
-        true,
-        0,
-      );
-      add(
-        [flower4.scene],
-        scatter(rng, 24, inner, outer, 0.24, 0.5, {
-          avoidPath: false,
-          avoid: plazaAvoid,
-          clump: { size: 6, offset: 12.2, power: 2.5 },
         }),
         false,
         true,

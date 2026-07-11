@@ -90,6 +90,11 @@ export const stepSim = (
   }
 
   if (mode === 'hub') {
+    // Knockback runs in the hub too: nothing HUB-native ever sets it, but server-issued
+    // impulses (ServerImpulse events) enter through `entity.knockback`, and the client's
+    // prediction replay must decay them through the IDENTICAL system the server ran
+    // (no-rubberband contract #3).
+    knockbackSystem(world, dt, now);
     movementSystem(world, dt);
     for (const player of world.with('transform', 'velocity', 'playerControlled')) {
       resolveHubCollisions(player);
