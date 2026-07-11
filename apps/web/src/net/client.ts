@@ -108,7 +108,7 @@ class NetClient {
   }
 
   disconnect(): void {
-    netGame.stop();
+    netGame.resetEpoch();
     this.transport?.close();
     this.transport = null;
     this.pending = null;
@@ -514,6 +514,10 @@ export const characterIdOf = (raw: string): CharacterId =>
 
 /** The client-singleton session connection (one per tab, like the ECS world). */
 export const netClient = new NetClient();
+
+// Dev-only inspection handle (console/tooling): lets a headless harness verify the remote
+// data path (entityOwners, remoteBuffers) even when the R3F canvas can't mount.
+if (import.meta.env.DEV) (window as unknown as { __netClient?: unknown }).__netClient = netClient;
 
 const recordToState = (rec: DecodedEntityRecord): RemoteEntityState => ({
   pos: rec.pos ?? [0, 0, 0],

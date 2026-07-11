@@ -46,7 +46,15 @@ class NetGame {
       mode: 'hub',
     });
     this.send = send;
-    this.seq = 0;
+    // NOTE: seq is deliberately NOT reset here. It must stay strictly ahead of the SERVER's
+    // per-player `lastProcessedSeq`, which persists for the whole session. If we restarted at
+    // 0 on every start() — a transient reconnect flip, or returning to the hub from an
+    // expedition — the server's input queue would DISCARD the fresh low seqs as stale
+    // duplicates (cmd.seq <= lastProcessedSeq), never advancing the avatar, and every ack
+    // would land in prediction's teleport-back branch: the "can't move" freeze. A monotonic
+    // seq across restarts is always accepted (a fresh session's server queue starts at 0, so
+    // any positive seq is new; a resumed session's queue keeps counting up). Reset only on a
+    // full disconnect(), where a brand-new connection genuinely starts a new epoch.
     this.cmdRing.length = 0;
     this.offset = [0, 0, 0];
     netStats.reset();
@@ -57,6 +65,12 @@ class NetGame {
     this.send = null;
     this.cmdRing.length = 0;
     this.offset = [0, 0, 0];
+  }
+
+  /** Full teardown on disconnect: the next connection is a new input epoch, so reset seq. */
+  resetEpoch(): void {
+    this.stop();
+    this.seq = 0;
   }
 
   /** Switch prediction sim mode on a zone transition (hub ⇄ expedition). */
