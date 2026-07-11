@@ -30,8 +30,13 @@ export const HUB_STATIONS: readonly HubStation[] = [
     id: 'expedition',
     title: 'Expedition Gate',
     description: 'Leave the haven and begin the current combat run.',
-    position: [0, -14.4],
-    radius: 3.2,
+    // Centered on the gate model / portal VFX (z = -17). Radius must stay just OUTSIDE the
+    // gate's collision footprint (1.55 + player 0.45 = 2.0 in sim/hubCollision): the player
+    // is walled off at 2.0 from center, so a smaller trigger can never be entered. 2.5 gives
+    // a snug reachable ring — departure fires the moment you press up against the portal,
+    // and nowhere near as early as the old wide zone. (This region is the proximity TRIGGER.)
+    position: [0, -17],
+    radius: 2.5,
     action: 'Begin expedition',
   },
 ] as const;

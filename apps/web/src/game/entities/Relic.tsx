@@ -15,7 +15,7 @@ import { RELIC_GROUND_HOVER } from '@shared/balance';
  * times as golden orbiting shards. Emissives are added at runtime — the exports have none.
  */
 const SHELL_PATH = '/models/relic/shell.glb';
-const CORE_PATH = '/models/relic/core.glb';
+const CORE_PATH = '/models/relic/violet_relic_crystal.glb';
 const RUNE_PATH = '/models/relic/rune_fragment.glb';
 const BASE_PATH = '/models/relic/base.glb';
 useGameModel.preload(SHELL_PATH);
@@ -29,8 +29,8 @@ const RELIC_SPAWN: [number, number] = [1.5, -4];
 /** How fast the carried Relic's visual chases its logical anchor (higher = tighter). */
 const FOLLOW_RATE = 10;
 
-const GOLD = '#fbbf24';
-const TEAL = '#5eead4';
+const GOLD = '#a879ff';
+const TEAL = '#c06cff';
 
 /** Apply an emissive glow to every material under a loaded part. */
 const addGlow = (root: Object3D, hex: string, intensity: number): MeshStandardMaterial | null => {
@@ -169,8 +169,7 @@ export const Relic = () => {
 
   return (
     <group ref={group}>
-      {/* Warm gold spill to match the concept art's energy; the core supplies the teal. */}
-      <pointLight color="#ffcf7d" intensity={4} distance={6} decay={2} />
+      <pointLight color="#a65cff" intensity={5} distance={6.5} decay={2} />
       <group ref={spinner}>
         <RelicModel shardsRef={shards} coreMat={coreMat} />
       </group>

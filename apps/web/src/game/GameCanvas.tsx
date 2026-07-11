@@ -27,6 +27,7 @@ import { DamageNumbers } from '@/game/entities/DamageNumbers';
 import { SystemRunner } from '@/game/ecs/SystemRunner';
 import { ThirdPersonCamera } from '@/game/camera/ThirdPersonCamera';
 import { SocialHub } from '@/game/world/SocialHub';
+import { AmbientAudio } from '@/game/feel/AmbientAudio';
 import { useUIStore } from '@/ui/store';
 
 const DEV = import.meta.env.DEV;
@@ -43,62 +44,66 @@ export const GameCanvas = () => {
   const networked = useUIStore((state) => state.session !== undefined);
 
   return (
-    <Canvas
-      shadows="soft"
-      flat
-      dpr={[1, 1.5]}
-      // far must exceed the Sky dome radius (500) or the sky gets clipped and never draws;
-      // fog hides everything past ~300 anyway, so the big far plane costs nothing visually.
-      camera={{ fov: 55, near: 0.1, far: 2000, position: [0, 3, 7] }}
-      gl={{ powerPreference: 'high-performance', antialias: false }}
-      // Dev-only scene handle for console/tooling inspection (e.g. measuring placement).
-      onCreated={(state) => {
-        if (DEV) {
-          const w = window as unknown as { __scene?: unknown; __r3f?: unknown };
-          w.__scene = state.scene;
-          w.__r3f = state;
-        }
-      }}
-    >
-      {/* Bottom-left so it doesn't cover the leva panel (top-right). */}
-      {DEV && scene === 'expedition' && <Perf position="bottom-left" />}
+    <>
+      {/* Periodic ambient world bed (WebAudio + timers, no three.js) — lives outside <Canvas>. */}
+      <AmbientAudio />
+      <Canvas
+        shadows="soft"
+        flat
+        dpr={[1, 1.5]}
+        // far must exceed the Sky dome radius (500) or the sky gets clipped and never draws;
+        // fog hides everything past ~300 anyway, so the big far plane costs nothing visually.
+        camera={{ fov: 55, near: 0.1, far: 2000, position: [0, 3, 7] }}
+        gl={{ powerPreference: 'high-performance', antialias: false }}
+        // Dev-only scene handle for console/tooling inspection (e.g. measuring placement).
+        onCreated={(state) => {
+          if (DEV) {
+            const w = window as unknown as { __scene?: unknown; __r3f?: unknown };
+            w.__scene = state.scene;
+            w.__r3f = state;
+          }
+        }}
+      >
+        {/* Bottom-left so it doesn't cover the leva panel (top-right). */}
+        {DEV && scene === 'expedition' && <Perf position="bottom-left" />}
 
-      <Suspense fallback={null}>
-        <SkyAndLight />
-        <Physics>
-          {scene === 'hub' ? <SocialHub obstacles={obstacles} /> : <Zone obstacles={obstacles} />}
-          <Player playerRef={playerRef} />
-          {/* Session peers — rendered in BOTH the shared hub and the shared expedition. */}
-          {networked && <RemotePlayers />}
-          {/* Networked expedition-gate countdown control (self-gates to a live session). */}
-          {scene === 'hub' && <NetGateInteraction />}
-          {scene === 'expedition' && (
-            <>
-              {/* Server-authoritative monsters (networked) replace the local sim's spawns. */}
-              {networked && <NetworkedWorld />}
-              {/* AI stand-in teammates only in solo; humans fill those slots in a session. */}
-              {!networked && <Teammates />}
-              {networked ? <NetworkedRelic /> : <Relic />}
-              <PassAimUI />
-              <RelicDrainVFX />
-              <SlashFX />
-              <BladeTrail />
-              <AttackArcIndicator />
-              <ImpactFX />
-              <MonsterModels />
-              <MonsterHealthBars />
-              <Projectiles />
-              <Pickups />
-              <DamageNumbers />
-            </>
-          )}
-          {/* Ticks BEFORE all renderer useFrames via negative priority (see SIM_PRIORITY) —
+        <Suspense fallback={null}>
+          <SkyAndLight />
+          <Physics>
+            {scene === 'hub' ? <SocialHub obstacles={obstacles} /> : <Zone obstacles={obstacles} />}
+            <Player playerRef={playerRef} />
+            {/* Session peers — rendered in BOTH the shared hub and the shared expedition. */}
+            {networked && <RemotePlayers />}
+            {/* Networked expedition-gate countdown control (self-gates to a live session). */}
+            {scene === 'hub' && <NetGateInteraction />}
+            {scene === 'expedition' && (
+              <>
+                {/* Server-authoritative monsters (networked) replace the local sim's spawns. */}
+                {networked && <NetworkedWorld />}
+                {/* AI stand-in teammates only in solo; humans fill those slots in a session. */}
+                {!networked && <Teammates />}
+                {networked ? <NetworkedRelic /> : <Relic />}
+                <PassAimUI />
+                <RelicDrainVFX />
+                <SlashFX />
+                <BladeTrail />
+                <AttackArcIndicator />
+                <ImpactFX />
+                <MonsterModels />
+                <MonsterHealthBars />
+                <Projectiles />
+                <Pickups />
+                <DamageNumbers />
+              </>
+            )}
+            {/* Ticks BEFORE all renderer useFrames via negative priority (see SIM_PRIORITY) —
               same-frame input → ECS → animation, no one-frame lag. */}
-          <SystemRunner mode={scene} />
-          <ThirdPersonCamera target={playerRef} obstacles={obstacles} />
-        </Physics>
-        <PostFX />
-      </Suspense>
-    </Canvas>
+            <SystemRunner mode={scene} />
+            <ThirdPersonCamera target={playerRef} obstacles={obstacles} />
+          </Physics>
+          <PostFX />
+        </Suspense>
+      </Canvas>
+    </>
   );
 };

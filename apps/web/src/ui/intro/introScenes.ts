@@ -37,11 +37,17 @@ export interface IntroScene {
   captions: IntroCaptionCue[];
   /** Used until voice-over metadata is available or when audio cannot load. */
   fallbackDurationMs: number;
+  /** Fixed scenes may hand off while a longer narration file continues playing. */
+  durationMode?: 'voice' | 'fixed';
   /** A short visual hold after the final spoken word. */
   tailMs: number;
+  /** Optional faster fade at a scene boundary. */
+  fadeOutMs?: number;
   /** Music-only pre-roll before narration begins. */
   voiceDelayMs: number;
   vo?: string;
+  /** Keep the previous scene's active voice element instead of restarting narration. */
+  continueVoice?: boolean;
   bgm?: string;
   /** BGM level during the dark pre-roll. */
   bgmVolume: number;
@@ -241,8 +247,9 @@ export const INTRO_SCENES: IntroScene[] = [
         text: "We're just the parasites living on the battery fumes.",
       },
     ],
-    fallbackDurationMs: 8_700,
-    tailMs: 800,
+    fallbackDurationMs: 4_600,
+    durationMode: 'fixed',
+    tailMs: 0,
     voiceDelayMs: 420,
     vo: `${INTRO_ROOT}/audio/vo-02.mp3`,
     bgm: `${INTRO_ROOT}/audio/scene1-bgm.mp3`,
@@ -267,6 +274,152 @@ export const INTRO_SCENES: IntroScene[] = [
     reveal: {
       holdMs: 0,
       fadeMs: 520,
+    },
+  },
+  {
+    id: 'scene-3',
+    label: 'Bones and Hearts',
+    layers: [
+      {
+        src: `${INTRO_ROOT}/panel03.webp`,
+        depth: 0.05,
+        fallback: 'linear-gradient(100deg, #171719 0%, #0c111a 48%, #090817 100%)',
+        motion: {
+          durationMs: 4_550,
+          fromX: 0.35,
+          toX: -0.55,
+          fromY: 0.12,
+          toY: -0.18,
+          fromScale: 1.01,
+          toScale: 1.04,
+        },
+      },
+    ],
+    captions: [
+      {
+        start: 0.03,
+        end: 0.62,
+        text: 'When the Titans tore each other apart, they left us their bones... and their hearts.',
+      },
+      {
+        start: 0.6,
+        end: 0.96,
+        text: 'We call them Relics.',
+      },
+    ],
+    fallbackDurationMs: 4_550,
+    durationMode: 'fixed',
+    tailMs: 0,
+    fadeOutMs: 220,
+    voiceDelayMs: 0,
+    continueVoice: true,
+    bgm: `${INTRO_ROOT}/audio/scene1-bgm.mp3`,
+    bgmVolume: 0.52,
+    bgmDuckVolume: 0.3,
+    kenBurns: {
+      fromScale: 1.075,
+      toScale: 1.145,
+      fromX: 0.035,
+      toX: -0.035,
+      fromY: 0.008,
+      toY: -0.006,
+    },
+    glow: 'rgba(100, 78, 190, 0.14)',
+    reveal: {
+      holdMs: 0,
+      fadeMs: 480,
+    },
+  },
+  {
+    id: 'scene-4',
+    label: 'The Vault Relic',
+    layers: [
+      {
+        src: `${INTRO_ROOT}/panel04-bg.webp`,
+        depth: 0.04,
+        fallback: 'radial-gradient(circle at 50% 46%, #18223a 0%, #090d16 42%, #020306 100%)',
+        motion: {
+          durationMs: 12_500,
+          fromX: 0.08,
+          toX: -0.18,
+          fromY: 0.1,
+          toY: -0.22,
+          fromScale: 1.01,
+          toScale: 1.055,
+        },
+      },
+      {
+        src: `${INTRO_ROOT}/panel04-subject.webp`,
+        depth: 0.68,
+        motion: {
+          delayMs: 140,
+          durationMs: 10_800,
+          fromX: 0.75,
+          toX: -0.48,
+          fromY: 0.55,
+          toY: -0.46,
+          fromScale: 1.035,
+          toScale: 1.14,
+        },
+      },
+      {
+        src: `${INTRO_ROOT}/panel04-fx.webp`,
+        depth: 0.38,
+        motion: {
+          durationMs: 9_600,
+          fromX: -0.12,
+          toX: 0.2,
+          fromY: 0.25,
+          toY: -0.38,
+          fromScale: 1.01,
+          toScale: 1.12,
+        },
+        opacityKeys: [
+          { atMs: 0, opacity: 0.72 },
+          { atMs: 1_600, opacity: 1 },
+          { atMs: 3_400, opacity: 0.8 },
+          { atMs: 5_300, opacity: 1 },
+          { atMs: 7_200, opacity: 0.84 },
+          { atMs: 9_600, opacity: 1 },
+        ],
+      },
+    ],
+    captions: [
+      {
+        start: 0.03,
+        end: 0.48,
+        text: 'Infinite energy. One Relic can keep the neon lights of Terminus burning for a decade.',
+      },
+      {
+        start: 0.46,
+        end: 0.8,
+        text: 'The mega-corps will pay anything for them.',
+      },
+      {
+        start: 0.78,
+        end: 0.97,
+        text: "But there's a catch.",
+      },
+    ],
+    fallbackDurationMs: 12_500,
+    tailMs: 900,
+    voiceDelayMs: 320,
+    vo: `${INTRO_ROOT}/audio/vo-04.mp3`,
+    bgm: `${INTRO_ROOT}/audio/scene1-bgm.mp3`,
+    bgmVolume: 0.52,
+    bgmDuckVolume: 0.3,
+    kenBurns: {
+      fromScale: 1.015,
+      toScale: 1.12,
+      fromX: 0,
+      toX: 0,
+      fromY: 0.008,
+      toY: -0.01,
+    },
+    glow: 'rgba(95, 121, 220, 0.22)',
+    reveal: {
+      holdMs: 0,
+      fadeMs: 280,
     },
   },
 ];

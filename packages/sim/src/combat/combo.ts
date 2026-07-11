@@ -41,11 +41,16 @@ export interface ComboMove {
 
 // Every move plays its OWN self-contained single-swing clip (each starts/ends near the
 // guard stance), so chained crossfades line up and mashing reads as a choreographed chain.
+// SNAPPY (character-action) tuning: contact lands early in the clip and the swing can be
+// cancelled into the next move well before the animation fully settles, so mashing reads as a
+// fast, aggressive chain rather than a rooted commitment. `hitWindow` starts are pulled forward
+// (light contact ≈ 200ms from press) and `cancelAt` pulled in so recovery isn't dead time.
+// These are FROZEN sim data (server + every client integrate them identically) — tune HERE.
 export const COMBO_MOVES: readonly ComboMove[] = [
-  { key: 'slash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.32, 0.45], cancelAt: 0.88, lungeDist: 1.6, clip: 'light1' },
-  { key: 'altSlash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.34, 0.48], cancelAt: 0.88, lungeDist: 1.6, clip: 'light2' },
-  { key: 'spin', weight: 'heavy', halfArc: Math.PI, damageMul: 1.15, hitWindow: [0.38, 0.62], cancelAt: 0.9, lungeDist: 0.35, clip: 'spin' },
-  { key: 'uppercut', weight: 'heavy', halfArc: Math.PI / 4, damageMul: 1.7, hitWindow: [0.42, 0.56], cancelAt: 0.92, lungeDist: 1.4, clip: 'finisher' },
+  { key: 'slash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.2, 0.36], cancelAt: 0.5, lungeDist: 1.6, clip: 'light1' },
+  { key: 'altSlash', weight: 'light', halfArc: Math.PI / 3, damageMul: 1, hitWindow: [0.22, 0.38], cancelAt: 0.5, lungeDist: 1.6, clip: 'light2' },
+  { key: 'spin', weight: 'heavy', halfArc: Math.PI, damageMul: 1.15, hitWindow: [0.3, 0.54], cancelAt: 0.62, lungeDist: 0.35, clip: 'spin' },
+  { key: 'uppercut', weight: 'heavy', halfArc: Math.PI / 4, damageMul: 1.7, hitWindow: [0.34, 0.5], cancelAt: 0.68, lungeDist: 1.4, clip: 'finisher' },
 ];
 
 /** After a move's animation ends, how long the player may still press to keep the chain. */
@@ -82,12 +87,14 @@ export const ATTACK_CLIP_S: Readonly<Record<ComboClip, number>> = {
  * so gameplay duration and animation stay locked together.
  */
 export const ATTACK_TIMESCALE: Readonly<Record<ComboClip, number>> = {
-  // Let the contact and follow-through read. These are still responsive, but no longer
-  // compress the mocap so far that the weapon appears to stop short of its full arc.
-  light1: 1.4,
-  light2: 1.4,
-  spin: 1.3,
-  finisher: 1.25,
+  // SNAPPY: lights play fast enough to feel like quick jabs (~1s → ~0.6s felt via the earlier
+  // cancel window), heavies stay a touch weightier for commitment. Pushed up from the earlier
+  // "read the full arc" values toward the character-action feel bar — still short of comical
+  // compression. Read by the renderer at swing start so animation stays locked to gameplay.
+  light1: 1.65,
+  light2: 1.65,
+  spin: 1.45,
+  finisher: 1.35,
 };
 
 // ── Phase timing helpers ─────────────────────────────────────────────────────
@@ -121,9 +128,10 @@ export const lungeSpeed = (m: ComboMove, ageMs: number, mul = 1): number => {
 };
 
 /** How far into the swing (fraction of the full anim) a chain press may cancel into the next move. */
-// Keep nearly all of the outgoing swing visible before a buffered input takes over.
-// The existing input buffer preserves responsiveness even though the handoff is later.
-export const CHAIN_CANCEL_FRAC = 0.86;
+// SNAPPY: the outgoing swing can be cancelled into the next move once it's ~halfway (just past
+// its active window), so a mashed combo flows without waiting out the recovery tail. The FADE_FAST
+// crossfade smooths the handoff; the input buffer still catches presses made during the swing.
+export const CHAIN_CANCEL_FRAC = 0.5;
 
 /**
  * When the NEXT melee press is accepted, ms from swing start: never before the hitbox closes,
@@ -134,3 +142,14 @@ export const chainReadyMs = (m: ComboMove): number => {
   const { end } = moveActiveWindow(m);
   return Math.max(end, moveAnimMs(m) * Math.max(CHAIN_CANCEL_FRAC, m.cancelAt));
 };
+
+/** Short beat after the blade passes before free locomotion may break the recovery tail, ms. */
+export const MOVE_CANCEL_GRACE_MS = 60;
+
+/**
+ * From swing start, ms after which fresh WASD input CANCELS the recovery tail and the player
+ * walks out of the swing (character-action snappiness — a single tap doesn't root you for the
+ * whole clip). Never before the hitbox closes, so a step-out can't erase the blade. Purely
+ * input-driven, so it's identical on server and every client replay (no server-force divergence).
+ */
+export const moveCancelMs = (m: ComboMove): number => moveActiveWindow(m).end + MOVE_CANCEL_GRACE_MS;

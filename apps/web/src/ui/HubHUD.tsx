@@ -40,11 +40,16 @@ export const HubHUD = () => {
         <div className="absolute bottom-20 left-1/2 w-[min(92vw,28rem)] -translate-x-1/2 rounded-xl border border-amber-100/20 bg-[#17120d]/85 px-5 py-3 text-center shadow-2xl backdrop-blur-md">
           <div className="text-sm font-black uppercase tracking-[0.18em] text-amber-100">{station.title}</div>
           <div className="mt-1 text-xs text-white/60">{station.description}</div>
-          {station.action && (
-            <div className="mt-2 text-sm font-semibold text-white/90">
-              <span className="mr-2 inline-flex h-6 min-w-6 items-center justify-center rounded border border-white/20 bg-white/10 px-1.5 text-xs text-amber-200">E</span>
-              {station.action}
-            </div>
+          {/* The gate departs on proximity, so it shows no key prompt; other stations keep the E chip. */}
+          {station.id === 'expedition' ? (
+            <div className="mt-2 text-sm font-semibold text-amber-100/90">Step into the gate to depart</div>
+          ) : (
+            station.action && (
+              <div className="mt-2 text-sm font-semibold text-white/90">
+                <span className="mr-2 inline-flex h-6 min-w-6 items-center justify-center rounded border border-white/20 bg-white/10 px-1.5 text-xs text-amber-200">E</span>
+                {station.action}
+              </div>
+            )
           )}
         </div>
       )}

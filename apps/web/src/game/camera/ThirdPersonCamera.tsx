@@ -1,15 +1,14 @@
 import { useFrame, useThree } from '@react-three/fiber';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Vector3, Raycaster } from 'three';
 import type { Object3D } from 'three';
 import { CAMERA_DAMPING } from '@shared/balance';
 import {
   cameraRig,
-  DIST_MAX,
-  DIST_MIN,
   MOUSE_SENS,
   PITCH_MAX,
   PITCH_MIN,
+  resetCameraRig,
 } from '@/game/camera/cameraRig';
 import { shakeOffset } from '@/game/feel/screenShake';
 import { passAim } from '@/game/combat/passAim';
@@ -53,6 +52,13 @@ export const ThirdPersonCamera = ({ target, obstacles }: Props) => {
   /** 0 = normal framing, 1 = full pass-aim framing; smoothed each frame. */
   const aimBlend = useRef(0);
 
+  // The rig is shared so input and aiming can read it without React churn. Reset that
+  // singleton before the first painted gameplay frame so re-entering never inherits the
+  // previous session's orbit or zoom.
+  useLayoutEffect(() => {
+    resetCameraRig();
+  }, []);
+
   useEffect(() => {
     const canvas = gl.domElement;
     const locked = () => document.pointerLockElement === canvas;
@@ -71,12 +77,11 @@ export const ThirdPersonCamera = ({ target, obstacles }: Props) => {
       cameraRig.pitch = clamp(cameraRig.pitch + e.movementY * sens, PITCH_MIN, PITCH_MAX);
     };
     const onWheel = (e: WheelEvent) => {
-      // While pass-aiming the wheel cycles receivers instead of zooming.
+      // While pass-aiming the wheel cycles receivers. Zoom is locked, so the wheel does
+      // nothing otherwise — the entry boom length is the fixed framing for the session.
       if (passAim.aiming) {
         passAim.cycle += Math.sign(e.deltaY);
-        return;
       }
-      cameraRig.dist = clamp(cameraRig.dist * (1 + e.deltaY * 0.0009), DIST_MIN, DIST_MAX);
     };
 
     canvas.addEventListener('mousedown', onMouseDown);

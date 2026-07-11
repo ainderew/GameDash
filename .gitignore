@@ -25,3 +25,6 @@ assets/raw/*.fbx
 # Local dev/progress screenshots
 /*.png
 .playwright-mcp/
+
+# Scratch: image-generation working dirs + captured dev-server logs
+/tmp/

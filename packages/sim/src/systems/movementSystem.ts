@@ -1,6 +1,6 @@
 import type { World } from 'miniplex';
 import type { Entity } from '../components';
-import { comboAt, lungeSpeed } from '../combat/combo';
+import { comboAt, lungeSpeed, moveCancelMs } from '../combat/combo';
 import {
   DODGE_COOLDOWN_MS,
   DODGE_DISTANCE,
@@ -66,10 +66,22 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     entity.catchRootUntil = 0;
   }
 
-  // Attacking LOCKS the player into the animation: move/turn/jump input is ignored until
-  // the swing finishes. But it's ROOT MOTION, not a dead stop — the swing itself strides
+  // Attacking LOCKS the player into the animation: move/turn/jump input is ignored while
+  // the swing plays. But it's ROOT MOTION, not a dead stop — the swing itself strides
   // forward along facing (lungeSpeed), so heavy moves close gaps instead of feeling stuck.
-  // Only the dodge above breaks out early.
+  // SNAPPY move-cancel: once the blade has passed (moveCancelMs), fresh WASD breaks out of the
+  // recovery tail so a single tap never roots you for the whole clip. Input-driven, so server
+  // and every client replay cancel on the identical tick (no server-force divergence). A dodge
+  // still cancels at ANY point (above).
+  const hasMoveInput = intent.moveX !== 0 || intent.moveZ !== 0;
+  if (
+    now < (entity.attackAnimUntil ?? 0) &&
+    hasMoveInput &&
+    entity.meleeStartedAt !== undefined &&
+    now - entity.meleeStartedAt >= moveCancelMs(comboAt(entity.meleeCombo ?? 0))
+  ) {
+    entity.attackAnimUntil = 0; // walk out of the recovery; weaponSystem already closed the hitbox
+  }
   const rooted = now < (entity.attackAnimUntil ?? 0);
   // Planted for a beat after catching the Relic: zero horizontal velocity so the catch clip
   // plants instead of gliding on leftover run momentum. Ranks below dodge/attack, so either

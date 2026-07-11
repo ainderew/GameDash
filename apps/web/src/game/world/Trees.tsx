@@ -7,21 +7,13 @@ import { heightAt } from '@/game/world/Terrain';
 import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
 
 /**
- * Stylized Nature MegaKit trees: five CommonTree variants for the treeline
- * (3.2–6.3k tris each — the old sculpted trees were ~57k each), plus a couple
- * of huge TwistedTrees as fixed landmarks framing the arena.
+ * Dead tree treeline. A single variant for now (more to be added later); every
+ * placement — scattered treeline and the fixed landmark trees — clones this one
+ * model. Sizes come from per-instance scaling, not distinct source models.
  */
-const MODEL_PATHS = [
-  '/models/nature/CommonTree_1.gltf',
-  '/models/nature/CommonTree_2.gltf',
-  '/models/nature/CommonTree_3.gltf',
-  '/models/nature/CommonTree_4.gltf',
-  '/models/nature/CommonTree_5.gltf',
-  '/models/nature/TwistedTree_1.gltf', // landmarks only, never in the treeline
-  '/models/nature/TwistedTree_2.gltf',
-];
+const MODEL_PATHS = ['/models/nature/dead_tree.glb'];
 /** How many MODEL_PATHS entries the scattered treeline cycles through. */
-const TREELINE_VARIANTS = 5;
+const TREELINE_VARIANTS = MODEL_PATHS.length;
 
 /** Deterministic PRNG so the treeline looks identical every load. */
 const mulberry32 = (seed: number) => () => {
@@ -49,11 +41,18 @@ interface Placement {
 /** Base height (world units) a tree is normalized to before per-instance scaling. */
 const BASE_HEIGHT = 8;
 
-/** Ancient twisted trees anchoring the arena — normalized then scaled to ~13m. */
+/**
+ * Sink each tree into the terrain by this fraction of its rendered height so the
+ * dirt disk baked into the model's base drops below the grass instead of showing.
+ * Scaled per-instance, so big landmark trees bury the same proportion as small ones.
+ */
+const SINK_FRACTION = 0.06;
+
+/** Ancient trees anchoring the arena — normalized then scaled to ~13m. */
 const LANDMARK_TREES = [
-  { x: 34, z: -32, variant: 5, scale: 1.7, rotY: 0.8 },
-  { x: -40, z: 16, variant: 6, scale: 1.9, rotY: 2.4 },
-  { x: 8, z: 46, variant: 5, scale: 1.55, rotY: 4.4 },
+  { x: 34, z: -32, variant: 0, scale: 1.7, rotY: 0.8 },
+  { x: -40, z: 16, variant: 0, scale: 1.9, rotY: 2.4 },
+  { x: 8, z: 46, variant: 0, scale: 1.55, rotY: 4.4 },
 ];
 
 /** Scatter tree placements in an annulus, skipping the steep peaks. */
@@ -106,18 +105,10 @@ const placeTrees = (count: number, clearRadius: number): Placement[] => {
  * and gently sways (rotation only — no vertex work) to keep the world alive.
  */
 export const Trees = ({ clearRadius = 0 }: { clearRadius?: number }) => {
-  const scenes: Group[] = [
-    useGameModel(MODEL_PATHS[0]!).scene,
-    useGameModel(MODEL_PATHS[1]!).scene,
-    useGameModel(MODEL_PATHS[2]!).scene,
-    useGameModel(MODEL_PATHS[3]!).scene,
-    useGameModel(MODEL_PATHS[4]!).scene,
-    useGameModel(MODEL_PATHS[5]!).scene,
-    useGameModel(MODEL_PATHS[6]!).scene,
-  ];
+  const scenes: Group[] = [useGameModel(MODEL_PATHS[0]!).scene];
   const swayRefs = useRef<(Group | null)[]>([]);
 
-  const placements = useMemo(() => placeTrees(30, clearRadius), [clearRadius]);
+  const placements = useMemo(() => placeTrees(10, clearRadius), [clearRadius]);
 
   // Normalize each source model once: scale to BASE_HEIGHT, feet at the group origin.
   // (yLift is in unscaled model units — the group's scale carries it to world units.)
@@ -172,7 +163,7 @@ export const Trees = ({ clearRadius = 0 }: { clearRadius?: number }) => {
           <group
             key={i}
             ref={(el) => (swayRefs.current[i] = el)}
-            position={[p.x, p.y, p.z]}
+            position={[p.x, p.y - BASE_HEIGHT * p.scale * SINK_FRACTION, p.z]}
             rotation={[0, p.rotY, 0]}
             scale={n.baseScale * p.scale}
           >

@@ -15,6 +15,7 @@ import { useGameModel } from '@/lib/loaders';
 import { MutantMonsters } from '@/game/entities/MutantModels';
 import { hitSquash } from '@/game/entities/hitSquash';
 import type { MonsterArchetype } from '@shared/monsters';
+import { MONSTER_ARCHETYPES } from '@shared/monsters';
 import { MAX_MONSTERS } from '@shared/balance';
 import { gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
@@ -35,26 +36,31 @@ const ARCHES: Partial<Record<MonsterArchetype, ArchMeta>> = {
 
 const dummy = new Object3D();
 
-/** Full duration of the attack lunge, ms. */
-const ATTACK_MS = 500;
+/** Follow-through after the blow lands (rear the model back to rest), ms. */
+const ATTACK_RECOVER_MS = 300;
 const smooth = (t: number): number => t * t * (3 - 2 * t);
 
 /**
- * Procedural melee jab keyed on attack progress `at` (0..1): a short anticipation
- * (rear back + crouch), a snappy strike (lunge forward + stretch), then an eased
- * recovery. Returns [forwardFactor, scaleY, scaleXZ]; outside 0..1 it's the rest pose.
+ * Procedural melee jab driven by ABSOLUTE elapsed ms and the archetype's telegraph windup,
+ * so the visible strike connects exactly when the sim lands damage (`attackStartedAt +
+ * windupMs`). The windup rears back then thrusts to full extension at contact; recovery
+ * eases back to rest. Returns [forwardFactor, scaleY, scaleXZ]; outside the window = rest.
  */
-const attackPose = (at: number): [number, number, number] => {
-  if (at < 0 || at > 1) return [0, 1, 1];
-  if (at < 0.22) {
-    const k = smooth(at / 0.22);
-    return [-0.28 * k, 1 - 0.12 * k, 1 + 0.08 * k];
-  }
-  if (at < 0.42) {
-    const k = smooth((at - 0.22) / 0.2);
+const attackPose = (elapsedMs: number, windupMs: number): [number, number, number] => {
+  const total = windupMs + ATTACK_RECOVER_MS;
+  if (elapsedMs < 0 || elapsedMs > total) return [0, 1, 1];
+  if (elapsedMs < windupMs) {
+    // Anticipation: rear back over the first ~55% of the tell, then snap toward contact.
+    const w = elapsedMs / windupMs;
+    if (w < 0.55) {
+      const k = smooth(w / 0.55);
+      return [-0.28 * k, 1 - 0.12 * k, 1 + 0.08 * k];
+    }
+    const k = smooth((w - 0.55) / 0.45);
     return [-0.28 + 1.28 * k, 0.88 + 0.24 * k, 1.08 - 0.16 * k];
   }
-  const k = smooth((at - 0.42) / 0.58);
+  // Recovery: from full forward extension at contact back to rest.
+  const k = smooth((elapsedMs - windupMs) / ATTACK_RECOVER_MS);
   return [1 - k, 1.12 - 0.12 * k, 0.92 + 0.08 * k];
 };
 
@@ -122,6 +128,7 @@ const withFlash = (geometry: BufferGeometry, src: Material): Material => {
 const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
   const meta = ARCHES[archetype]!;
   const { scene } = useGameModel(meta.path);
+  const windupMs = MONSTER_ARCHETYPES[archetype].attackWindupMs;
   const ref = useRef<InstancedMesh>(null);
   const { geometry, material } = useMemo(() => {
     const baked = bake(scene.clone(true));
@@ -140,9 +147,10 @@ const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
       if (i >= MAX_MONSTERS) break;
       const [x, , z] = m.transform.position;
 
-      // Attack lunge: shove the model toward whoever it faces + squash/stretch.
-      const at = (now - (m.attackStartedAt ?? -1e9)) / ATTACK_MS;
-      const [fwd, sy, sxz] = attackPose(at);
+      // Attack lunge: shove the model toward whoever it faces + squash/stretch. Elapsed ms
+      // since the telegraph began; the strike extension peaks at `windupMs` (= sim hit time).
+      const elapsed = now - (m.attackStartedAt ?? -1e9);
+      const [fwd, sy, sxz] = attackPose(elapsed, windupMs);
       // Hit reaction squash multiplies on top of the attack pose.
       const [hsXZ, hsY] = hitSquash(m, now);
       const lunge = fwd * meta.height * 0.5;

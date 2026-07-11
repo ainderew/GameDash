@@ -159,7 +159,7 @@ const SceneView = ({ scene, durationMs, failedLayers, startedAt, reducedMotion, 
       const spokenDurationMs = Math.max(1, durationMs - scene.tailMs - scene.voiceDelayMs);
       const captionProgress = clamp01((elapsed - scene.voiceDelayMs) / spokenDurationMs);
       const eased = smoothstep(progress);
-      const fadeOut = clamp01((durationMs - elapsed) / FADE_MS);
+      const fadeOut = clamp01((durationMs - elapsed) / (scene.fadeOutMs ?? FADE_MS));
 
       if (rootRef.current) rootRef.current.style.opacity = String(fadeOut);
 
@@ -355,6 +355,7 @@ export const IntroSequence = () => {
 
       const voice = session.voice;
       const updateDuration = () => {
+        if (scene.durationMode === 'fixed') return;
         const seconds = voice?.duration;
         if (seconds && Number.isFinite(seconds)) {
           setDurationMs(scene.voiceDelayMs + seconds * 1000 + scene.tailMs);

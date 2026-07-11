@@ -2,6 +2,7 @@
 import { World } from 'miniplex';
 import type { Entity } from '../components';
 import { applyPlayerIntent, movementSystem } from './movementSystem';
+import { comboAt, moveCancelMs } from '../combat/combo';
 import { DODGE_IFRAME_MS, JUMP_IMPULSE, PLAYER_SPEED, PLAYER_WALK_SPEED } from '@shared/balance';
 
 const makePlayer = (): Entity => ({
@@ -105,15 +106,23 @@ describe('applyPlayerIntent', () => {
     expect(e.transform!.rotationY).toBe(0); // no turning
   });
 
-  it('holds ground through the recovery tail (lunge only through the active window)', () => {
+  it('roots through the active window, then WASD move-cancels the recovery tail', () => {
     const e = makePlayer();
     e.meleeCombo = 0;
     e.meleeStartedAt = 1000;
     e.attackAnimUntil = 2000;
-    // Well past windup+active for a light move, still mid-anim.
-    applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: false }, 1600);
+    const cancelAt = 1000 + moveCancelMs(comboAt(0));
+
+    // Just BEFORE the blade passes: still rooted, held in place — a step-out can't erase the hit.
+    applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: false }, cancelAt - 30);
+    expect(e.attackAnimUntil).toBe(2000);
     expect(e.velocity!.linear[0]).toBe(0);
     expect(e.velocity!.linear[2]).toBe(0);
+
+    // Just AFTER: fresh WASD breaks the recovery tail and the player walks out (snappy).
+    applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: false }, cancelAt + 10);
+    expect(e.attackAnimUntil).toBe(0);
+    expect(Math.abs(e.velocity!.linear[0])).toBeCloseTo(PLAYER_WALK_SPEED);
   });
 
   it('unroots once the swing window lapses', () => {

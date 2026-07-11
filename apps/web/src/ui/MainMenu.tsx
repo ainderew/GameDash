@@ -4,7 +4,7 @@ import { AnimatedCharacter } from '@/game/entities/AnimatedCharacter';
 import type { CharState } from '@/game/entities/AnimatedCharacter';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
 import { feel } from '@/game/feel/config';
-import { resumeAudio } from '@/game/feel/audio';
+import { resumeAudio, syncAudioSettings } from '@/game/feel/audio';
 import { beginIntroAudio, preloadIntroImages } from '@/ui/intro/introAudio';
 import { startMenuMusic, stopMenuMusic, syncMenuMusic } from '@/ui/menuMusic';
 import { INTRO_SCENES } from '@/ui/intro/introScenes';
@@ -101,7 +101,8 @@ export const MainMenu = () => {
   const [quitHint, setQuitHint] = useState(false);
 
   // ── Multiplayer: Play Together (Phase 6 Task 1) ────────────────────────────
-  const { session, connectionState, netError, createSession, joinSession, leaveSession } = useSession();
+  const { session, connectionState, netError, createSession, joinSession, leaveSession } =
+    useSession();
   const character = useUIStore((s) => s.playerCharacter);
   const setPlayerCharacter = useUIStore((s) => s.setPlayerCharacter);
   const [mpOpen, setMpOpen] = useState(false);
@@ -227,11 +228,15 @@ export const MainMenu = () => {
 
         <nav className="flex flex-col gap-1">
           <button className={MENU_BUTTON} onClick={play}>
-            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
+            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">
+              ▸
+            </span>
             Play
           </button>
           <button className={MENU_BUTTON} onClick={() => setMpOpen((v) => !v)}>
-            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
+            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">
+              ▸
+            </span>
             Play Together
           </button>
           {mpOpen && (
@@ -281,7 +286,8 @@ export const MainMenu = () => {
                   </button>
 
                   <div className="my-1 flex items-center gap-2 text-[0.6rem] uppercase tracking-[0.3em] text-white/30">
-                    <span className="h-px flex-1 bg-white/15" /> or <span className="h-px flex-1 bg-white/15" />
+                    <span className="h-px flex-1 bg-white/15" /> or{' '}
+                    <span className="h-px flex-1 bg-white/15" />
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -303,14 +309,18 @@ export const MainMenu = () => {
                     </button>
                   </div>
                   {busy && (
-                    <div className="text-xs uppercase tracking-widest text-white/50">Connecting…</div>
+                    <div className="text-xs uppercase tracking-widest text-white/50">
+                      Connecting…
+                    </div>
                   )}
                   {netError && <div className="text-xs text-red-400">{netError}</div>}
                 </>
               ) : (
                 // ── Party lobby: share the code, see who's in, then enter the hub. ──
                 <div className="flex flex-col gap-3">
-                  <div className="text-[0.6rem] uppercase tracking-[0.3em] text-white/45">Party code</div>
+                  <div className="text-[0.6rem] uppercase tracking-[0.3em] text-white/45">
+                    Party code
+                  </div>
                   <button
                     onClick={copyCode}
                     title="Copy code"
@@ -328,12 +338,20 @@ export const MainMenu = () => {
                   </div>
                   <ul className="flex flex-col gap-1">
                     {session.members.map((m) => (
-                      <li key={m.id} className="flex items-center justify-between text-xs text-white/80">
+                      <li
+                        key={m.id}
+                        className="flex items-center justify-between text-xs text-white/80"
+                      >
                         <span className="truncate">
                           {m.name}
-                          {m.id === session.playerId && <span className="text-white/40"> (you)</span>}
+                          {m.id === session.playerId && (
+                            <span className="text-white/40"> (you)</span>
+                          )}
                         </span>
-                        <span className="text-white/40">{PLAYER_CHARACTERS[m.character as PlayerCharacterId]?.label ?? m.character}</span>
+                        <span className="text-white/40">
+                          {PLAYER_CHARACTERS[m.character as PlayerCharacterId]?.label ??
+                            m.character}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -356,7 +374,9 @@ export const MainMenu = () => {
             </div>
           )}
           <button className={MENU_BUTTON} onClick={() => setSettingsOpen((v) => !v)}>
-            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
+            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">
+              ▸
+            </span>
             Settings
           </button>
           {settingsOpen && (
@@ -370,6 +390,7 @@ export const MainMenu = () => {
                     setAudioOn(e.target.checked);
                     feel.audio.enabled = e.target.checked;
                     syncMenuMusic();
+                    syncAudioSettings();
                   }}
                   className="h-4 w-4 accent-amber-400"
                 />
@@ -387,6 +408,7 @@ export const MainMenu = () => {
                     setVolume(v);
                     feel.audio.masterVolume = v;
                     syncMenuMusic();
+                    syncAudioSettings();
                   }}
                   className="w-32 accent-amber-400"
                 />
@@ -400,7 +422,9 @@ export const MainMenu = () => {
             </div>
           )}
           <button className={MENU_BUTTON} onClick={quit}>
-            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">▸</span>
+            <span className="text-amber-400 opacity-0 transition-opacity group-hover:opacity-100">
+              ▸
+            </span>
             Quit Game
           </button>
           {quitHint && (

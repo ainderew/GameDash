@@ -7,12 +7,11 @@ import { events, localPlayers, world } from '@/game/ecs/world';
 import { stepSim, type PlayerIntent } from '@sim/step';
 import type { Entity } from '@sim/components';
 import { impactFxSystem } from '@sim/systems/impactFxSystem';
-import { stereoPanFor } from '@sim/combat/passTargeting';
 import { updatePassControl } from '@/game/combat/passControl';
 import { passAim } from '@/game/combat/passAim';
 import { currentWeapon } from '@/game/combat/weaponStore';
 import { clientSimHooks } from '@/game/feel/simHooks';
-import { playPassChime, playPassFail, playRelicPickup, playWhoosh } from '@/game/feel/audio';
+import { playPassFail, playRelicPickup, playRelicThrow } from '@/game/feel/audio';
 import { RELIC_AIM_MOVE_SCALE } from '@shared/balance';
 import { useInput } from '@/game/input/useInput';
 import { useUIStore, COMBO_WINDOW_MS, type GameScene } from '@/ui/store';
@@ -241,12 +240,8 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
         if (ev.type === 'MaterialCollected') gained += 1;
         else if (ev.type === 'PlayerDowned') store.setHuntFailed(true);
         else if (ev.type === 'RelicPassLaunched') {
-          // Thrower/world feedback: every launch whooshes. Receiver feedback: a soft
-          // chime panned toward where the throw came from (only when WE receive).
-          playWhoosh('light');
-          if (ev.toLocalPlayer && player.transform) {
-            playPassChime(stereoPanFor(player.transform.position, ev.from, cameraRig.yaw));
-          }
+          // Every launch plays the Relic-throw whoosh.
+          playRelicThrow();
         } else if (ev.type === 'RelicPassFailed') {
           playPassFail();
         } else if (ev.type === 'RelicCaught' && ev.byLocalPlayer) {

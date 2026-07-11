@@ -43,16 +43,17 @@ export const beginIntroAudio = (scene: IntroScene, muted = false): IntroAudioSes
   const canReuseBgm = Boolean(
     previous?.bgm && scene.bgm && previous.bgm.src === new URL(scene.bgm, window.location.href).href,
   );
+  const canReuseVoice = Boolean(scene.continueVoice && previous?.voice && !previous.voice.ended);
   if (previous) {
     if (previous.voiceTimer !== undefined) window.clearTimeout(previous.voiceTimer);
     for (const timer of previous.sfxTimers ?? []) window.clearTimeout(timer);
-    for (const audio of [previous.voice, ...(previous.sfx ?? [])]) {
+    for (const audio of [...(canReuseVoice ? [] : [previous.voice]), ...(previous.sfx ?? [])]) {
       audio?.pause();
     }
     if (!canReuseBgm) previous.bgm?.pause();
   }
 
-  const voice = makeAudio(scene.vo);
+  const voice = canReuseVoice ? previous?.voice : makeAudio(scene.vo);
   const bgm = canReuseBgm ? previous?.bgm : makeAudio(scene.bgm, true);
   const sfx = (scene.sfx ?? []).map((cue) => makeAudio(cue.src)!).filter(Boolean);
   if (voice) {
@@ -70,7 +71,7 @@ export const beginIntroAudio = (scene: IntroScene, muted = false): IntroAudioSes
     : bgm?.play().then(() => true) ?? Promise.resolve(true);
   const started = bgmStart.catch(() => false);
   let voiceTimer: number | undefined;
-  const voiceStarted = voice
+  const voiceStarted = voice && !canReuseVoice
     ? new Promise<boolean>((resolve) => {
         voiceTimer = window.setTimeout(() => {
           void voice.play().then(() => resolve(true)).catch(() => resolve(false));

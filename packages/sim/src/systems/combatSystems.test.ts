@@ -10,6 +10,7 @@ import { applyDamage } from './combatHelpers';
 import { createMonster } from './spawnSystem';
 import { EventQueue } from '../events';
 import { MELEE_DAMAGE } from '@shared/balance';
+import { MONSTER_ARCHETYPES } from '@shared/monsters';
 
 const addPlayer = (world: World<Entity>): Entity =>
   world.add({
@@ -36,7 +37,8 @@ describe('weaponSystem melee', () => {
     // runs every frame from boot, so a stale query must still see a later addComponent.
     weaponSystem(world, 999);
 
-    // The hitbox is live only during the active window (after the ~80ms light windup).
+    // The hitbox is live only during the active window (derived from the clip via
+    // moveActiveWindow — a light's contact lands ~200ms in, so 30ms is still windup).
     startMelee(world, player, 1000);
     weaponSystem(world, 1030); // still winding up — no hit yet
     expect(monster.health!.current).toBe(hpStart);
@@ -135,29 +137,89 @@ describe('aiSystem FSM', () => {
     expect(m.velocity!.linear[2]).toBeLessThan(0);
   });
 
-  it('attacks the player when in range and off cooldown', () => {
+  it('telegraphs then lands the hit after the windup (no instant damage)', () => {
     const world = new World<Entity>();
     const player = addPlayer(world);
     const m = world.add(createMonster('chaser', [0, 0, 1]));
+    const windup = MONSTER_ARCHETYPES.chaser.attackWindupMs;
+
+    // First tick in range: the attack is TELEGRAPHED — windup begins, no damage yet.
     aiSystem(world, 0.016, 5000);
-    // chaser is melee → player took damage, monster went on cooldown.
+    expect(m.aiBrain!.state).toBe('attack');
+    expect(m.aiBrain!.strikeAt).toBe(5000 + windup);
+    expect(player.health!.current).toBe(100);
+
+    // After the windup elapses the blow lands and the monster drops to cooldown.
+    aiSystem(world, 0.016, 5000 + windup);
     expect(player.health!.current).toBeLessThan(100);
     expect(m.aiBrain!.state).toBe('cooldown');
+    expect(m.aiBrain!.strikeAt).toBeUndefined();
+  });
+
+  it('whiffs the strike if the player dodges out of range during the windup', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    const m = world.add(createMonster('chaser', [0, 0, 1]));
+    const windup = MONSTER_ARCHETYPES.chaser.attackWindupMs;
+
+    aiSystem(world, 0.016, 5000); // windup begins
+    // Player dashes well clear of attackRange before the blow lands.
+    player.transform!.position[2] = 12;
+    aiSystem(world, 0.016, 5000 + windup);
+
+    expect(player.health!.current).toBe(100); // whiffed — no damage
+    expect(m.aiBrain!.strikeAt).toBeUndefined();
+  });
+
+  it('cancels the pending strike when the monster is staggered mid-windup', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    const m = world.add(createMonster('chaser', [0, 0, 1]));
+    const windup = MONSTER_ARCHETYPES.chaser.attackWindupMs;
+
+    aiSystem(world, 0.016, 5000); // windup begins
+    expect(m.aiBrain!.strikeAt).toBe(5000 + windup);
+
+    // A hit lands on the monster during its tell → staggered → strike is cancelled.
+    m.staggerUntil = 5000 + windup + 100;
+    aiSystem(world, 0.016, 5000 + windup);
+    expect(m.aiBrain!.strikeAt).toBeUndefined();
+    expect(player.health!.current).toBe(100);
+  });
+
+  it('a landed monster hit interrupts the player mid-swing (flinch cancels the attack)', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    const m = world.add(createMonster('chaser', [0, 0, 1]));
+    const windup = MONSTER_ARCHETYPES.chaser.attackWindupMs;
+
+    // Player is mid-swing when the blow lands.
+    startMelee(world, player, 5000);
+    expect(player.attackState).toBeDefined();
+
+    aiSystem(world, 0.016, 5000); // windup begins
+    aiSystem(world, 0.016, 5000 + windup); // strike lands → interrupt
+
+    expect(player.health!.current).toBeLessThan(100);
+    expect(player.attackState).toBeUndefined(); // swing cancelled
+    expect(player.attackAnimUntil ?? 0).toBe(0); // un-rooted
   });
 
   it('a landed monster hit shoves the player away (scaled knockback + stagger)', () => {
     const world = new World<Entity>();
     const player = addPlayer(world);
     world.add(createMonster('chaser', [0, 0, 1])); // attacker at +Z
-    aiSystem(world, 0.016, 5000);
+    const windup = MONSTER_ARCHETYPES.chaser.attackWindupMs;
+    aiSystem(world, 0.016, 5000); // windup begins
+    aiSystem(world, 0.016, 5000 + windup); // strike lands
 
     // Shove points away from the attacker (−Z), scaled by playerScale.
     expect(player.knockback).toBeDefined();
     expect(player.knockback![2]).toBeLessThan(0);
-    expect(player.staggerUntil).toBeGreaterThan(5000);
+    expect(player.staggerUntil).toBeGreaterThan(5000 + windup);
 
     // The knockback system then owns the player's horizontal velocity for the shove.
-    knockbackSystem(world, 0.016, 5001);
+    knockbackSystem(world, 0.016, 5000 + windup + 1);
     expect(player.velocity!.linear[2]).toBeLessThan(0);
   });
 });

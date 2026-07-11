@@ -29,8 +29,12 @@ export const aiSystem = (
   for (const m of world.with('transform', 'aiBrain', 'monster', 'velocity')) {
     const brain = m.aiBrain;
     // Staggered: the monster can't act while its knockback plays out. knockbackSystem
-    // owns its velocity this frame; skip all AI (movement + attacks).
-    if ((m.staggerUntil ?? 0) > now) continue;
+    // owns its velocity this frame; skip all AI (movement + attacks). A hit landed during
+    // the windup CANCELS the pending strike — the player can interrupt a telegraphed blow.
+    if ((m.staggerUntil ?? 0) > now) {
+      brain.strikeAt = undefined;
+      continue;
+    }
     const mp = m.transform.position;
 
     // Nearest living player is this monster's target for the tick.
@@ -46,6 +50,7 @@ export const aiSystem = (
     }
     if (!player) {
       brain.state = 'idle';
+      brain.strikeAt = undefined;
       m.velocity.linear[0] = 0;
       m.velocity.linear[2] = 0;
       continue;
@@ -68,20 +73,46 @@ export const aiSystem = (
     if (!active) {
       // Stand down: hold position and orientation until the player returns.
       brain.state = 'idle';
+      brain.strikeAt = undefined;
       m.velocity.linear[0] = 0;
       m.velocity.linear[2] = 0;
       continue;
     }
 
-    // Engaged: track the player.
+    // Engaged: track the player. During a windup we keep tracking so the tell aims at
+    // the player, but the strike still whiffs if they dodge out of range before it lands.
     m.transform.rotationY = Math.atan2(dx, dz);
+
+    // ── Committed strike (mid-windup) ────────────────────────────────────────
+    // The attack was TELEGRAPHED last time we entered range; now we're locked in until
+    // the blow lands. Hold position through the tell so the anticipation reads.
+    if (brain.strikeAt !== undefined) {
+      brain.state = 'attack';
+      m.velocity.linear[0] = 0;
+      m.velocity.linear[2] = 0;
+      if (now >= brain.strikeAt) {
+        resolveStrike(world, m, player, dx, dz, dist, range, now, hooks);
+        brain.strikeAt = undefined;
+        brain.state = 'cooldown';
+      }
+      continue;
+    }
 
     const offCooldown = now - brain.lastAttackAt >= cooldown;
 
     if (dist > range) {
       brain.state = 'chase';
     } else if (offCooldown) {
+      // Begin the attack: start the telegraph NOW (drives the anticipation pose in the
+      // renderer) and commit to a strike after the windup. Cooldown is gated from windup
+      // start so the attack cadence is windup + cooldown, not instant.
       brain.state = 'attack';
+      brain.lastAttackAt = now;
+      brain.strikeAt = now + (m.attackWindupMs ?? 0);
+      m.attackStartedAt = now; // telegraph anim begins now (replicated via MON_FLAG_ATTACK)
+      m.velocity.linear[0] = 0;
+      m.velocity.linear[2] = 0;
+      continue;
     } else {
       brain.state = 'cooldown';
     }
@@ -95,32 +126,48 @@ export const aiSystem = (
       m.velocity.linear[0] = 0;
       m.velocity.linear[2] = 0;
     }
-
-    // Attack.
-    if (brain.state === 'attack') {
-      brain.lastAttackAt = now;
-      m.attackStartedAt = now; // drives the lunge animation in MonsterModels
-
-      if (m.ranged) {
-        fireMonsterProjectile(world, m, dx, dz, dist, now);
-      } else {
-        // Brutes hit heavy; everything else jabs. Strength scales the player's knockback
-        // (feel.knockback.playerScale shove under the hurt anim) + shake/flash/audio/hitstop.
-        const strength = m.monster === 'brute' ? 'heavy' : 'light';
-        dealDamage(
-          world,
-          player,
-          computeDamage(m.attackDamage ?? 5),
-          now,
-          false,
-          { attacker: m, strength },
-          hooks,
-        );
-      }
-      brain.state = 'cooldown';
-    }
   }
 };
+
+/**
+ * Land a telegraphed melee/ranged attack. Called when the windup elapses. Melee whiffs if
+ * the player dodged out of range during the tell (a small pad keeps grazing hits fair);
+ * ranged always fires (the projectile itself is the dodgeable threat).
+ */
+const resolveStrike = (
+  world: World<Entity>,
+  m: With<Entity, 'transform' | 'aiBrain' | 'monster' | 'velocity'>,
+  player: With<Entity, 'playerControlled' | 'transform' | 'health'>,
+  dx: number,
+  dz: number,
+  dist: number,
+  range: number,
+  now: number,
+  hooks: SimHooks,
+): void => {
+  if (m.ranged) {
+    fireMonsterProjectile(world, m, dx, dz, dist, now);
+    return;
+  }
+  // Dodged out of the telegraph → the swing whiffs. The pad forgives a hair of spacing so
+  // standing at the very edge of range still trades.
+  if (dist > range + STRIKE_RANGE_PAD) return;
+  // Brutes hit heavy; everything else jabs. Strength scales the player's knockback
+  // (feel.knockback.playerScale shove under the hurt anim) + shake/flash/audio/hitstop.
+  const strength = m.monster === 'brute' ? 'heavy' : 'light';
+  dealDamage(
+    world,
+    player,
+    computeDamage(m.attackDamage ?? 5),
+    now,
+    false,
+    { attacker: m, strength },
+    hooks,
+  );
+};
+
+/** Grace distance beyond attackRange at strike time so edge-of-range hits still land. */
+const STRIKE_RANGE_PAD = 0.6;
 
 const fireMonsterProjectile = (
   world: World<Entity>,

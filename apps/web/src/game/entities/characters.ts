@@ -33,6 +33,7 @@ export interface PlayerCharacterDef {
 export const PLAYER_CHARACTERS: Record<PlayerCharacterId, PlayerCharacterDef> = {
   hero: { label: 'Hero', modelPath: '/models/hero/hero.glb', yOffsetAdd: -0.8 },
   druid: { label: 'Druid', modelPath: '/models/druid/druid.glb', yOffsetAdd: -0.8 },
+  trickster: { label: 'Trickster', modelPath: '/models/trickster/trickster.glb', yOffsetAdd: -0.8 },
 };
 
 /** Push a character's baked placement into the live-tunable transform on switch. */

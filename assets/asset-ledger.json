@@ -155,10 +155,10 @@
     {
       "id": "heartwood-haven-hub-set",
       "files": [
-        "apps/web/public/models/hub/roster-lodge.glb",
+        "apps/web/public/models/hub/rest_house.glb",
         "apps/web/public/models/hub/summoning-shrine.glb",
         "apps/web/public/models/hub/expedition-gate.glb",
-        "apps/web/public/models/hub/lantern-curved.glb",
+        "apps/web/public/models/hub/lamp_1.glb",
         "apps/web/public/models/hub/lantern-straight.glb"
       ],
       "source": "user-provided Tripo3D exports",

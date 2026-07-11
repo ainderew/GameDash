@@ -26,14 +26,6 @@ import {
 export type { ByStrength, HitStrength } from '@shared/combat';
 import type { ByStrength, HitStrength } from '@shared/combat';
 
-export interface AttackPhaseTuning {
-  /** Anticipation before the hitbox goes live, ms. The telegraph that makes the strike snap. */
-  windupMs: number;
-  /** Hitbox-live window, ms. */
-  activeMs: number;
-  /** Commitment lockout after the active window, ms. */
-  recoveryMs: number;
-}
 
 export interface FeelConfig {
   // ── 1. HITSTOP (hitpause) ────────────────────────────────────────────────
@@ -113,9 +105,9 @@ export interface FeelConfig {
     masterVolume: number;
   };
 
-  // ── 8. ATTACK PHASES (windup → active → recovery) ────────────────────────
-  /** Phase timings by weight. Individual combo moves pick light or heavy. */
-  phases: ByStrength<AttackPhaseTuning>;
+  // NOTE: swing phase timing (windup → active → recovery) is NOT here. It lives in the frozen
+  // sim constants at packages/sim/src/combat/combo.ts (moveActiveWindow / moveAnimMs), shared
+  // byte-for-byte with the server — duplicating it here would let the two drift.
 
   // ── OPTIONAL: parry ──────────────────────────────────────────────────────
   parry: {
@@ -202,11 +194,6 @@ export const feel: FeelConfig = {
   audio: {
     enabled: true,
     masterVolume: 0.8,
-  },
-
-  phases: {
-    light: { windupMs: 80, activeMs: 90, recoveryMs: 160 },
-    heavy: { windupMs: 300, activeMs: 100, recoveryMs: 400 },
   },
 
   // enabled/windowMs/attackerStunMs pass through to @shared/balance (sim rules);

@@ -58,8 +58,8 @@ const TINT_CELL = 7; // world-units per patch of coherent colour variation
 
 // Root ≈ the average terrain colour at play level (the grassLow→grassHigh splat,
 // Terrain.tsx) — THE trick that melts the tufts into the ground.
-const ROOT_COLOR = '#648832';
-const SSS_COLOR = '#f1c875';
+const ROOT_COLOR = '#282c33';
+const SSS_COLOR = '#9698a0';
 
 interface Variant {
   path: string;
@@ -77,28 +77,28 @@ interface Variant {
 const VARIANTS: Variant[] = [
   {
     path: '/models/grass/Grass_Common_Short.gltf', // 155 tris — the dense base layer
-    count: 3350,
+    count: 1100,
     ringFraction: 0.14,
     scale: [0.52, 0.94],
     yScale: [0.72, 1.18],
   },
   {
     path: '/models/grass/Grass_Common_Tall.gltf', // 326 tris — mid-height fill
-    count: 650,
+    count: 220,
     ringFraction: 0.25,
     scale: [0.48, 0.82],
     yScale: [0.76, 1.16],
   },
   {
     path: '/models/grass/Grass_Wispy_Short.gltf', // 494 tris — feathery accents
-    count: 250,
+    count: 95,
     ringFraction: 0.1,
     scale: [0.52, 0.92],
     yScale: [0.85, 1.2],
   },
   {
     path: '/models/grass/Grass_Wispy_Tall.gltf', // 622 tris — tall silhouette accents
-    count: 135,
+    count: 45,
     ringFraction: 0.35,
     scale: [0.46, 0.76],
     yScale: [0.85, 1.15],
@@ -182,8 +182,9 @@ const FRAG = /* glsl */ `
   #include <fog_pars_fragment>
 
   void main() {
-    // The pack's gradient atlas gives each blade its root→tip colour.
-    vec3 col = texture2D(uMap, vUv).rgb;
+    vec3 atlas = texture2D(uMap, vUv).rgb;
+    float atlasValue = dot(atlas, vec3(0.2126, 0.7152, 0.0722));
+    vec3 col = mix(vec3(0.045, 0.05, 0.058), vec3(0.16, 0.17, 0.19), smoothstep(0.08, 0.78, atlasValue));
     // Melt the lowest part of each tuft into the terrain colour.
     col = mix(uRootColor, col, smoothstep(0.04, 0.62, vT));
     // Pack's baked occlusion separates blades without turning clump interiors black.
@@ -193,7 +194,7 @@ const FRAG = /* glsl */ `
     float skyFacing = 0.72 + 0.28 * clamp(n.y, 0.0, 1.0);
     col *= uAmbientLight * skyFacing + uSunLight * wrappedSun * 0.76;
     // Restrained warm translucency on sun-facing tips.
-    col += uSSSColor * pow(vT, 3.0) * wrappedSun * 0.055;
+    col += uSSSColor * pow(vT, 3.0) * wrappedSun * 0.01;
     col *= mix(vec3(1.0), vTint, 0.7);
 
     gl_FragColor = vec4(col, 1.0);
@@ -286,7 +287,7 @@ const meadowNoise = (x: number, z: number) => {
 
 /** Extra plaza tufts as a share of each variant's meadow count — heavily weighted to
  *  the short base grass so the plaza reads as low, trodden ground cover, not a meadow. */
-const PLAZA_GRASS_SHARE = [0.11, 0.035, 0.035, 0.018];
+const PLAZA_GRASS_SHARE = [0.035, 0.012, 0.01, 0.006];
 
 const buildField = (
   geometries: BufferGeometry[],
@@ -308,8 +309,8 @@ const buildField = (
       uRootColor: { value: new Color(ROOT_COLOR) },
       uSSSColor: { value: new Color(SSS_COLOR) },
       uSunDir: { value: new Vector3(...SUN_POSITION).normalize() },
-      uAmbientLight: { value: new Color('#c2cbae') },
-      uSunLight: { value: new Color('#e7bd82') },
+      uAmbientLight: { value: new Color('#a9adb7') },
+      uSunLight: { value: new Color('#c9cad0') },
     },
     side: DoubleSide,
     fog: true,
@@ -318,8 +319,8 @@ const buildField = (
   const rng = mulberry32(20260709);
   const dummy = new Object3D();
   const tint = new Color();
-  const tintFresh = new Color('#cbd9a7');
-  const tintDry = new Color('#b19b68');
+  const tintFresh = new Color('#ccd0d7');
+  const tintDry = new Color('#a8a9ad');
 
   const meshes = VARIANTS.map((variant, vi) => {
     const plazaTarget = plazaFill ? Math.round(variant.count * PLAZA_GRASS_SHARE[vi]!) : 0;

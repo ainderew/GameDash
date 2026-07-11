@@ -5,14 +5,14 @@ import { BackSide, Color, ShaderMaterial, Vector3 } from 'three';
 export const SUN_POSITION: [number, number, number] = [-30, 11, -56];
 
 export const WORLD_PALETTE = {
-  zenith: '#607bc2',
-  upperSky: '#91a8d6',
-  horizon: '#f4b39d',
-  sunset: '#ff9c79',
-  cloudLight: '#ffe5c8',
-  cloudShadow: '#b989a8',
-  sun: '#fff0bd',
-  fog: '#dca99b',
+  zenith: '#202746',
+  upperSky: '#3b426c',
+  horizon: '#6a5d82',
+  sunset: '#80559a',
+  cloudLight: '#9493b6',
+  cloudShadow: '#343653',
+  sun: '#ddd4ff',
+  fog: '#3b3957',
 };
 
 const skyVertex = /* glsl */ `
@@ -139,13 +139,13 @@ export const SkyAndLight = () => (
     <fogExp2 attach="fog" args={[WORLD_PALETTE.fog, 0.0075]} />
 
     {/* Low ambient keeps the golden key directional and gives foliage real depth. */}
-    <hemisphereLight args={['#b8c8ec', '#667846', 1.18]} />
+    <hemisphereLight args={['#adb3c3', '#484b57', 1.3]} />
 
     <directionalLight
       castShadow
       position={SUN_POSITION}
-      intensity={3.8}
-      color="#ffd59a"
+      intensity={3.45}
+      color="#cecfda"
       shadow-mapSize={[2048, 2048]}
       shadow-camera-left={-42}
       shadow-camera-right={42}
@@ -158,6 +158,6 @@ export const SkyAndLight = () => (
       shadow-radius={4}
     />
 
-    <directionalLight position={[24, 15, 30]} intensity={0.5} color="#a9c4ff" />
+    <directionalLight position={[24, 15, 30]} intensity={0.62} color="#aaa8ba" />
   </>
 );

@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef } from 'react';
 import {
   Box3,
   CanvasTexture,
+  CircleGeometry,
   Color,
   MeshStandardMaterial,
   SRGBColorSpace,
   Vector3,
 } from 'three';
-import type { Group, Mesh, Object3D as Object3DType, PointLight } from 'three';
+import type { Group, Mesh, Object3D as Object3DType } from 'three';
 import { players } from '@/game/ecs/world';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
 import { useGameModel } from '@/lib/loaders';
@@ -19,18 +20,20 @@ import { Terrain } from '@/game/world/Terrain';
 import { GrassField } from '@/game/world/GrassField';
 import { Trees } from '@/game/world/Trees';
 import { Scatter } from '@/game/world/Scatter';
+import { SpireBackdrop } from '@/game/world/SpireBackdrop';
 import { SummoningShrineRelic } from '@/game/world/SummoningShrineRelic';
 import { ExpeditionPortalVFX } from '@/game/world/ExpeditionPortalVFX';
+import { CampfireVFX } from '@/game/world/CampfireVFX';
 
 interface Props {
   obstacles: React.MutableRefObject<Object3DType[]>;
 }
 
 const MODEL_PATHS = {
-  lodge: '/models/hub/roster-lodge.glb',
+  lodge: '/models/hub/rest_house.glb',
   shrine: '/models/hub/summoning-shrine.glb',
   gate: '/models/hub/expedition-gate.glb',
-  curvedLamp: '/models/hub/lantern-curved.glb',
+  curvedLamp: '/models/hub/lamp_1.glb',
   straightLamp: '/models/hub/lantern-straight.glb',
   campfire: '/models/hub/campfire.glb',
 } as const;
@@ -137,6 +140,14 @@ const createCobblestoneMaps = () => {
   heightCanvas.width = size;
   heightCanvas.height = size;
   const h = heightCanvas.getContext('2d')!;
+  const roughnessCanvas = document.createElement('canvas');
+  roughnessCanvas.width = size;
+  roughnessCanvas.height = size;
+  const rough = roughnessCanvas.getContext('2d')!;
+  const aoCanvas = document.createElement('canvas');
+  aoCanvas.width = size;
+  aoCanvas.height = size;
+  const ao = aoCanvas.getContext('2d')!;
   const rand = mulberry32(20260711);
   const cx = size / 2;
   const cy = size / 2;
@@ -144,10 +155,14 @@ const createCobblestoneMaps = () => {
   const grout = 9;
 
   // Grout base — recessed dark mortar in color, low in the height field.
-  a.fillStyle = '#453e34';
+  a.fillStyle = '#211c31';
   a.fillRect(0, 0, size, size);
   h.fillStyle = '#333333';
   h.fillRect(0, 0, size, size);
+  rough.fillStyle = '#eeeeee';
+  rough.fillRect(0, 0, size, size);
+  ao.fillStyle = '#5c5c5c';
+  ao.fillRect(0, 0, size, size);
 
   // Slightly irregular ring boundaries so the pattern doesn't feel machined.
   const rings = 8;
@@ -214,24 +229,43 @@ const createCobblestoneMaps = () => {
       stones.push({ path, px, py, r: stoneR });
       if (ring > 0) corners.push({ x: cx + Math.cos(a0) * r0, y: cy + Math.sin(a0) * r0, ring });
 
-      // Albedo: warm gray with per-stone hue/value drift, lit from the upper-left.
-      const hue = 30 + rand() * 18;
-      const sat = 6 + rand() * 11;
-      const lit = 38 + rand() * 24;
-      const grad = a.createRadialGradient(px - stoneR * 0.35, py - stoneR * 0.35, stoneR * 0.1, px, py, stoneR * 1.5);
-      grad.addColorStop(0, `hsl(${hue} ${sat}% ${lit + 7}%)`);
-      grad.addColorStop(1, `hsl(${hue} ${sat}% ${lit - 7}%)`);
+      // Four related slate families create coherent variance without rainbow patchwork.
+      const family = Math.floor(rand() * 4);
+      const hue = [220, 228, 239, 252][family]! + (rand() - 0.5) * 7;
+      const sat = [10, 13, 16, 18][family]! + rand() * 5;
+      const lit = [34, 39, 43, 36][family]! + (rand() - 0.5) * 8;
+      // Centered wear gradient contains no baked light direction; scene lights relight it.
+      const grad = a.createRadialGradient(px, py, stoneR * 0.08, px, py, stoneR * 1.45);
+      grad.addColorStop(0, `hsl(${hue} ${sat}% ${lit + 5}%)`);
+      grad.addColorStop(0.68, `hsl(${hue} ${sat}% ${lit}%)`);
+      grad.addColorStop(1, `hsl(${hue} ${sat}% ${lit - 8}%)`);
       a.fillStyle = grad;
       a.fill(path);
+
+      // Worn centers are smoother; chipped edges and grout remain rough. AO darkens the
+      // slab perimeter independently of albedo so crevices survive different lighting.
+      const roughBase = 164 + rand() * 42;
+      const roughGrad = rough.createRadialGradient(px, py, 0, px, py, stoneR * 1.25);
+      roughGrad.addColorStop(0, `rgb(${Math.max(125, roughBase - 24)},${Math.max(125, roughBase - 24)},${Math.max(125, roughBase - 24)})`);
+      roughGrad.addColorStop(0.7, `rgb(${roughBase},${roughBase},${roughBase})`);
+      roughGrad.addColorStop(1, `rgb(${Math.min(245, roughBase + 38)},${Math.min(245, roughBase + 38)},${Math.min(245, roughBase + 38)})`);
+      rough.fillStyle = roughGrad;
+      rough.fill(path);
+      const aoValue = 218 + rand() * 26;
+      ao.fillStyle = `rgb(${aoValue},${aoValue},${aoValue})`;
+      ao.fill(path);
+      ao.strokeStyle = 'rgba(35,35,35,0.72)';
+      ao.lineWidth = 13;
+      ao.stroke(path);
 
       // Bevel: offset strokes clipped to the stone read as a lit top edge + shadowed base.
       a.save();
       a.clip(path);
       a.lineWidth = 7;
-      a.strokeStyle = 'rgba(20,15,10,0.38)';
+      a.strokeStyle = 'rgba(10,9,20,0.44)';
       a.translate(-3, -3);
       a.stroke(path);
-      a.strokeStyle = 'rgba(255,240,215,0.16)';
+      a.strokeStyle = 'rgba(195,185,235,0.14)';
       a.translate(6, 6);
       a.stroke(path);
       a.translate(-3, -3);
@@ -239,12 +273,38 @@ const createCobblestoneMaps = () => {
       for (let b = 0; b < 3; b += 1) {
         const bx = px + (rand() - 0.5) * stoneR * 1.4;
         const by = py + (rand() - 0.5) * stoneR * 1.4;
-        a.fillStyle = rand() > 0.45 ? `rgba(25,20,14,${0.05 + rand() * 0.08})` : `rgba(255,244,225,${0.04 + rand() * 0.06})`;
+        a.fillStyle = rand() > 0.45 ? `rgba(17,14,30,${0.05 + rand() * 0.08})` : `rgba(196,184,231,${0.04 + rand() * 0.06})`;
         a.beginPath();
         a.ellipse(bx, by, stoneR * (0.2 + rand() * 0.4), stoneR * (0.15 + rand() * 0.3), rand() * Math.PI, 0, Math.PI * 2);
         a.fill();
       }
       a.restore();
+
+      // A few coherent chips affect color, height, roughness and cavity together.
+      const chips = 2 + Math.floor(rand() * 5);
+      for (const ctx of [a, h, rough, ao]) {
+        ctx.save();
+        ctx.clip(path);
+      }
+      for (let chip = 0; chip < chips; chip += 1) {
+        const angle = rand() * Math.PI * 2;
+        const radius = stoneR * (0.25 + rand() * 0.68);
+        const chipX = px + Math.cos(angle) * radius;
+        const chipY = py + Math.sin(angle) * radius;
+        const chipR = 2.5 + rand() * 8;
+        const chipRx = chipR * (1.1 + rand() * 0.7);
+        const chipRot = rand() * Math.PI;
+        a.fillStyle = `rgba(9,10,20,${0.16 + rand() * 0.18})`;
+        h.fillStyle = `rgba(0,0,0,${0.18 + rand() * 0.2})`;
+        rough.fillStyle = `rgba(255,255,255,${0.25 + rand() * 0.25})`;
+        ao.fillStyle = `rgba(25,25,25,${0.22 + rand() * 0.26})`;
+        for (const ctx of [a, h, rough, ao]) {
+          ctx.beginPath();
+          ctx.ellipse(chipX, chipY, chipRx, chipR, chipRot, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      for (const ctx of [a, h, rough, ao]) ctx.restore();
 
       // Height: each stone is a raised, gently domed slab with its own elevation.
       const elevation = 150 + rand() * 72;
@@ -266,8 +326,10 @@ const createCobblestoneMaps = () => {
     const stone = stones[Math.floor(rand() * stones.length)]!;
     const angle = rand() * Math.PI * 2;
     for (const [ctx2, style, width] of [
-      [a, 'rgba(20,15,10,0.4)', 2.5],
+      [a, 'rgba(9,8,18,0.48)', 2.5],
       [h, 'rgba(0,0,0,0.5)', 3],
+      [rough, 'rgba(255,255,255,0.42)', 3.5],
+      [ao, 'rgba(20,20,20,0.55)', 4],
     ] as const) {
       ctx2.save();
       ctx2.clip(stone.path);
@@ -313,6 +375,8 @@ const createCobblestoneMaps = () => {
   noisePass(200, 0.13, 'overlay', a);
   noisePass(900, 0.1, 'soft-light', a);
   noisePass(700, 0.12, 'overlay', h);
+  noisePass(170, 0.08, 'soft-light', rough);
+  noisePass(90, 0.06, 'soft-light', ao);
 
   // Moss: clustered growth out of grout junctions, denser toward the rim.
   const mossClump = (x: number, y: number, scale: number) => {
@@ -320,17 +384,28 @@ const createCobblestoneMaps = () => {
     for (let b = 0; b < blobs; b += 1) {
       const bx = x + (rand() - 0.5) * 26 * scale;
       const by = y + (rand() - 0.5) * 26 * scale;
-      const hue = 78 + rand() * 32;
-      a.fillStyle = `hsla(${hue}, ${34 + rand() * 22}%, ${26 + rand() * 14}%, ${0.22 + rand() * 0.3})`;
+      const hue = 262 + rand() * 34;
+      const rx = (3 + rand() * 9) * scale;
+      const ry = (2 + rand() * 6) * scale;
+      const rot = rand() * Math.PI;
+      a.fillStyle = `hsla(${hue}, ${42 + rand() * 24}%, ${30 + rand() * 16}%, ${0.24 + rand() * 0.32})`;
       a.beginPath();
-      a.ellipse(bx, by, (3 + rand() * 9) * scale, (2 + rand() * 6) * scale, rand() * Math.PI, 0, Math.PI * 2);
+      a.ellipse(bx, by, rx, ry, rot, 0, Math.PI * 2);
       a.fill();
+      rough.fillStyle = 'rgba(90,90,90,0.38)';
+      rough.beginPath();
+      rough.ellipse(bx, by, rx, ry, rot, 0, Math.PI * 2);
+      rough.fill();
+      ao.fillStyle = 'rgba(35,35,35,0.25)';
+      ao.beginPath();
+      ao.ellipse(bx, by, rx, ry, rot, 0, Math.PI * 2);
+      ao.fill();
     }
   };
   for (const corner of corners) {
-    if (rand() < 0.12 + 0.3 * (corner.ring / rings)) mossClump(corner.x, corner.y, 0.8 + rand() * 0.9);
+    if (rand() < 0.07 + 0.16 * (corner.ring / rings)) mossClump(corner.x, corner.y, 0.8 + rand() * 0.9);
   }
-  for (let i = 0; i < 46; i += 1) {
+  for (let i = 0; i < 18; i += 1) {
     const angle = rand() * Math.PI * 2;
     const radius = maxRadius * (0.9 + rand() * 0.08);
     mossClump(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, 0.9 + rand() * 1.1);
@@ -339,7 +414,7 @@ const createCobblestoneMaps = () => {
   // Rim vignette anchors the circle into the dirt.
   const vignette = a.createRadialGradient(cx, cy, maxRadius * 0.72, cx, cy, maxRadius);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(1, 'rgba(20,14,8,0.28)');
+  vignette.addColorStop(1, 'rgba(8,8,20,0.3)');
   a.fillStyle = vignette;
   a.fillRect(0, 0, size, size);
 
@@ -356,36 +431,57 @@ const createCobblestoneMaps = () => {
   map.anisotropy = 8;
   const normalMap = new CanvasTexture(heightToNormal(blurred, 2.6));
   normalMap.anisotropy = 8;
-  return { map, normalMap };
+
+  // Pack AO into red and roughness into green so one GPU texture feeds both channels.
+  const ormCanvas = document.createElement('canvas');
+  ormCanvas.width = size;
+  ormCanvas.height = size;
+  const ormCtx = ormCanvas.getContext('2d')!;
+  const orm = ormCtx.createImageData(size, size);
+  const aoPixels = ao.getImageData(0, 0, size, size).data;
+  const roughPixels = rough.getImageData(0, 0, size, size).data;
+  for (let i = 0; i < orm.data.length; i += 4) {
+    orm.data[i] = aoPixels[i]!;
+    orm.data[i + 1] = roughPixels[i]!;
+    orm.data[i + 2] = 0;
+    orm.data[i + 3] = 255;
+  }
+  ormCtx.putImageData(orm, 0, 0);
+  const ormMap = new CanvasTexture(ormCanvas);
+  ormMap.anisotropy = 8;
+  return { map, normalMap, ormMap };
 };
 
 /** The cobbled heart of the plaza, matching the concentric stonework in the concept art. */
 const CobblestoneCircle = ({ radius = 5.85 }: { radius?: number }) => {
-  const { map, normalMap } = useMemo(createCobblestoneMaps, []);
+  const { map, normalMap, ormMap } = useMemo(createCobblestoneMaps, []);
+  const geometry = useMemo(() => {
+    const circle = new CircleGeometry(radius, 96);
+    circle.setAttribute('uv1', circle.attributes.uv!.clone());
+    return circle;
+  }, [radius]);
   useEffect(
     () => () => {
       map.dispose();
       normalMap.dispose();
+      ormMap.dispose();
+      geometry.dispose();
     },
-    [map, normalMap],
+    [geometry, map, normalMap, ormMap],
   );
   return (
-    <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <circleGeometry args={[radius, 72]} />
-      <meshStandardMaterial map={map} normalMap={normalMap} normalScale={[0.8, 0.8]} roughness={0.94} />
+    <mesh geometry={geometry} position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+      <meshStandardMaterial
+        map={map}
+        normalMap={normalMap}
+        normalScale={[0.72, 0.72]}
+        roughness={1}
+        roughnessMap={ormMap}
+        aoMap={ormMap}
+        aoMapIntensity={0.72}
+      />
     </mesh>
   );
-};
-
-/** Warm, flickering firelight — two out-of-phase sines read as flame, not strobe. */
-const CampfireGlow = ({ position }: { position: [number, number, number] }) => {
-  const light = useRef<PointLight>(null);
-  useFrame(({ clock }) => {
-    if (!light.current) return;
-    const t = clock.elapsedTime;
-    light.current.intensity = 8 + Math.sin(t * 9.3) * 1.1 + Math.sin(t * 23.7) * 0.7;
-  });
-  return <pointLight ref={light} position={position} color="#ff9448" intensity={8} distance={10} decay={2} />;
 };
 
 /**
@@ -437,32 +533,33 @@ const HubInteractions = () => {
     if (station?.id !== activeStation.current) {
       activeStation.current = station?.id;
       setHubStation(station?.id);
+      // The Expedition Gate departs on PROXIMITY, not a key press: crossing into the gate
+      // ring begins the run. Solo → setScene teleports straight in. Networked → setScene is
+      // a no-op behind the session guard and NetGateInteraction opens the shared countdown
+      // off this same hubStation edge. Fires once per entry (edge-triggered on station change).
+      if (station?.id === 'expedition' && player.velocity) {
+        player.transform.position = [0, 0, 0];
+        player.transform.rotationY = Math.PI;
+        player.velocity.linear = [0, 0, 0];
+        setScene('expedition');
+      }
     }
   });
 
   useEffect(() => {
+    // The Roster Lodge still cycles the active adventurer on E — a repeatable menu action
+    // where a deliberate key press (not proximity) is the right verb.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'KeyE' || event.repeat) return;
-      const station = activeStation.current;
-      if (station === 'roster') {
-        const store = useUIStore.getState();
-        const ids = Object.keys(PLAYER_CHARACTERS) as PlayerCharacterId[];
-        const next = ids[(ids.indexOf(store.playerCharacter) + 1) % ids.length];
-        if (next) store.setPlayerCharacter(next);
-      } else if (station === 'expedition') {
-        const player = players.first;
-        if (player?.transform && player.velocity) {
-          player.transform.position = [0, 0, 0];
-          player.transform.rotationY = Math.PI;
-          player.velocity.linear = [0, 0, 0];
-        }
-        setHubStation(undefined);
-        setScene('expedition');
-      }
+      if (activeStation.current !== 'roster') return;
+      const store = useUIStore.getState();
+      const ids = Object.keys(PLAYER_CHARACTERS) as PlayerCharacterId[];
+      const next = ids[(ids.indexOf(store.playerCharacter) + 1) % ids.length];
+      if (next) store.setPlayerCharacter(next);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setHubStation, setScene]);
+  }, []);
 
   return null;
 };
@@ -489,6 +586,7 @@ export const SocialHub = ({ obstacles }: Props) => {
       <GrassField clearRadius={20.5} plazaFill />
       <Scatter clearRadius={24} groundClearRadius={21} plazaFill />
       <Trees clearRadius={21.5} />
+      <SpireBackdrop />
       <HavenPlaza />
       <group ref={landmarks}>
         <HubModel path={MODEL_PATHS.lodge} targetWidth={9.4} position={[-10.5, 0, -10.5]} rotationY={0} />
@@ -506,9 +604,9 @@ export const SocialHub = ({ obstacles }: Props) => {
         <HubModel path={MODEL_PATHS.straightLamp} targetHeight={2.7} position={[14.8, 0.04, -1.5]} rotationY={-0.9} />
         <HubModel path={MODEL_PATHS.campfire} targetWidth={1.7} position={[0, 0.06, 0]} rotationY={0.6} />
       </group>
-      <CampfireGlow position={[0, 1.1, 0]} />
+      <CampfireVFX />
 
-      <StationRing position={[0, 0.105, -17]} color="#42c8c7" radius={2.05} />
+      <StationRing position={[0, 0.105, -17]} color="#8f63ff" radius={2.05} />
       <ExpeditionPortalVFX position={[0, 2.02, -17.03]} radius={1.56} />
       <SummoningShrineRelic position={[10.5, 1.7, -7.4]} rotationY={-0.35} />
 
@@ -518,10 +616,10 @@ export const SocialHub = ({ obstacles }: Props) => {
         [-14.8, 1.9, -1.5],
         [14.8, 2.25, -1.5],
       ].map((position, i) => (
-        <pointLight key={i} position={position as [number, number, number]} color="#ffb55f" intensity={5} distance={5.5} decay={2} />
+        <pointLight key={i} position={position as [number, number, number]} color="#a95cff" intensity={5} distance={5.5} decay={2} />
       ))}
       <pointLight position={[0, 2, -17]} color="#66e1dc" intensity={9} distance={7} decay={2} />
-      <directionalLight position={[2, 9, 12]} color="#ffe0b8" intensity={1.35} />
+      <directionalLight position={[2, 9, 12]} color="#c4c1c9" intensity={0.85} />
 
       <Html position={[-10.5, 3.55, -9.75]} center distanceFactor={13} style={{ pointerEvents: 'none' }}>
         <div className="whitespace-nowrap rounded-full border border-amber-100/20 bg-[#21170f]/75 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.24em] text-amber-100 shadow-lg backdrop-blur-sm">

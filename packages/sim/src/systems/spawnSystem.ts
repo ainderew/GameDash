@@ -21,6 +21,7 @@ export const createMonster = (
     attackDamage: def.attackDamage,
     attackRange: def.attackRange,
     attackCooldownMs: def.attackCooldownMs,
+    attackWindupMs: def.attackWindupMs,
     moveSpeed: def.speed,
     ranged: def.ranged,
     radius: def.radius,

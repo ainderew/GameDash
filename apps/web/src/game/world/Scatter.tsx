@@ -10,7 +10,7 @@ import { PLAZA_DRESSING, inPlazaKeepout } from '@/game/world/hubLayout';
 /**
  * Ground dressing from the Stylized Nature MegaKit, all instanced:
  * mid-size rocks (replacing the old procedural dodecahedrons), pebbles,
- * clover + broadleaf ground cover, and sparse flower accents.
+ * stones, sparse ferns, mushrooms, bushes, and dead vegetation.
  * Trees live in Trees.tsx; grass tufts in GrassField.tsx.
  */
 const PATHS = {
@@ -24,12 +24,9 @@ const PATHS = {
     '/models/nature/Pebble_Round_2.gltf',
     '/models/nature/Pebble_Round_3.gltf',
   ],
-  clover: ['/models/nature/Clover_1.gltf', '/models/nature/Clover_2.gltf'],
-  plant: '/models/nature/Plant_7.gltf',
-  flowers: ['/models/nature/Flower_3_Single.gltf', '/models/nature/Flower_4_Single.gltf'],
   fern: '/models/nature/Fern_1.gltf',
   mushroom: '/models/nature/Mushroom_Common.gltf',
-  bushes: ['/models/nature/Bush_Common.gltf', '/models/nature/Bush_Common_Flowers.gltf'],
+  bushes: ['/models/nature/Bush_Common.gltf'],
   pines: [
     '/models/nature/Pine_1.gltf',
     '/models/nature/Pine_3.gltf',
@@ -211,15 +208,9 @@ export const Scatter = ({
   const pebble1 = useGameModel(PATHS.pebbles[0]!);
   const pebble2 = useGameModel(PATHS.pebbles[1]!);
   const pebble3 = useGameModel(PATHS.pebbles[2]!);
-  const clover1 = useGameModel(PATHS.clover[0]!);
-  const clover2 = useGameModel(PATHS.clover[1]!);
-  const plant = useGameModel(PATHS.plant);
-  const flower3 = useGameModel(PATHS.flowers[0]!);
-  const flower4 = useGameModel(PATHS.flowers[1]!);
   const fern = useGameModel(PATHS.fern);
   const mushroom = useGameModel(PATHS.mushroom);
   const bush = useGameModel(PATHS.bushes[0]!);
-  const bushFlowers = useGameModel(PATHS.bushes[1]!);
   const pine1 = useGameModel(PATHS.pines[0]!);
   const pine3 = useGameModel(PATHS.pines[1]!);
   const pine5 = useGameModel(PATHS.pines[2]!);
@@ -291,44 +282,10 @@ export const Scatter = ({
       true,
       groundRadius,
     );
-    // Clover in coherent patches between the grass drifts.
-    add(
-      [clover1.scene, clover2.scene],
-      scatter(rng, 72, 3, 58, 0.14, 0.34, { clump: { size: 14, offset: 1.3 } }),
-      false,
-      true,
-      groundRadius,
-    );
-    // Low broadleaf ground cover, drifting in and out with its own patch noise.
-    add(
-      [plant.scene],
-      scatter(rng, 190, 3, 58, 0.9, 2.2, {
-        clump: { size: 18, offset: 5.1, bias: 0.14 },
-        yStretch: [0.7, 1.55],
-      }),
-      false,
-      true,
-      groundRadius,
-    );
-    // Flower BEDS (tight clumps) instead of an even confetti sprinkle.
-    add(
-      [flower3.scene],
-      scatter(rng, 84, 4, 55, 0.28, 0.56, { clump: { size: 12, offset: 7.7, power: 2.5 } }),
-      false,
-      true,
-      groundRadius,
-    );
-    add(
-      [flower4.scene],
-      scatter(rng, 68, 4, 55, 0.28, 0.56, { clump: { size: 12, offset: 15.2, power: 2.5 } }),
-      false,
-      true,
-      groundRadius,
-    );
     // Fern GLADES near the treeline — dense pockets, empty elsewhere.
     add(
       [fern.scene],
-      scatter(rng, 80, 10, 70, 0.22, 0.7, {
+      scatter(rng, 22, 10, 70, 0.2, 0.58, {
         maxHeight: 5,
         clump: { size: 16, offset: 2.9, power: 2.5 },
         yStretch: [0.75, 1.4],
@@ -340,7 +297,7 @@ export const Scatter = ({
     // Mushrooms cluster in small families — lumpy caps, not matching domes.
     add(
       [mushroom.scene],
-      scatter(rng, 36, 6, 55, 0.45, 1.35, {
+      scatter(rng, 14, 6, 55, 0.4, 1.1, {
         tilt: 0.22,
         yStretch: [0.7, 1.4],
         xzJitter: 0.25,
@@ -354,8 +311,8 @@ export const Scatter = ({
     // missing entirely. A share of them flowering. Squashed/stretched footprints so
     // the thicket doesn't read as identical spheres.
     add(
-      [bush.scene, bush.scene, bushFlowers.scene],
-      scatter(rng, 46, 8, 66, 0.5, 1.3, {
+      [bush.scene],
+      scatter(rng, 18, 8, 66, 0.45, 1.1, {
         maxHeight: 5,
         tilt: 0.1,
         yStretch: [0.7, 1.4],
@@ -473,23 +430,10 @@ export const Scatter = ({
         true,
         0,
       );
-      // Only a few low weeds survive around the plaza margins.
-      add(
-        [plant.scene],
-        scatter(rng, 26, inner, outer, 0.45, 1.15, {
-          avoidPath: false,
-          avoid: plazaAvoid,
-          yStretch: [0.6, 1.5],
-          clump: { size: 9, offset: 6.3, bias: 0.1 },
-        }),
-        false,
-        true,
-        0,
-      );
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, clover1, clover2, plant, flower3, flower4, fern, mushroom, bush, bushFlowers, pine1, pine3, pine5, deadTree, clearRadius, groundClearRadius, plazaFill]);
+  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, fern, mushroom, bush, pine1, pine3, pine5, deadTree, clearRadius, groundClearRadius, plazaFill]);
 
   // Cloned geometries are ours to dispose; materials belong to the loader cache.
   useEffect(
@@ -513,9 +457,6 @@ export const Scatter = ({
 [
   ...PATHS.rocks,
   ...PATHS.pebbles,
-  ...PATHS.clover,
-  PATHS.plant,
-  ...PATHS.flowers,
   PATHS.fern,
   PATHS.mushroom,
   ...PATHS.bushes,

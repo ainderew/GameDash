@@ -12,6 +12,14 @@ describe('hub layout', () => {
   it('detects the three hub verbs at their approach points', () => {
     expect(nearestHubStation(-10.5, -5.8)?.id).toBe('roster');
     expect(nearestHubStation(10.5, -7.4)?.id).toBe('summoning');
-    expect(nearestHubStation(0, -14.4)?.id).toBe('expedition');
+    // The player is walled off at 2.0 from the gate center (0, -17) by hubCollision, so this
+    // is where they actually come to rest against the portal — the trigger must catch it.
+    expect(nearestHubStation(0, -15)?.id).toBe('expedition');
+  });
+
+  it('only triggers the expedition gate at the portal, not on approach', () => {
+    // Departure is proximity-triggered, so the gate ring stays snug around the portal
+    // (z = -17): standing ~3 units short must NOT be inside it.
+    expect(nearestHubStation(0, -14)?.id).not.toBe('expedition');
   });
 });

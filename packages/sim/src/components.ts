@@ -26,8 +26,14 @@ export type AiState = 'idle' | 'chase' | 'attack' | 'cooldown';
 
 export interface AiBrain {
   state: AiState;
-  /** Timestamp (ms) of the monster's last attack, for cooldown gating. */
+  /** Timestamp (ms) the monster last BEGAN an attack (windup start), for cooldown gating. */
   lastAttackAt: number;
+  /**
+   * When set, the monster is mid-windup and committed to strike at this timestamp (ms).
+   * Damage lands only when `now >= strikeAt` AND the player is still in range — dodging
+   * out of the telegraph whiffs the blow. Cleared on strike, stagger, or stand-down.
+   */
+  strikeAt?: number;
 }
 
 export interface AttackState {
@@ -167,6 +173,8 @@ export interface Entity {
   attackDamage?: number;
   attackRange?: number;
   attackCooldownMs?: number;
+  /** Telegraph duration: ms from attack start until the blow actually lands (aiSystem windup). */
+  attackWindupMs?: number;
   moveSpeed?: number;
   ranged?: boolean;
   /** Body radius for hit tests + rendering. */

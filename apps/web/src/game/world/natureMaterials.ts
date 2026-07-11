@@ -2,7 +2,7 @@ import { Color, MeshStandardMaterial } from 'three';
 import type { Material, Texture } from 'three';
 
 const cache = new WeakMap<Material, Material>();
-const warmWhite = new Color('#f6eee3');
+const wastelandTint = new Color('#d0d0cf');
 
 const tuneTexture = (texture: Texture | null) => {
   if (!texture) return;
@@ -19,9 +19,9 @@ const tuneOne = (source: Material): Material => {
     material.roughness = Math.max(0.76, material.roughness);
     material.metalness = Math.min(0.04, material.metalness);
     material.envMapIntensity = 0.7;
-    material.color.multiply(warmWhite);
-    material.emissive.set('#12150d');
-    material.emissiveIntensity = 0.24;
+    material.color.multiply(wastelandTint);
+    material.emissive.set('#151515');
+    material.emissiveIntensity = 0.04;
     tuneTexture(material.map);
     tuneTexture(material.normalMap);
     tuneTexture(material.roughnessMap);

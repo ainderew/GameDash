@@ -43,7 +43,11 @@ const HEIGHT = 2.4;
 const FEET_ADJUST = -0.487;
 /** Moving faster than this plays the walk clip. */
 const WALK_THRESHOLD = 0.3;
-/** Attack clips play sped up so the swing reads snappy (damage lands at swing start). */
+/**
+ * Attack clips play sped up so the swing reads snappy. Damage lands at `attackStartedAt +
+ * attackWindupMs` (the telegraph window, ~260ms for the chaser), i.e. as the punch connects
+ * — NOT at swing start. The clip's own anticipation covers the windup.
+ */
 const ATTACK_TIMESCALE = 1.4;
 const FADE = 0.15;
 const FADE_FAST = 0.06;

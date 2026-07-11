@@ -12,6 +12,13 @@ export interface MonsterArchetypeDef extends MonsterDef {
   attackRange: number;
   /** Cooldown between the monster's attacks, ms. */
   attackCooldownMs: number;
+  /**
+   * Telegraph windup, ms: how long after the attack STARTS (anticipation pose begins)
+   * before the blow actually lands. Gives the player a readable, dodgeable tell — the
+   * hit whiffs if they leave range during this window. ~250ms is the fair reaction floor;
+   * bigger/heavier hits telegraph longer.
+   */
+  attackWindupMs: number;
   /** True if the monster attacks by firing a projectile instead of melee. */
   ranged: boolean;
   /** Loot table id granted on death. */
@@ -33,6 +40,7 @@ export const MONSTER_ARCHETYPES: Record<MonsterArchetype, MonsterArchetypeDef> =
     attackDamage: 7,
     attackRange: 1.8,
     attackCooldownMs: 1000,
+    attackWindupMs: 260,
     ranged: false,
     lootTableId: 'common',
     color: '#ef4444',
@@ -47,6 +55,7 @@ export const MONSTER_ARCHETYPES: Record<MonsterArchetype, MonsterArchetypeDef> =
     attackDamage: 8,
     attackRange: 12,
     attackCooldownMs: 1500,
+    attackWindupMs: 350,
     ranged: true,
     lootTableId: 'common',
     color: '#a855f7',
@@ -61,6 +70,7 @@ export const MONSTER_ARCHETYPES: Record<MonsterArchetype, MonsterArchetypeDef> =
     attackDamage: 22,
     attackRange: 2.4,
     attackCooldownMs: 1600,
+    attackWindupMs: 520,
     ranged: false,
     lootTableId: 'rare',
     color: '#f59e0b',

@@ -3,7 +3,7 @@
  * (Phase 3) so the protocol validates it and both sides share one source of truth —
  * apps/web's PLAYER_CHARACTERS registry keys off this type.
  */
-export const CHARACTER_IDS = ['hero', 'druid'] as const;
+export const CHARACTER_IDS = ['hero', 'druid', 'trickster'] as const;
 
 export type CharacterId = (typeof CHARACTER_IDS)[number];
 

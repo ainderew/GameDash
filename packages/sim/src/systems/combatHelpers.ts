@@ -139,6 +139,18 @@ export const dealDamage = (
     }
   }
 
+  // INTERRUPT-ON-HIT: a struck player's in-flight swing is CANCELLED (a flinch) — trades reward
+  // not getting hit, so approaching and striking first actually wins. The hitbox drops, the root
+  // releases, and the melee lockout clears so the player can act again the instant the stagger
+  // ends. Solo / server-authoritative: cleared directly here. (A networked client predicting its
+  // OWN swing won't see this cancel until the shove replays — folded in with the sequenced-impulse
+  // netcode work, same timeline as the knockback above.)
+  if (target.playerControlled && (target.attackState || (target.attackAnimUntil ?? 0) > now)) {
+    target.attackState = undefined;
+    target.attackAnimUntil = 0;
+    target.meleeReadyAt = 0;
+  }
+
   // Hit-reaction stamp: deterministic sim data (passControl gates pass interruption on the
   // strength) that the renderer also reads for squash & stretch timing.
   target.hitReactionAt = now;

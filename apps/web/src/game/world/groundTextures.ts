@@ -16,6 +16,8 @@ export const DIRT_TILE = 9;
 export const GRASS_TILE = 7.5;
 /** World-units covered by the low-frequency RGB grass biome mask. */
 export const GRASS_MACRO_TILE = 64;
+/** World-units covered by the wasteland material splat control map. */
+export const WASTELAND_SPLAT_TILE = 72;
 
 const mulberry32 = (seed: number) => () => {
   seed |= 0;
@@ -433,6 +435,58 @@ export const createGrassMacroTexture = (): CanvasTexture => {
     });
   }
 
+  const texture = new CanvasTexture(canvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  return texture;
+};
+
+/** RGB control map: R broken basalt, G violet moss, B emissive corruption density. */
+export const createWastelandSplatTexture = (): CanvasTexture => {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const c = canvas.getContext('2d')!;
+  const rand = mulberry32(20260722);
+  const wrap = (x: number, y: number, r: number, fn: (px: number, py: number) => void) => {
+    for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
+      const px = x + dx;
+      const py = y + dy;
+      if (px > -r && px < size + r && py > -r && py < size + r) fn(px, py);
+    }
+  };
+  c.fillStyle = 'rgb(24,10,5)';
+  c.fillRect(0, 0, size, size);
+  const paintField = (channel: 'basalt' | 'moss' | 'energy', count: number) => {
+    const rgb = channel === 'basalt' ? '235,18,8' : channel === 'moss' ? '12,235,24' : '8,20,245';
+    for (let i = 0; i < count; i += 1) {
+      const x = rand() * size;
+      const y = rand() * size;
+      const radius = channel === 'energy' ? 13 + rand() * 29 : 26 + rand() * 62;
+      const ry = radius * (0.38 + rand() * 0.5);
+      const alpha = channel === 'energy' ? 0.2 + rand() * 0.22 : 0.3 + rand() * 0.32;
+      const rot = rand() * Math.PI;
+      wrap(x, y, radius, (px, py) => {
+        c.save();
+        c.translate(px, py);
+        c.rotate(rot);
+        c.scale(1, ry / radius);
+        const g = c.createRadialGradient(0, 0, 0, 0, 0, radius);
+        g.addColorStop(0, `rgba(${rgb},${alpha})`);
+        g.addColorStop(0.5, `rgba(${rgb},${alpha * 0.55})`);
+        g.addColorStop(1, `rgba(${rgb},0)`);
+        c.fillStyle = g;
+        c.beginPath();
+        c.arc(0, 0, radius, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      });
+    }
+  };
+  paintField('basalt', 24);
+  paintField('moss', 22);
+  paintField('energy', 16);
   const texture = new CanvasTexture(canvas);
   texture.wrapS = RepeatWrapping;
   texture.wrapT = RepeatWrapping;

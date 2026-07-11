@@ -20,12 +20,12 @@ import { useGameModel } from '@/lib/loaders';
 
 const PART_PATHS = {
   shell: '/models/relic/shell.glb',
-  core: '/models/relic/core.glb',
+  core: '/models/relic/violet_relic_crystal.glb',
   rune: '/models/relic/rune_fragment.glb',
 } as const;
 
-const TEAL = '#57f4df';
-const GOLD = '#ffc857';
+const TEAL = '#c06cff';
+const GOLD = '#8f63ff';
 
 interface PreparedPart {
   object: Object3D;
@@ -90,7 +90,7 @@ export const SummoningShrineRelic = ({ position, rotationY = 0 }: Props) => {
 
   const core = useMemo(() => preparePart(coreGltf.scene, TEAL, 1.4), [coreGltf.scene]);
   const shells = useMemo(
-    () => [preparePart(shellGltf.scene, '#8de8dc', 0.22), preparePart(shellGltf.scene, '#8de8dc', 0.22)],
+    () => [preparePart(shellGltf.scene, '#8f78c9', 0.28), preparePart(shellGltf.scene, '#8f78c9', 0.28)],
     [shellGltf.scene],
   );
   const runes = useMemo(
