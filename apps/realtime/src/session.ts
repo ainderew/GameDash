@@ -184,6 +184,9 @@ export class Session {
   );
   /** Monster ids currently live in the world (spawn/despawn detection). */
   private readonly knownMonsters = new Set<number>();
+  /** Projectile + pickup ids live last tick — their births are implicit in the snapshot, but
+   * their deaths need a reliable `entityGone` so clients don't render a lingering corpse. */
+  private readonly knownEntities = new Set<number>();
   /** entityId → position-history ring for LIVING monsters (lag-comp rewind target). */
   private readonly monsterHistory = new Map<number, HistorySample[]>();
   /** entityId → server tick a monster died at (kept briefly so a stale swing can't revive it). */
@@ -364,6 +367,7 @@ export class Session {
     this.relicWire = { phase: '', startedAt: -1, carrierId: -1, failedAt: -1 };
     this.pendingLobReason = null;
     this.knownMonsters.clear();
+    this.knownEntities.clear();
     this.monsterHistory.clear();
     this.monsterDeathTick.clear();
     this.attackerViewTick.clear();
@@ -542,8 +546,31 @@ export class Session {
     this.recordMonsterHistory();
     this.emitCombatEvents(drained);
     this.detectSpawnsAndWaves();
+    this.detectEntityDespawns();
     this.syncRelicEvents(now);
     this.checkHuntFailed();
+  }
+
+  /** Reliable removal signal for projectiles/pickups gone since last tick (see knownEntities). */
+  private detectEntityDespawns(): void {
+    const current = new Set<number>();
+    for (const p of this.world.with('projectile', 'transform')) if (p.id !== undefined) current.add(p.id);
+    for (const pk of this.world.with('pickup', 'transform')) if (pk.id !== undefined) current.add(pk.id);
+    for (const id of this.knownEntities) {
+      if (!current.has(id)) this.broadcast({ type: 'entityGone', serverTick: this.tick, id });
+    }
+    this.knownEntities.clear();
+    for (const id of current) this.knownEntities.add(id);
+  }
+
+  /** Live monster roster (id → archetype) for a joiner's welcome — they missed the spawn events
+   * that teach the client which model to render, so without this their monsters default wrong. */
+  monsterRoster(): { id: number; archetype: string }[] {
+    const out: { id: number; archetype: string }[] = [];
+    for (const m of this.world.with('monster', 'transform')) {
+      if (m.id !== undefined) out.push({ id: m.id, archetype: m.monster ?? 'chaser' });
+    }
+    return out;
   }
 
   /** Capture per-player reconciliation anchors + the position-history ring (Phase 3 seam). */

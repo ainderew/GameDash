@@ -309,12 +309,22 @@ class NetClient {
         if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: ack path
         if (!playerId) continue;
         this.remoteBuffer(playerId).push({ t: header.serverTimeMs, pos: [pos[0], pos[1], pos[2]], rotY, flags });
-      } else if (baseState.kind === ENTITY_KIND.monster) {
-        // Server-authoritative monster → per-id interp buffer read by NetworkedWorld.
-        // (projectiles/pickups are a later pass.)
+      } else if (
+        baseState.kind === ENTITY_KIND.monster ||
+        baseState.kind === ENTITY_KIND.projectile ||
+        baseState.kind === ENTITY_KIND.pickup
+      ) {
+        // Server-authoritative world entity → per-id interp buffer read by NetworkedWorld.
+        // Monsters carry an archetype (from MonsterSpawned); projectiles/pickups don't. All
+        // three are removed by a reliable event (monsterDespawned / entityGone).
         let se = this.serverEntities.get(id);
         if (!se) {
-          se = { kind: baseState.kind, buffer: new InterpBuffer(), hp, archetype: this.monsterArchetypes.get(id) };
+          se = {
+            kind: baseState.kind,
+            buffer: new InterpBuffer(),
+            hp,
+            archetype: baseState.kind === ENTITY_KIND.monster ? this.monsterArchetypes.get(id) : undefined,
+          };
           this.serverEntities.set(id, se);
         }
         se.hp = hp;
@@ -365,6 +375,15 @@ class NetClient {
         relicNet.setOwnEntity(this.ownEntityId);
         // Late join / reconnect: reconstruct the live relic (incl. an active flight arc).
         relicNet.fromWelcome(msg.relic);
+        // Learn the live monster roster so a mid-expedition joiner renders the RIGHT models
+        // (they missed the MonsterSpawned events that carry each archetype).
+        if (msg.monsters) {
+          for (const m of msg.monsters) {
+            this.monsterArchetypes.set(m.id, m.archetype as MonsterArchetype);
+            const se = this.serverEntities.get(m.id);
+            if (se) se.archetype = m.archetype as MonsterArchetype;
+          }
+        }
         store.setRelicCarrier(
           msg.relic?.carrierId !== undefined ? this.entityOwners.get(msg.relic.carrierId) ?? null : null,
         );
@@ -475,6 +494,10 @@ class NetClient {
       case 'monsterDespawned':
         this.serverEntities.delete(msg.id);
         this.monsterArchetypes.delete(msg.id);
+        return;
+      case 'entityGone':
+        // Projectile/pickup removed server-side — drop it so NetworkedWorld destroys the mesh.
+        this.serverEntities.delete(msg.id);
         return;
       case 'damageDealt': {
         // Server confirmed a hit → drive the feel the local sim can't (it lands zero damage in

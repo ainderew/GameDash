@@ -131,6 +131,9 @@ export interface WelcomeMessage {
   serverTime: number;
   /** Present in expedition: the live relic so a joiner/reconnector reconstructs it. */
   relic?: RelicWelcomeState;
+  /** Present in expedition: the live monster roster (id → archetype) so a joiner/reconnector
+   * renders the RIGHT model — a late client missed the MonsterSpawned events that teach it. */
+  monsters?: { id: number; archetype: string }[];
 }
 
 export interface PlayerJoinedMessage {
@@ -235,6 +238,16 @@ export interface WaveStartedMessage {
   serverTick: number;
   wave: number;
   count: number;
+}
+
+/** A high-churn world entity (projectile / pickup) left the world. Monsters have their own
+ * despawn event (with death FX); this is the plain removal signal for entities whose birth is
+ * implicit in the snapshot but whose death needs a reliable signal (they'd otherwise linger in
+ * the client baseline until the next keyframe). */
+export interface EntityGoneMessage {
+  type: 'entityGone';
+  serverTick: number;
+  id: number;
 }
 
 /**
@@ -381,6 +394,7 @@ export type ServerMessage =
   | ZoneCountdownMessage
   | MonsterSpawnedMessage
   | MonsterDespawnedMessage
+  | EntityGoneMessage
   | WaveStartedMessage
   | DamageDealtMessage
   | ParrySuccessMessage

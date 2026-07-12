@@ -7,7 +7,8 @@ import {
   INTERP_UNDERRUN_DEADRECKON_MS,
   INTERP_UNDERRUN_HOLD_MS,
 } from '@shared/net/constants';
-import { MONSTER_ARCHETYPES } from '@shared/monsters';
+import { MONSTER_ARCHETYPES, type MonsterArchetype } from '@shared/monsters';
+import { ENTITY_KIND } from '@shared/net/snapshot';
 import { gameNow } from '@/game/feel/time';
 import { netClient } from '@/net/client';
 
@@ -52,7 +53,7 @@ export const NetworkedWorld = () => {
       if (!sample) continue;
       let e = map.get(id);
       if (!e) {
-        e = world.add(makeNetworkedMonster(se.archetype, se.hp));
+        e = world.add(makeNetworkedEntity(se.kind, se.archetype, se.hp));
         map.set(id, e);
       }
       if (e.transform) {
@@ -80,18 +81,32 @@ export const NetworkedWorld = () => {
   return null;
 };
 
-/** A minimal render-only monster: enough for MonsterModels/MonsterHealthBars; no sim fields
- * (no velocity/AI — the server owns behaviour, this entity is a replicated pose). */
-const makeNetworkedMonster = (archetype: Entity['monster'], hp: number): Entity => {
-  const kind = archetype ?? 'chaser';
-  const def = MONSTER_ARCHETYPES[kind];
+/** A minimal render-only entity for the existing renderers (MonsterModels / Projectiles /
+ * Pickups): NO sim fields (no velocity/AI — the server owns behaviour; this is a replicated
+ * pose). Parked out of sight until the first interp sample lands this frame. */
+const makeNetworkedEntity = (
+  kind: number,
+  archetype: MonsterArchetype | undefined,
+  hp: number,
+): Entity => {
+  if (kind === ENTITY_KIND.projectile) {
+    // Projectiles.tsx renders by faction; the wire doesn't carry it, so show them as the
+    // common case (monster shots). Player shots reading purple is a minor cosmetic miss.
+    return { transform: { position: [0, -1000, 0], rotationY: 0 }, projectile: true, faction: 'monster' };
+  }
+  if (kind === ENTITY_KIND.pickup) {
+    // Pickups.tsx colors by tableId; the count is authoritative (materialTally), so default
+    // the loose orbs to common. The real reward already landed in the HUD.
+    return { transform: { position: [0, -1000, 0], rotationY: 0 }, pickup: { tableId: 'common' } };
+  }
+  const mk = archetype ?? 'chaser';
+  const def = MONSTER_ARCHETYPES[mk];
   const max = def?.maxHealth ?? Math.max(1, hp);
   return {
-    // Parked out of sight until the first interp sample lands this frame.
     transform: { position: [0, -1000, 0], rotationY: 0 },
     health: { current: Math.max(1, hp || max), max },
     faction: 'monster',
-    monster: kind,
+    monster: mk,
     radius: def?.radius ?? 0.6,
   };
 };
