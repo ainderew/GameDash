@@ -1,9 +1,17 @@
 import { useEffect, useMemo } from 'react';
-import { InstancedMesh, Object3D, StaticDrawUsage } from 'three';
-import type { BufferGeometry, Group, Mesh } from 'three';
+import { Box3, Group, InstancedMesh, Object3D, StaticDrawUsage, Vector3 } from 'three';
+import type { BufferGeometry, Mesh } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt } from '@/game/world/Terrain';
-import { pathMask, hubRoadMask } from '@sim/terrain/terrainHeight';
+import { hubRoadMask } from '@sim/terrain/terrainHeight';
+import { mulberry32, scatter, scatterPass, type Item } from '@sim/terrain/scatterEngine';
+import {
+  HUB_SCATTER_SEED,
+  HUB_MEDIUM_ROCK_PASS,
+  HUB_BOULDER_PASS,
+  HUB_PLAZA_ROCK_SEED,
+  HUB_PLAZA_ROCK_PASS,
+} from '@sim/terrain/hubObstacles';
 import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
 import { PLAZA_DRESSING, inPlazaKeepout } from '@/game/world/hubLayout';
 
@@ -27,128 +35,13 @@ const PATHS = {
   fern: '/models/nature/Fern_1.gltf',
   mushroom: '/models/nature/Mushroom_Common.gltf',
   bushes: ['/models/nature/Bush_Common.gltf'],
-  pines: [
-    '/models/nature/Pine_1.gltf',
-    '/models/nature/Pine_3.gltf',
-    '/models/nature/Pine_5.gltf',
-  ],
   deadTree: '/models/nature/DeadTree_2.gltf',
+  deadTree2: '/models/nature/dead_tree_2.glb',
 };
 
-/** Smooth (bilinear) value noise for CLUMPED placement — thickets, glades and bare
- * patches instead of an even sprinkle. Each kind samples a different offset so fern
- * glades, flower beds and bush thickets don't all share the same footprint. */
-const cellHash = (ix: number, iz: number) => {
-  const s = Math.sin(ix * 157.31 + iz * 271.9) * 43758.5453;
-  return s - Math.floor(s);
-};
-const clumpNoise = (x: number, z: number): number => {
-  const ix = Math.floor(x);
-  const iz = Math.floor(z);
-  let fx = x - ix;
-  let fz = z - iz;
-  fx = fx * fx * (3 - 2 * fx);
-  fz = fz * fz * (3 - 2 * fz);
-  const a = cellHash(ix, iz);
-  const b = cellHash(ix + 1, iz);
-  const c = cellHash(ix, iz + 1);
-  const d = cellHash(ix + 1, iz + 1);
-  return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
-};
-
-/** Deterministic PRNG so the world looks identical every load. */
-const mulberry32 = (seed: number) => () => {
-  seed |= 0;
-  seed = (seed + 0x6d2b79f5) | 0;
-  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-};
-
-interface Item {
-  x: number;
-  y: number;
-  z: number;
-  rotY: number;
-  /** Small random lean (radians) so nothing stands perfectly plumb. */
-  rotX: number;
-  rotZ: number;
-  scale: number;
-  /** Vertical stretch on top of the uniform scale — varied heights per instance. */
-  sy: number;
-  /** Independent footprint stretch on X/Z — breaks the "same rock, different size" look. */
-  sx: number;
-  sz: number;
-}
-
-interface ScatterOpts {
-  maxHeight?: number;
-  avoidPath?: boolean;
-  /** Clumped concentration: `size` = patch footprint in world units, `offset`
-   * decorrelates kinds, `bias` is the keep-floor in bare areas, `power` sharpens
-   * patch edges (higher = tighter thickets). Omit for an even sprinkle. */
-  clump?: { size: number; offset: number; bias?: number; power?: number };
-  /** Max random lean, radians. */
-  tilt?: number;
-  /** Sink into the ground by this fraction of the instance scale (embeds rocks). */
-  sink?: number;
-  /** Random vertical stretch range — e.g. [0.75, 1.3] varies heights ±30%. */
-  yStretch?: [number, number];
-  /** Independent X/Z scale jitter (fraction, e.g. 0.2 = ±20%) so instances of the
-   * same source mesh don't read as uniformly-scaled clones — lumpy, not smooth. */
-  xzJitter?: number;
-  /** Extra rejection predicate — return true to skip a candidate (plaza keep-outs). */
-  avoid?: (x: number, z: number) => boolean;
-}
-
-/** Scatter `count` items in an annulus [rMin, rMax], avoiding tall hills and the trail. */
-const scatter = (
-  rng: () => number,
-  count: number,
-  rMin: number,
-  rMax: number,
-  scaleMin: number,
-  scaleMax: number,
-  opts: ScatterOpts = {},
-): Item[] => {
-  const { maxHeight = 4, avoidPath = true, clump, tilt = 0, sink = 0, yStretch, xzJitter = 0, avoid } = opts;
-  const items: Item[] = [];
-  let guard = 0;
-  const guardMax = count * (clump ? 20 : 8);
-  while (items.length < count && guard < guardMax) {
-    guard++;
-    const r = rMin + rng() * (rMax - rMin);
-    const a = rng() * Math.PI * 2;
-    const x = Math.cos(a) * r;
-    const z = Math.sin(a) * r;
-    const y = heightAt(x, z);
-    if (y > maxHeight) continue; // keep off the steep peaks
-    if (avoid && avoid(x, z)) continue; // plaza keep-outs (cobbles, buildings, lamps)
-    if (avoidPath && pathMask(x, z) > 0.35) continue; // keep plants off the dirt trail
-    if (clump) {
-      // Contrast remap: raw value noise huddles around 0.5, which never leaves a spot
-      // truly bare. Below 0.32 → 0 (empty ground, only `bias` survives); above 0.72 → 1.
-      const raw = clumpNoise(x / clump.size + clump.offset, z / clump.size - clump.offset);
-      const s = Math.min(1, Math.max(0, (raw - 0.32) / 0.4));
-      const n = Math.pow(s * s * (3 - 2 * s), clump.power ?? 2);
-      if (rng() > (clump.bias ?? 0.05) + n) continue;
-    }
-    const scale = scaleMin + rng() * (scaleMax - scaleMin);
-    items.push({
-      x,
-      y: y - sink * scale,
-      z,
-      rotY: rng() * Math.PI * 2,
-      rotX: (rng() - 0.5) * 2 * tilt,
-      rotZ: (rng() - 0.5) * 2 * tilt,
-      scale,
-      sy: yStretch ? yStretch[0] + rng() * (yStretch[1] - yStretch[0]) : 1,
-      sx: 1 + (rng() - 0.5) * 2 * xzJitter,
-      sz: 1 + (rng() - 0.5) * 2 * xzJitter,
-    });
-  }
-  return items;
-};
+// The deterministic scatter engine (mulberry32 / clumpNoise / scatter / Item) now lives in
+// @sim/terrain/scatterEngine so the headless sim can bake rock COLLIDERS from the identical
+// placements it draws here — see hubObstacles.ts. This file only bakes the InstancedMeshes.
 
 /** Split items round-robin across n variant buckets. */
 const partition = (items: Item[], n: number) => {
@@ -196,7 +89,7 @@ export const Scatter = ({
   clearRadius?: number;
   /** Tighter clear radius for low ground dressing (rocks, pebbles, clover, flowers,
    * fern, mushroom) so it can hug the hub plaza closer than tall obstruction items
-   * (boulders, bush thickets, pines, dead trees), which keep the wider `clearRadius`. */
+   * (boulders, bush thickets, dead trees), which keep the wider `clearRadius`. */
   groundClearRadius?: number;
   /** Also dress the inner plaza dirt (inside the clear radius) with small rocks,
    * pebbles, clover, weeds and flowers, dodging the cobbles/buildings/lamps. */
@@ -211,13 +104,30 @@ export const Scatter = ({
   const fern = useGameModel(PATHS.fern);
   const mushroom = useGameModel(PATHS.mushroom);
   const bush = useGameModel(PATHS.bushes[0]!);
-  const pine1 = useGameModel(PATHS.pines[0]!);
-  const pine3 = useGameModel(PATHS.pines[1]!);
-  const pine5 = useGameModel(PATHS.pines[2]!);
   const deadTree = useGameModel(PATHS.deadTree);
+  const deadTree2 = useGameModel(PATHS.deadTree2);
+
+  // The imported dead-tree variant is an origin-centred 2u-cube export; normalize it to a
+  // 1u-tall, feet-at-origin model so the scatter scale below reads directly as world height
+  // (Scatter's instancer, unlike Trees.tsx, does no per-model normalization of its own).
+  const deadTree2Norm = useMemo(() => {
+    const scene = deadTree2.scene.clone(true);
+    const box = new Box3().setFromObject(scene);
+    const size = box.getSize(new Vector3());
+    const s = 1 / (size.y || 1);
+    scene.scale.setScalar(s);
+    scene.position.set(
+      -((box.min.x + box.max.x) / 2) * s,
+      -box.min.y * s,
+      -((box.min.z + box.max.z) / 2) * s,
+    );
+    const wrap = new Group();
+    wrap.add(scene);
+    return wrap;
+  }, [deadTree2]);
 
   const meshes = useMemo(() => {
-    const rng = mulberry32(20260708);
+    const rng = mulberry32(HUB_SCATTER_SEED);
     const out: InstancedMesh[] = [];
     const groundRadius = groundClearRadius ?? clearRadius;
     const withClearing = (items: Item[], radius: number) =>
@@ -236,36 +146,20 @@ export const Scatter = ({
     // Mid-size rocks — tilted and sunk into the soil with squashed/stretched heights
     // AND independent X/Z jitter, so no two read as the same rock rescaled. Ground
     // band: allowed to hug the plaza edge, so the hub doesn't sit in a dead ring.
+    // Pass config lives in @sim (HUB_MEDIUM_ROCK_PASS) so the sim bakes matching COLLIDERS
+    // from the identical placement — retune it there, not here, to keep rocks solid.
     add(
       [rock1.scene, rock2.scene, rock3.scene],
-      scatter(rng, 56, 6, 80, 0.32, 1.6, {
-        maxHeight: 6,
-        tilt: 0.26,
-        sink: 0.08,
-        yStretch: [0.6, 1.45],
-        xzJitter: 0.24,
-        clump: { size: 26, offset: 3.7, bias: 0.22 },
-      }),
+      scatterPass(rng, HUB_MEDIUM_ROCK_PASS),
       true,
       true,
       groundRadius,
     );
     // BOULDERS: the same rocks scaled way up, leaning, buried a little — big landmark
     // silhouettes that break the "everything is knee height" flatness. Kept at the
-    // wider clearRadius so they don't loom right over the plaza.
-    add(
-      [rock3.scene, rock1.scene],
-      scatter(rng, 13, 14, 78, 1.7, 3.1, {
-        maxHeight: 6,
-        tilt: 0.28,
-        sink: 0.14,
-        yStretch: [0.65, 1.15],
-        xzJitter: 0.2,
-        clump: { size: 34, offset: 9.2, bias: 0.1 },
-      }),
-      true,
-      true,
-    );
+    // wider clearRadius so they don't loom right over the plaza. Collider config: @sim
+    // HUB_BOULDER_PASS.
+    add([rock3.scene, rock1.scene], scatterPass(rng, HUB_BOULDER_PASS), true, true);
     // Sparse pebble clusters, including the trail. Empty ground between groups is as
     // important as the stones: it keeps the terrain readable from the gameplay camera.
     add(
@@ -322,14 +216,16 @@ export const Scatter = ({
       true,
       true,
     );
-    // PINES: a second tree species with a completely different silhouette, mixed into
-    // the outer bands at strongly varied heights so the treeline stops being uniform.
+    // DEAD TREES (imported variant): the former green pines are now bare dead trees,
+    // scattered through the outer bands at strongly varied heights so the treeline reads as
+    // a wasted forest rather than a uniform row. Scale range here is world height in metres —
+    // the model was pre-normalized to 1u tall above.
     add(
-      [pine1.scene, pine3.scene, pine5.scene],
-      scatter(rng, 24, 26, 78, 0.7, 1.7, {
+      [deadTree2Norm],
+      scatter(rng, 24, 26, 78, 6, 11, {
         maxHeight: 7,
-        tilt: 0.05,
-        yStretch: [0.85, 1.3],
+        tilt: 0.08,
+        yStretch: [0.8, 1.25],
         clump: { size: 30, offset: 6.6, bias: 0.2 },
       }),
       true,
@@ -350,21 +246,13 @@ export const Scatter = ({
     // the clearing filter can't strip these (they intentionally live inside it).
     if (plazaFill) {
       const { inner, outer } = PLAZA_DRESSING;
-      // Keep plaza dressing off the cobbles/buildings/lamps AND off the dirt roads.
-      const plazaAvoid = (x: number, z: number) => inPlazaKeepout(x, z) || hubRoadMask(x, z) > 0.4;
-      // A few irregular rock groups, firmly embedded in the packed earth.
+      // A few irregular rock groups frame the plaza without occupying every quiet
+      // patch. Purposeful hub props carry the composition; rocks are punctuation.
+      // Config + dedicated seed live in @sim (HUB_PLAZA_ROCK_PASS) so the sim bakes the
+      // matching COLLIDERS for the solid-sized ones — retune it there to keep them solid.
       add(
         [rock1.scene, rock2.scene, rock3.scene],
-        scatter(rng, 26, inner, outer, 0.22, 0.76, {
-          maxHeight: 10,
-          avoidPath: false,
-          avoid: plazaAvoid,
-          tilt: 0.32,
-          sink: 0.14,
-          yStretch: [0.55, 1.4],
-          xzJitter: 0.3,
-          clump: { size: 8, offset: 2.2, bias: 0.12, power: 2.35 },
-        }),
+        scatterPass(mulberry32(HUB_PLAZA_ROCK_SEED), HUB_PLAZA_ROCK_PASS),
         true,
         true,
         0,
@@ -403,7 +291,7 @@ export const Scatter = ({
       // Smaller embedded pebble clusters worn into the dirt, with deliberate quiet gaps.
       add(
         [pebble1.scene, pebble2.scene, pebble3.scene],
-        scatter(rng, 48, inner, outer, 0.55, 1.55, {
+        scatter(rng, 32, inner, outer, 0.45, 1.2, {
           avoidPath: false,
           avoid: inPlazaKeepout,
           tilt: 0.5,
@@ -418,7 +306,7 @@ export const Scatter = ({
       );
       add(
         [pebble1.scene, pebble2.scene, pebble3.scene],
-        scatter(rng, 18, inner, outer, 0.5, 1.35, {
+        scatter(rng, 12, inner, outer, 0.42, 1.05, {
           avoidPath: false,
           avoid: (x, z) => inPlazaKeepout(x, z) || hubRoadMask(x, z) < 0.18,
           tilt: 0.5,
@@ -433,7 +321,7 @@ export const Scatter = ({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, fern, mushroom, bush, pine1, pine3, pine5, deadTree, clearRadius, groundClearRadius, plazaFill]);
+  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, fern, mushroom, bush, deadTree2Norm, deadTree, clearRadius, groundClearRadius, plazaFill]);
 
   // Cloned geometries are ours to dispose; materials belong to the loader cache.
   useEffect(
@@ -460,6 +348,6 @@ export const Scatter = ({
   PATHS.fern,
   PATHS.mushroom,
   ...PATHS.bushes,
-  ...PATHS.pines,
   PATHS.deadTree,
+  PATHS.deadTree2,
 ].forEach((p) => useGameModel.preload(p));

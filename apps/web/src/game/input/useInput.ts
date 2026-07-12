@@ -67,6 +67,15 @@ const initial = (): InputState => ({
   revive: false,
 });
 
+/** Clear actions consumed once per simulation tick while preserving genuinely held inputs. */
+export const consumeInputEdges = (input: InputState): void => {
+  input.jump = false;
+  input.melee = false;
+  input.ranged = false;
+  input.parry = false;
+  input.drop = false;
+};
+
 /**
  * Keyboard + mouse input as a stable ref, read inside useFrame — never React state.
  * ANTI-PATTERN: don't useState per keypress; that re-renders every frame.

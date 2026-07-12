@@ -17,7 +17,21 @@ export interface IntroLayer {
     toY: number;
     fromScale: number;
     toScale: number;
+    /** Canvas-relative pivot used to keep an isolated foreground object anchored. */
+    originX?: number;
+    originY?: number;
   };
+  /** Short authored accents layered over the continuous drift. */
+  motionEvents?: Array<{
+    atMs: number;
+    durationMs: number;
+    x?: number;
+    y?: number;
+    scale?: number;
+    rotateDeg?: number;
+    brightness?: number;
+    saturate?: number;
+  }>;
   /** Piecewise-linear opacity animation for flashes and other timed effects. */
   opacityKeys?: Array<{ atMs: number; opacity: number }>;
 }
@@ -71,6 +85,14 @@ export interface IntroScene {
     holdMs: number;
     fadeMs: number;
   };
+  cameraEvents?: Array<{
+    atMs: number;
+    durationMs: number;
+    zoom: number;
+    shake: number;
+    originX: number;
+    originY: number;
+  }>;
 }
 
 const INTRO_ROOT = '/intro';
@@ -403,6 +425,7 @@ export const INTRO_SCENES: IntroScene[] = [
     ],
     fallbackDurationMs: 12_500,
     tailMs: 900,
+    fadeOutMs: 240,
     voiceDelayMs: 320,
     vo: `${INTRO_ROOT}/audio/vo-04.mp3`,
     bgm: `${INTRO_ROOT}/audio/scene1-bgm.mp3`,
@@ -421,5 +444,529 @@ export const INTRO_SCENES: IntroScene[] = [
       holdMs: 0,
       fadeMs: 280,
     },
+  },
+  {
+    id: 'scene-5',
+    label: 'Corruption Takes Hold',
+    layers: [
+      {
+        src: `${INTRO_ROOT}/panel05-bg.webp`,
+        depth: 0.04,
+        fallback: 'radial-gradient(circle at 70% 58%, #32215a 0%, #121426 38%, #030407 100%)',
+        motion: {
+          durationMs: 9_000,
+          fromX: 0.45,
+          toX: -1.1,
+          fromY: 0.2,
+          toY: -0.55,
+          fromScale: 1.015,
+          toScale: 1.07,
+        },
+      },
+      {
+        src: `${INTRO_ROOT}/panel05-subject.webp`,
+        depth: 0.46,
+        motion: {
+          delayMs: 90,
+          durationMs: 8_350,
+          fromX: 0.9,
+          toX: -1.65,
+          fromY: 0.45,
+          toY: -0.95,
+          fromScale: 1.025,
+          toScale: 1.13,
+          originX: 52,
+          originY: 51,
+        },
+        motionEvents: [
+          {
+            atMs: 1_180,
+            durationMs: 920,
+            x: -0.35,
+            y: -0.25,
+            scale: 0.018,
+            rotateDeg: -0.25,
+            brightness: 1.08,
+            saturate: 1.08,
+          },
+          {
+            atMs: 4_240,
+            durationMs: 1_050,
+            x: -0.28,
+            y: 0.2,
+            scale: 0.022,
+            rotateDeg: 0.22,
+            brightness: 1.12,
+            saturate: 1.1,
+          },
+        ],
+      },
+      {
+        src: `${INTRO_ROOT}/panel05-relic.webp`,
+        depth: 0.92,
+        motion: {
+          delayMs: 280,
+          durationMs: 7_150,
+          fromX: 0.55,
+          toX: -1.95,
+          fromY: 0.65,
+          toY: -1.35,
+          fromScale: 1.035,
+          toScale: 1.19,
+          originX: 78,
+          originY: 72,
+        },
+        motionEvents: [
+          {
+            atMs: 1_180,
+            durationMs: 920,
+            x: 0.55,
+            y: -0.35,
+            scale: 0.075,
+            rotateDeg: 0.6,
+            brightness: 1.55,
+            saturate: 1.35,
+          },
+          {
+            atMs: 4_240,
+            durationMs: 1_050,
+            x: 0.22,
+            y: -0.18,
+            scale: 0.045,
+            rotateDeg: -0.35,
+            brightness: 1.35,
+            saturate: 1.22,
+          },
+        ],
+        opacityKeys: [
+          { atMs: 0, opacity: 0.84 },
+          { atMs: 1_100, opacity: 1 },
+          { atMs: 1_520, opacity: 0.88 },
+          { atMs: 2_050, opacity: 1 },
+          { atMs: 9_000, opacity: 1 },
+        ],
+      },
+    ],
+    captions: [
+      {
+        start: 0.03,
+        end: 0.34,
+        text: "They aren't just batteries.",
+      },
+      {
+        start: 0.31,
+        end: 0.67,
+        text: "They're alive. They're angry.",
+      },
+      {
+        start: 0.64,
+        end: 0.97,
+        text: 'And they want a body.',
+      },
+    ],
+    fallbackDurationMs: 9_000,
+    durationMode: 'fixed',
+    tailMs: 0,
+    voiceDelayMs: 180,
+    vo: `${INTRO_ROOT}/audio/vo-05.mp3`,
+    bgm: `${INTRO_ROOT}/audio/intro-bgm-remain.mp3`,
+    bgmVolume: 0.56,
+    bgmDuckVolume: 0.31,
+    kenBurns: {
+      fromScale: 1.015,
+      toScale: 1.095,
+      fromX: 0.006,
+      toX: -0.008,
+      fromY: 0.006,
+      toY: -0.008,
+    },
+    glow: 'rgba(113, 73, 230, 0.2)',
+    reveal: {
+      holdMs: 0,
+      fadeMs: 240,
+    },
+    cameraEvents: [
+      {
+        atMs: 1_350,
+        durationMs: 680,
+        zoom: 0.095,
+        shake: 0.24,
+        originX: 73,
+        originY: 68,
+      },
+      {
+        atMs: 4_350,
+        durationMs: 820,
+        zoom: 0.135,
+        shake: 0.38,
+        originX: 29,
+        originY: 24,
+      },
+    ],
+  },
+  {
+    id: 'scene-6',
+    label: 'Hollowed Goliath',
+    layers: [
+      {
+        src: `${INTRO_ROOT}/panel06.webp`,
+        depth: 0.12,
+        fallback: 'radial-gradient(circle at 45% 38%, #34206b 0%, #11182d 42%, #03050b 100%)',
+        motion: {
+          durationMs: 8_000,
+          fromX: 0.45,
+          toX: -0.55,
+          fromY: 2.8,
+          toY: -3.2,
+          fromScale: 1.025,
+          toScale: 1.145,
+          originX: 50,
+          originY: 54,
+        },
+        motionEvents: [
+          {
+            atMs: 6_250,
+            durationMs: 920,
+            x: -0.22,
+            y: -0.28,
+            scale: 0.035,
+            rotateDeg: -0.18,
+            brightness: 1.72,
+            saturate: 1.38,
+          },
+        ],
+      },
+    ],
+    captions: [
+      {
+        start: 0.05,
+        end: 0.95,
+        text: 'The Corruption rewrites your DNA and hollows you out.',
+      },
+    ],
+    fallbackDurationMs: 8_000,
+    durationMode: 'fixed',
+    tailMs: 0,
+    voiceDelayMs: 0,
+    bgmVolume: 0,
+    bgmDuckVolume: 0,
+    kenBurns: {
+      fromScale: 1.01,
+      toScale: 1.075,
+      fromX: 0.004,
+      toX: -0.006,
+      fromY: 0.018,
+      toY: -0.022,
+    },
+    glow: 'rgba(112, 75, 236, 0.24)',
+    reveal: {
+      holdMs: 0,
+      fadeMs: 220,
+    },
+    cameraEvents: [
+      {
+        atMs: 6_250,
+        durationMs: 920,
+        zoom: 0.09,
+        shake: 0.22,
+        originX: 38,
+        originY: 24,
+      },
+    ],
+  },
+  {
+    id: 'scene-7',
+    label: "Couriers' Arrival",
+    layers: [
+      {
+        src: `${INTRO_ROOT}/panel07-bg-v2.webp`,
+        depth: 0.05,
+        fallback: 'linear-gradient(180deg, #0b2740 0%, #07111d 48%, #050608 100%)',
+        motion: {
+          durationMs: 8_000,
+          fromX: 0.15,
+          toX: -0.4,
+          fromY: 0.1,
+          toY: -0.3,
+          fromScale: 1.015,
+          toScale: 1.07,
+        },
+      },
+      {
+        src: `${INTRO_ROOT}/panel07-pod.webp`,
+        depth: 0.28,
+        motion: {
+          durationMs: 7_800,
+          fromX: 0.15,
+          toX: -0.55,
+          fromY: -0.05,
+          toY: -0.5,
+          fromScale: 1.025,
+          toScale: 1.105,
+          originX: 50,
+          originY: 48,
+        },
+        motionEvents: [
+          {
+            atMs: 120,
+            durationMs: 620,
+            y: 0.8,
+            scale: 0.025,
+            rotateDeg: 0.22,
+            brightness: 1.18,
+            saturate: 1.08,
+          },
+        ],
+      },
+      {
+        src: `${INTRO_ROOT}/panel07-druid.webp`,
+        depth: 0.45,
+        motion: {
+          delayMs: 240,
+          durationMs: 7_600,
+          fromX: 0.1,
+          toX: -0.6,
+          fromY: 0.2,
+          toY: -0.65,
+          fromScale: 1.02,
+          toScale: 1.13,
+          originX: 67,
+          originY: 46,
+        },
+        motionEvents: [
+          {
+            atMs: 150,
+            durationMs: 650,
+            y: 0.38,
+            scale: 0.016,
+            rotateDeg: 0.12,
+            brightness: 1.1,
+            saturate: 1.06,
+          },
+        ],
+      },
+      {
+        src: `${INTRO_ROOT}/panel07-trickster.webp`,
+        depth: 0.68,
+        motion: {
+          delayMs: 160,
+          durationMs: 7_250,
+          fromX: 1,
+          toX: -2.2,
+          fromY: 0.5,
+          toY: -1.2,
+          fromScale: 1.04,
+          toScale: 1.22,
+          originX: 25,
+          originY: 57,
+        },
+        motionEvents: [
+          {
+            atMs: 140,
+            durationMs: 680,
+            x: -0.35,
+            y: 0.62,
+            scale: 0.025,
+            rotateDeg: -0.24,
+            brightness: 1.13,
+            saturate: 1.1,
+          },
+        ],
+      },
+      {
+        src: `${INTRO_ROOT}/panel07-engineer.webp`,
+        depth: 0.73,
+        motion: {
+          delayMs: 190,
+          durationMs: 7_150,
+          fromX: -0.6,
+          toX: 1.8,
+          fromY: 0.4,
+          toY: -1,
+          fromScale: 1.04,
+          toScale: 1.21,
+          originX: 84,
+          originY: 58,
+        },
+        motionEvents: [
+          {
+            atMs: 160,
+            durationMs: 680,
+            x: 0.3,
+            y: 0.58,
+            scale: 0.024,
+            rotateDeg: 0.22,
+            brightness: 1.14,
+            saturate: 1.08,
+          },
+        ],
+      },
+      {
+        src: `${INTRO_ROOT}/panel07-warrior.webp`,
+        depth: 0.86,
+        motion: {
+          delayMs: 120,
+          durationMs: 6_900,
+          fromX: 0.2,
+          toX: -0.7,
+          fromY: 0.8,
+          toY: -1.4,
+          fromScale: 1.05,
+          toScale: 1.28,
+          originX: 48,
+          originY: 64,
+        },
+        motionEvents: [
+          {
+            atMs: 120,
+            durationMs: 700,
+            y: 0.72,
+            scale: 0.035,
+            rotateDeg: -0.12,
+            brightness: 1.16,
+            saturate: 1.1,
+          },
+        ],
+      },
+      {
+        src: `${INTRO_ROOT}/panel07-fg.webp`,
+        depth: 0.96,
+        motion: {
+          durationMs: 6_900,
+          fromX: 0.8,
+          toX: -1.8,
+          fromY: 1,
+          toY: -1.4,
+          fromScale: 1.06,
+          toScale: 1.28,
+          originX: 50,
+          originY: 72,
+        },
+        motionEvents: [
+          {
+            atMs: 100,
+            durationMs: 700,
+            x: -0.2,
+            y: 1.05,
+            scale: 0.045,
+            rotateDeg: 0.2,
+            brightness: 1.2,
+            saturate: 1.12,
+          },
+        ],
+        opacityKeys: [
+          { atMs: 0, opacity: 0.84 },
+          { atMs: 280, opacity: 0.96 },
+          { atMs: 900, opacity: 0.84 },
+          { atMs: 8_000, opacity: 0.84 },
+        ],
+      },
+    ],
+    captions: [
+      {
+        start: 0.08,
+        end: 0.88,
+        text: "That's where you come in. Couriers.",
+      },
+    ],
+    fallbackDurationMs: 8_000,
+    durationMode: 'fixed',
+    tailMs: 0,
+    voiceDelayMs: 0,
+    bgmVolume: 0,
+    bgmDuckVolume: 0,
+    kenBurns: {
+      fromScale: 1,
+      toScale: 1.025,
+      fromX: 0.002,
+      toX: -0.004,
+      fromY: 0.004,
+      toY: -0.008,
+    },
+    glow: 'rgba(91, 145, 214, 0.13)',
+    reveal: {
+      holdMs: 0,
+      fadeMs: 180,
+    },
+    cameraEvents: [
+      {
+        atMs: 150,
+        durationMs: 680,
+        zoom: 0.035,
+        shake: 0.65,
+        originX: 50,
+        originY: 62,
+      },
+    ],
+  },
+  {
+    id: 'scene-8',
+    label: 'Vanguard Unleashed',
+    layers: [
+      {
+        src: `${INTRO_ROOT}/panel08.webp`,
+        depth: 0.14,
+        fallback: 'radial-gradient(circle at 64% 48%, #9b4c16 0%, #1a1b2c 35%, #05070d 100%)',
+        motion: {
+          durationMs: 3_400,
+          fromX: 1.8,
+          toX: -2.2,
+          fromY: 1.1,
+          toY: -0.8,
+          fromScale: 1.02,
+          toScale: 1.14,
+          originX: 57,
+          originY: 52,
+        },
+        motionEvents: [
+          {
+            atMs: 2_550,
+            durationMs: 900,
+            x: -0.4,
+            y: -0.22,
+            scale: 0.05,
+            rotateDeg: 0.3,
+            brightness: 1.65,
+            saturate: 1.35,
+          },
+        ],
+      },
+    ],
+    captions: [
+      {
+        start: 0.05,
+        end: 0.95,
+        text: 'You want to survive the Cradle? You share the burden.',
+      },
+    ],
+    fallbackDurationMs: 8_000,
+    durationMode: 'fixed',
+    tailMs: 0,
+    voiceDelayMs: 0,
+    bgmVolume: 0,
+    bgmDuckVolume: 0,
+    kenBurns: {
+      fromScale: 1.015,
+      toScale: 1.015,
+      fromX: 0,
+      toX: 0,
+      fromY: 0,
+      toY: 0,
+    },
+    glow: 'rgba(246, 148, 54, 0.2)',
+    reveal: {
+      holdMs: 0,
+      fadeMs: 160,
+    },
+    cameraEvents: [
+      {
+        atMs: 2_650,
+        durationMs: 760,
+        zoom: 0.07,
+        shake: 0.5,
+        originX: 64,
+        originY: 48,
+      },
+    ],
   },
 ];

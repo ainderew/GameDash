@@ -1,4 +1,5 @@
 import type { Vector3Tuple } from '@shared/types';
+import type { RelicTierDefinition } from '@shared/balance';
 
 /**
  * A tiny typed event queue drained once per tick. This is the seam Phase 3 will
@@ -61,6 +62,51 @@ export interface RelicPassFailed {
   reason: 'receiver_downed' | 'receiver_escaped';
 }
 
+export interface RelicThrown {
+  type: 'RelicThrown';
+  holderId?: number;
+  targetId?: number;
+}
+
+export interface RelicCorruptionChanged {
+  type: 'RelicCorruptionChanged';
+  value: number;
+  tierIndex: number;
+  tier: RelicTierDefinition;
+}
+
+export interface RelicTierChanged {
+  type: 'RelicTierChanged';
+  oldTierIndex: number;
+  newTierIndex: number;
+  oldTier: RelicTierDefinition;
+  newTier: RelicTierDefinition;
+}
+
+export interface RelicGrounded {
+  type: 'RelicGrounded';
+  position: Vector3Tuple;
+}
+
+export interface RelicPickedUp {
+  type: 'RelicPickedUp';
+  playerId?: number;
+}
+
+export interface RelicErupted {
+  type: 'RelicErupted';
+  holderId?: number;
+  position: Vector3Tuple;
+}
+
+export interface RelicVolatileDischarge {
+  type: 'RelicVolatileDischarge';
+  holderId?: number;
+  position: Vector3Tuple;
+  radius: number;
+  tierIndex: number;
+}
+
 export type GameEvent =
   | LootDropped
   | PlayerDowned
@@ -68,8 +114,15 @@ export type GameEvent =
   | MonsterKilled
   | MaterialCollected
   | RelicPassLaunched
+  | RelicThrown
   | RelicCaught
-  | RelicPassFailed;
+  | RelicPassFailed
+  | RelicCorruptionChanged
+  | RelicTierChanged
+  | RelicGrounded
+  | RelicPickedUp
+  | RelicErupted
+  | RelicVolatileDischarge;
 
 /**
  * Per-world event queue (was a module-level queue in single-player). The room server runs

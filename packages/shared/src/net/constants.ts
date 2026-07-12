@@ -117,6 +117,12 @@ export const ANIM_FLAG_DOWNED = 1 << 2;
 export const ANIM_FLAG_ATTACK = 1 << 3;
 /** Player: mid-dodge/roll (dodgingUntil window) — remote avatars play the roll clip. */
 export const ANIM_FLAG_DODGE = 1 << 4;
+/** Player: inside the server-authored hit-reaction window. */
+export const ANIM_FLAG_HURT = 1 << 5;
+/** Player: planted by a freshly completed Relic catch/pickup. */
+export const ANIM_FLAG_RELIC_CATCH = 1 << 6;
+/** Player: inside the follow-through window after launching the Relic. */
+export const ANIM_FLAG_RELIC_THROW = 1 << 7;
 
 // ── Monster snapshot anim flags (Phase 4) ─────────────────────────────────────
 /** aiState packed into the low two bits: 0 idle · 1 chase · 2 attack · 3 cooldown. */

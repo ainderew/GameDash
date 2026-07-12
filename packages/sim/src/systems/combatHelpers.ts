@@ -18,6 +18,10 @@ export interface HitOptions {
   point?: Vector3Tuple;
   /** Explicit knockback direction in XZ (unit-ish). Default: derived from attacker→target. */
   dir?: [number, number];
+  /** Scales gameplay knockback independently of visual hit strength (0 disables it). */
+  knockbackScale?: number;
+  /** Environmental/unstable effects that cannot be reflected with a weapon parry. */
+  unblockable?: boolean;
 }
 
 /** Assemble the rich hit context the feel layer consumes. */
@@ -28,6 +32,7 @@ const buildHitContext = (
   now: number,
   crit: boolean,
   opts: HitOptions,
+  lethal = false,
 ): HitContext => {
   const tp = target.transform?.position ?? [0, 0, 0];
   const point: Vector3Tuple = opts.point ?? [tp[0], tp[1] + 1.0, tp[2]];
@@ -54,6 +59,7 @@ const buildHitContext = (
     amount,
     strength: opts.strength ?? 'light',
     crit,
+    lethal,
     point,
     dirX,
     dirZ,
@@ -67,6 +73,9 @@ const buildHitContext = (
  */
 export const applyDamage = (target: Entity, amount: number, now: number): boolean => {
   if (!target.health) return false;
+  // Death resolves at the end of the tick, so reject later same-tick hits on a zero-HP corpse.
+  // This also guarantees exactly one lethal hit for kill credit.
+  if (target.health.current <= 0) return false;
   if (isInIFrames(target, now)) return false;
   target.health.current = Math.max(0, target.health.current - amount);
   target.hitFlashUntil = now + HIT_FLASH_MS;
@@ -96,6 +105,7 @@ export const dealDamage = (
   // Parry seam: an open block window on the player turns the hit back on the attacker.
   if (
     PARRY_TUNING.enabled &&
+    !opts.unblockable &&
     target.playerControlled &&
     (target.blockingUntil ?? 0) > now &&
     !isInIFrames(target, now)
@@ -114,16 +124,26 @@ export const dealDamage = (
     return false;
   }
 
+  const wasAlive = (target.health?.current ?? 0) > 0;
   const landed = applyDamage(target, amount, now);
   if (!landed) return false;
 
-  const ctx = buildHitContext(world, target, amount, now, crit, opts);
+  const ctx = buildHitContext(
+    world,
+    target,
+    amount,
+    now,
+    crit,
+    opts,
+    wasAlive && (target.health?.current ?? 0) <= 0,
+  );
 
   // KNOCKBACK + HITSTUN — everyone gets shoved away from the blow. Players take a SCALED
   // shove (playerScale) that plays under the hurt anim: knockbackSystem owns their
   // horizontal velocity until the impulse settles, then control returns. A dodge breaks
   // out of it early (see applyPlayerIntent) so it never feels like a cutscene.
-  const kbScale = target.playerControlled ? KNOCKBACK_TUNING.playerScale : 1;
+  const kbScale =
+    (target.playerControlled ? KNOCKBACK_TUNING.playerScale : 1) * (opts.knockbackScale ?? 1);
   if (kbScale > 0) {
     const speed = KNOCKBACK_TUNING.speed[ctx.strength] * kbScale;
     const launch = KNOCKBACK_TUNING.launch[ctx.strength] * kbScale;

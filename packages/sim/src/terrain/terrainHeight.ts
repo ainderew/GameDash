@@ -61,10 +61,10 @@ export const pathMask = (x: number, z: number): number => {
 // distinct, well-separated spokes rather than a fat clearing.
 // [x0, z0, x1, z1, halfWidth]
 export const HUB_ROADS: readonly (readonly [number, number, number, number, number])[] = [
-  [0, -6.0, 0, -16.2, 0.62], //   → Expedition Gate (north)
-  [0, 6.0, 0, 15.0, 0.66], //     → southern approach / spawn
-  [-4.4, -4.0, -9.8, -7.8, 0.55], // → Roster Lodge (west)
-  [4.9, -3.5, 9.6, -6.4, 0.55], //   → Summoning Shrine (east)
+  [0, -6.0, 0, -20.7, 0.72], //   → Expedition Gate (north)
+  [0, 6.0, 0, 16.0, 0.72], //     → southern approach / spawn
+  [-4.5, -4.2, -14.0, -7.9, 0.62], // → Roster Lodge (west)
+  [4.5, -4.2, 14.0, -7.9, 0.62], //   → Summoning Shrine (east)
 ] as const;
 
 /** Squared-free distance from (px,pz) to segment a→b. */

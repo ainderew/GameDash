@@ -61,10 +61,22 @@
         "riggable": true
       },
       "animations": {
-        "idle": { "preset": "preset:idle", "retarget_task_id": "c1280985-4a8f-4584-b0d3-b7708486bb94" },
-        "run": { "preset": "preset:run", "retarget_task_id": "8657ec53-cfac-428b-91ba-3f0d84be6d64" },
-        "slash": { "preset": "preset:slash", "retarget_task_id": "37152809-a71a-45e6-a5ab-a2ca680e1ae3" },
-        "hurt": { "preset": "preset:hurt", "retarget_task_id": "408f8c5d-f37c-436d-8a34-c5e783779cb1" }
+        "idle": {
+          "preset": "preset:idle",
+          "retarget_task_id": "c1280985-4a8f-4584-b0d3-b7708486bb94"
+        },
+        "run": {
+          "preset": "preset:run",
+          "retarget_task_id": "8657ec53-cfac-428b-91ba-3f0d84be6d64"
+        },
+        "slash": {
+          "preset": "preset:slash",
+          "retarget_task_id": "37152809-a71a-45e6-a5ab-a2ca680e1ae3"
+        },
+        "hurt": {
+          "preset": "preset:hurt",
+          "retarget_task_id": "408f8c5d-f37c-436d-8a34-c5e783779cb1"
+        }
       },
       "optimization": {
         "tool": "gltf-transform optimize",
@@ -98,7 +110,11 @@
         "convert_task_id": "4819ec8e-f58e-4d12-87e7-eac373212620",
         "face_limit": 8000
       },
-      "optimization": { "geometry_compress": "draco", "texture_compress": "webp", "size": "3.35 MB -> 182 KB" },
+      "optimization": {
+        "geometry_compress": "draco",
+        "texture_compress": "webp",
+        "size": "3.35 MB -> 182 KB"
+      },
       "maps_to": "monster_def chaser",
       "created_at": "2026-07-09",
       "optimized": true,
@@ -121,7 +137,11 @@
         "convert_task_id": "032f6adc-fa78-4050-aeb8-79a53262edaa",
         "face_limit": 8000
       },
-      "optimization": { "geometry_compress": "draco", "texture_compress": "webp", "size": "2.95 MB -> 165 KB" },
+      "optimization": {
+        "geometry_compress": "draco",
+        "texture_compress": "webp",
+        "size": "2.95 MB -> 165 KB"
+      },
       "maps_to": "monster_def spitter",
       "created_at": "2026-07-09",
       "optimized": true,
@@ -144,7 +164,11 @@
         "convert_task_id": "87e9e83d-e9ef-49d9-9192-9871cff33d2d",
         "face_limit": 9000
       },
-      "optimization": { "geometry_compress": "draco", "texture_compress": "webp", "size": "3.63 MB -> 189 KB" },
+      "optimization": {
+        "geometry_compress": "draco",
+        "texture_compress": "webp",
+        "size": "3.63 MB -> 189 KB"
+      },
       "maps_to": "monster_def brute",
       "created_at": "2026-07-09",
       "optimized": true,
@@ -159,7 +183,9 @@
         "apps/web/public/models/hub/summoning-shrine.glb",
         "apps/web/public/models/hub/expedition-gate.glb",
         "apps/web/public/models/hub/lamp_1.glb",
-        "apps/web/public/models/hub/lantern-straight.glb"
+        "apps/web/public/models/hub/lamp_2.glb",
+        "apps/web/public/models/hub/bench.glb",
+        "apps/web/public/models/hub/banner.glb"
       ],
       "source": "user-provided Tripo3D exports",
       "license": "Commercial rights not yet recorded; verify the user's Tripo plan and generation ownership before shipping",
@@ -167,7 +193,33 @@
       "maps_to": "Heartwood Haven social hub landmarks",
       "created_at": "2026-07-11",
       "optimized": false,
-      "notes": "MVP source files copied from C:/Users/Andrew/Downloads/world_assets. Runtime normalizes scale and pivot. Optimize geometry/textures after layout approval; both lantern variants are intentionally used."
+      "notes": "MVP source files copied from C:/Users/Andrew/Downloads/world_assets. Runtime normalizes scale and pivot. Bench and banner models replace the early procedural placeholders. Optimize geometry/textures after layout approval; both lantern variants are intentionally used."
+    },
+    {
+      "id": "corrupt-relic",
+      "file": "apps/web/public/models/relic/corrupt-relic.glb",
+      "raw_file": "assets/raw/corrupt-relic.glb",
+      "source": "user-provided Tripo3D export",
+      "license": "User-provided asset; verify generation ownership and commercial rights before shipping",
+      "commercial_ok": false,
+      "maps_to": "progressive Relic corruption visual",
+      "created_at": "2026-07-13",
+      "optimized": true,
+      "optimization": {
+        "tool": "gltf-transform 4.4.1 optimize",
+        "geometry_compress": "meshopt high",
+        "simplify_ratio": 0.7,
+        "simplify_error": 0.002,
+        "texture_compress": "webp",
+        "texture_size": 1024,
+        "size_before": "4.44 MB",
+        "size_after": "250.79 KB",
+        "vertices_before": 14547,
+        "vertices_after": 12221,
+        "gpu_texture_before": "89.48 MB",
+        "gpu_texture_after": "5.59 MB"
+      },
+      "notes": "Crossfades over the clean Relic using the authoritative 0-100 corruption value in both solo and networked renderers."
     }
   ]
 }

@@ -48,6 +48,26 @@ const RELIC_THROW_URL = '/audio/relic-throw.mp3';
 let relicThrowBuffer: AudioBuffer | null = null;
 let relicThrowLoad: Promise<void> | null = null;
 
+// The jump take-off is a real recording (user-supplied). Fetched/decoded once, same as the
+// other one-shots; each jump detunes it slightly (see playJump) so repeated hops never sound
+// canned. Loudness sits under a landed hit so it reads as effort, not an event.
+const JUMP_URL = '/audio/jump.mp3';
+let jumpBuffer: AudioBuffer | null = null;
+let jumpLoad: Promise<void> | null = null;
+
+// The jump VOICE effort (user-supplied) plays SIMULTANEOUSLY with the jump whoosh on a ground
+// jump — a vocal "hup" layered over the take-off. Its own buffer/loader so it decodes in
+// parallel and either layer can be missing without breaking the other.
+const JUMP_VOICE_URL = '/audio/jump-voice.mp3';
+let jumpVoiceBuffer: AudioBuffer | null = null;
+let jumpVoiceLoad: Promise<void> | null = null;
+
+// The DOUBLE jump (user-supplied) — a distinct one-shot fired on the airborne second jump
+// (jumpsUsed 1→2), separate from the ground take-off above so the two hops sound different.
+const DOUBLE_JUMP_URL = '/audio/double-jump.mp3';
+let doubleJumpBuffer: AudioBuffer | null = null;
+let doubleJumpLoad: Promise<void> | null = null;
+
 // AMBIENT WORLD BED — recorded ambiences played PERIODICALLY (not looped) so the world feels
 // alive: a distant swell every ~50–110s (scheduling lives in ambientScheduler.ts), each one a
 // RANDOM pick from the pool below, then detuned / panned / low-passed a little so it seems to
@@ -149,6 +169,45 @@ const loadRelicThrow = (c: Ctx): void => {
   });
 };
 
+/** Fetch/decode the jump sample once. Failure is safely retriable. */
+const loadJump = (c: Ctx): void => {
+  if (jumpBuffer || jumpLoad) return;
+  jumpLoad = (async () => {
+    const response = await fetch(JUMP_URL);
+    if (!response.ok) throw new Error(`Unable to load jump sample: ${JUMP_URL}`);
+    jumpBuffer = await c.decodeAudioData(await response.arrayBuffer());
+  })().catch(() => {
+    // A missing/undecodable sample must never break jumping.
+    jumpLoad = null;
+  });
+};
+
+/** Fetch/decode the jump-voice sample once. Failure is safely retriable. */
+const loadJumpVoice = (c: Ctx): void => {
+  if (jumpVoiceBuffer || jumpVoiceLoad) return;
+  jumpVoiceLoad = (async () => {
+    const response = await fetch(JUMP_VOICE_URL);
+    if (!response.ok) throw new Error(`Unable to load jump voice sample: ${JUMP_VOICE_URL}`);
+    jumpVoiceBuffer = await c.decodeAudioData(await response.arrayBuffer());
+  })().catch(() => {
+    // A missing/undecodable voice layer must never break jumping.
+    jumpVoiceLoad = null;
+  });
+};
+
+/** Fetch/decode the double-jump sample once. Failure is safely retriable. */
+const loadDoubleJump = (c: Ctx): void => {
+  if (doubleJumpBuffer || doubleJumpLoad) return;
+  doubleJumpLoad = (async () => {
+    const response = await fetch(DOUBLE_JUMP_URL);
+    if (!response.ok) throw new Error(`Unable to load double jump sample: ${DOUBLE_JUMP_URL}`);
+    doubleJumpBuffer = await c.decodeAudioData(await response.arrayBuffer());
+  })().catch(() => {
+    // A missing/undecodable sample must never break the double jump.
+    doubleJumpLoad = null;
+  });
+};
+
 /** Fetch/decode the ambient pool once. Failure is safely retriable. */
 const loadAmbient = (c: Ctx): void => {
   if (ambientBuffers.length > 0 || ambientLoad) return;
@@ -181,6 +240,9 @@ export const resumeAudio = (): void => {
   loadRelicPickup(c);
   loadSwordSwing(c);
   loadRelicThrow(c);
+  loadJump(c);
+  loadJumpVoice(c);
+  loadDoubleJump(c);
   loadAmbient(c);
 };
 
@@ -312,6 +374,68 @@ export const playRelicThrow = (): void => {
   };
 };
 
+/**
+ * Random pitch spread applied to the jump each take-off, in semitones (±this much). Same
+ * anti-"copy-pasted sample" trick as the other one-shots — a symmetric spread reads as natural
+ * hop-to-hop variety.
+ */
+const JUMP_PITCH_SEMITONES = 2;
+
+/** Random pitch spread applied to the jump voice each take-off (±semitones). Kept smaller than
+ * the whoosh so the vocal effort stays recognizably the same "voice" hop to hop. */
+const JUMP_VOICE_PITCH_SEMITONES = 1;
+
+/** Play one buffered one-shot through a fresh gain node at the given level, detuned ±spread
+ * semitones. Shared by the two layers of the jump so they fire from the same tick. */
+const playOneShot = (c: Ctx, bus: GainNode, buffer: AudioBuffer, level: number, spread: number): void => {
+  const t = now(c);
+  const source = c.createBufferSource();
+  const gain = c.createGain();
+  source.buffer = buffer;
+  // ±N semitones of detune → playbackRate = 2^(semitones/12). Continuous, not quantized.
+  const semitones = (Math.random() * 2 - 1) * spread;
+  source.playbackRate.value = Math.pow(2, semitones / 12);
+  gain.gain.value = level;
+  source.connect(gain);
+  gain.connect(bus);
+  source.start(t);
+  source.onended = () => {
+    source.disconnect();
+    gain.disconnect();
+  };
+};
+
+/**
+ * The jump take-off: the recorded whoosh AND the vocal effort layer, fired together on a ground
+ * jump. Both are detuned every jump so repeated hops never sound like the same clip, and each
+ * layer no-ops independently until its sample has decoded — so a jump before either buffer is
+ * ready is just (partly) silent rather than broken.
+ */
+export const playJump = (): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  loadJump(c);
+  loadJumpVoice(c);
+  master.gain.value = feel.audio.masterVolume;
+  if (jumpBuffer) playOneShot(c, master, jumpBuffer, 0.5, JUMP_PITCH_SEMITONES);
+  if (jumpVoiceBuffer) playOneShot(c, master, jumpVoiceBuffer, 0.15, JUMP_VOICE_PITCH_SEMITONES);
+};
+
+/**
+ * The airborne second (double) jump — its own recorded sample, distinct from the ground take-off.
+ * Detuned every jump so repeats don't sound canned; no-ops until the sample has decoded.
+ */
+export const playDoubleJump = (): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  loadDoubleJump(c);
+  if (!doubleJumpBuffer) return;
+  master.gain.value = feel.audio.masterVolume;
+  playOneShot(c, master, doubleJumpBuffer, 0.5, JUMP_PITCH_SEMITONES);
+};
+
 /** Short reusable white-noise buffer for transients + whooshes. */
 let noiseBuf: AudioBuffer | null = null;
 const noiseBuffer = (c: Ctx): AudioBuffer => {
@@ -404,7 +528,7 @@ export const playWhoosh = (strength: HitStrength): void => {
   const maxUp = SWORD_SWING_PITCH_SEMITONES_UP * (heavy ? 0.55 : 1);
   const semitones = Math.random() * maxUp;
   source.playbackRate.value = Math.pow(2, semitones / 12);
-  gain.gain.value = heavy ? 0.55 : 0.4;
+  gain.gain.value = heavy ? 0.275 : 0.2;
   source.connect(gain);
   gain.connect(master);
   source.start(t);

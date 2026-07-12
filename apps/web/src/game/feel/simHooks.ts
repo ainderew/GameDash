@@ -1,14 +1,16 @@
 import { Vector3 } from 'three';
-import type { World } from 'miniplex';
 import type { SimHooks } from '@sim/hooks';
-import type { Entity } from '@sim/components';
-import type { Vector3Tuple } from '@shared/types';
-import { RELIC_CATCH_HITSTOP_MS, RELIC_SHOCKWAVE_RADIUS } from '@shared/balance';
-import { onHitLanded, onParry, spawnImpactVfx } from '@/game/feel/onHit';
+import { RELIC_CATCH_HITSTOP_MS } from '@shared/balance';
+import { onHitLanded, onParry } from '@/game/feel/onHit';
 import { addTrauma } from '@/game/feel/screenShake';
-import { requestHitstop } from '@/game/feel/time';
+import { requestHitstop, gameNow } from '@/game/feel/time';
 import { playWhoosh } from '@/game/feel/audio';
 import { weaponSockets } from '@/game/combat/weaponSockets';
+
+/** Teal emissive the catcher's body glows with while it absorbs the relic's power. */
+const ABSORB_GLOW_COLOR: [number, number, number] = [0.18, 0.85, 0.75];
+/** How long the body holds the absorb glow — spans the collapse so both fade together. */
+const ABSORB_GLOW_MS = 300;
 
 /**
  * The CLIENT's SimHooks — everything juicy the headless sim used to call directly, now
@@ -16,35 +18,10 @@ import { weaponSockets } from '@/game/combat/weaponSockets';
  * tick runs silent; nothing in here may change a gameplay outcome.
  */
 
-/** The Relic's glow color — catch shockwave ring matches the crystal. */
-const RELIC_FX_COLOR = '#2dd4bf';
-
 // Scratch vectors for the blade-socket refinement (render-side three.js is fine HERE).
 const bladeBase = new Vector3();
 const bladeTip = new Vector3();
 const bladeContact = new Vector3();
-
-/**
- * A wide white-hot "claim" bloom, layered over the teal shockwave spark+ring so a catch
- * reads bigger and brighter than a combat hit. Colour values exceed 1 to cross the Bloom
- * threshold for a hard flash; aged on real time so it erupts through the catch hitstop.
- */
-const spawnCatchBloom = (world: World<Entity>, point: Vector3Tuple): void => {
-  world.add({
-    transform: { position: [...point], rotationY: 0 },
-    impactFx: {
-      kind: 'ring',
-      strength: 'heavy',
-      spawnedAtReal: performance.now(),
-      lifetimeMs: 340,
-      color: [1.6, 1.6, 1.45],
-      count: 0,
-      radius: RELIC_SHOCKWAVE_RADIUS * 0.75,
-      dirX: 0,
-      dirZ: 0,
-    },
-  });
-};
 
 export const clientSimHooks: SimHooks = {
   onHitLanded,
@@ -54,9 +31,19 @@ export const clientSimHooks: SimHooks = {
   onSwing: (_player, strength) => playWhoosh(strength),
 
   onRelicCaught: (world, _relic, catcher, point) => {
-    spawnImpactVfx(world, point, 'heavy', RELIC_FX_COLOR);
-    spawnCatchBloom(world, point);
-    addTrauma(0.25);
+    // A large teal energy field collapses in and is drawn into the catcher's body — spiral
+    // in-streams that dissolve into the torso + a shrinking aura shell. See fx/RelicCatchFX.
+    // This marker entity is the only spawn; the renderer ages it out on real time.
+    world.add({
+      transform: { position: [...point], rotationY: 0 },
+      catchBurstFx: { spawnedAtReal: performance.now() },
+    });
+    // The body itself glows teal as it absorbs — driven through the existing hit-flash channel
+    // (Player.tsx / MutantModels.tsx read hitFlashColor). This is what sells "absorbed INTO
+    // the body" rather than a flash floating in front of it.
+    catcher.hitFlashColor = ABSORB_GLOW_COLOR;
+    catcher.hitFlashUntil = gameNow() + ABSORB_GLOW_MS;
+    addTrauma(0.32);
     // Local-player catch juice: a brief whole-scene "thunk" freeze. Teammate catches skip
     // it — freezing the fight every time an AI receives a relay pass would read as stutter.
     if (catcher.localPlayer) requestHitstop(RELIC_CATCH_HITSTOP_MS);

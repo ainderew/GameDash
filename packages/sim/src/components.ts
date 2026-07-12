@@ -1,6 +1,7 @@
 import type { PlayerId, Vector3Tuple } from '@shared/types';
 import type { Faction, HitStrength } from '@shared/combat';
 import type { MonsterArchetype } from '@shared/monsters';
+import type { RelicKnockbackLevel } from '@shared/balance';
 
 /**
  * ECS component definitions. Entities are plain objects holding a subset of these.
@@ -57,6 +58,10 @@ export interface RelicState {
   phase: RelicPhase;
   /** Who holds it (carried only). */
   carrier?: Entity;
+  /** Single source of truth, clamped to [0, RELIC_CORRUPTION_TUNING.max]. */
+  corruption: number;
+  /** Next authoritative Volatile Discharge timestamp; absent outside Volatile/Overload. */
+  nextVolatileDischargeAt?: number;
   /**
    * Flight kind: 'pass' = deterministic quadratic Bézier to a teammate's catch socket
    * (auto-caught on arrival, uninterceptable); 'lob' = untargeted parabola to a ground
@@ -212,12 +217,31 @@ export interface Entity {
   spawnedAt?: number;
   /** Damage applied on projectile hit. */
   damage?: number;
+  /** Player that fired this projectile; receives Relic lifesteal on confirmed damage. */
+  projectileOwner?: Entity;
+  /** Piercing projectiles retain one hit per target instead of despawning on first contact. */
+  projectilePierce?: boolean;
+  projectileHitSet?: Set<Entity>;
+  projectileKnockback?: RelicKnockbackLevel;
+  projectileLifestealPct?: number;
 
   // ── Pickup ──────────────────────────────────────────────────────────────
   pickup?: { tableId: string };
 
   // ── Relic ───────────────────────────────────────────────────────────────
   relic?: RelicState;
+  /** Idempotent, derived holder stats. Cleared the instant this entity releases the Relic. */
+  relicBuff?: {
+    tierIndex: number;
+    tierName: string;
+    damageMult: number;
+    projectileCount: number;
+    attackRateMult: number;
+    pierce: boolean;
+    knockback: RelicKnockbackLevel;
+    lifestealPct: number;
+    moveSpeedMult: number;
+  };
   /** gameNow() until which this player can't receive the Relic (post-pass rotation rule). */
   relicRecatchUntil?: number;
   /**

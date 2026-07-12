@@ -15,6 +15,10 @@ export * from './prediction';
 
 export * from './terrain/terrainHeight';
 export * from './terrain/hubCollision';
+export * from './terrain/collisionField';
+export * from './terrain/scatterEngine';
+export * from './terrain/hubPlaza';
+export * from './terrain/hubObstacles';
 
 export * from './combat/combo';
 export * from './combat/passTargeting';

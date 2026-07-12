@@ -4,13 +4,15 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Box3, Vector3 } from 'three';
 import type { Group, Mesh } from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { world } from '@/game/ecs/world';
+import { relics, world } from '@/game/ecs/world';
 import type { Entity } from '@sim/components';
 import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
 import { deMetalize } from '@/lib/materials';
 import { PLAYER_CHARACTERS } from '@/game/entities/characters';
 import { heightAt } from '@sim/terrain/terrainHeight';
+import { RELIC_CORRUPTION_TUNING } from '@shared/balance';
+import { CorruptionArmTendrils } from '@/game/fx/CorruptionArmTendrils';
 
 /**
  * Local stand-in teammates until real multiplayer lands: druid-model avatars driven by
@@ -50,6 +52,17 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
   const walk = useGameModel(WALK_PATH);
 
   const scene = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
+  const armBones = useMemo(() => {
+    let left: Group | null = null;
+    let right: Group | null = null;
+    scene.traverse((object) => {
+      if (!left && /LeftForeArm$/.test(object.name)) left = object as Group;
+      if (!right && /RightForeArm$/.test(object.name)) right = object as Group;
+    });
+    return [left, right] as const;
+  }, [scene]);
+  const volatileActive = useRef(false);
+  const corruptionProgress = useRef(0);
   // Measure the ORIGINAL cached scene, exactly like AnimatedCharacter does — Box3 on a
   // just-cloned skinned rig reports bogus bounds (unposed skinning), which oversized the
   // dummies ~2.7× and sank them underground. yOffsetAdd is a baked WORLD-unit correction
@@ -91,6 +104,12 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
     if (!g || !t || !v) return;
     g.position.set(t.position[0], t.position[1], t.position[2]);
     g.rotation.y = t.rotationY;
+    const relic = relics.first?.relic;
+    volatileActive.current = relic?.phase === 'carried' && relic.carrier === entity;
+    corruptionProgress.current = Math.max(
+      0,
+      Math.min(1, (relic?.corruption ?? 0) / RELIC_CORRUPTION_TUNING.max),
+    );
 
     const next = Math.hypot(v.linear[0], v.linear[2]) > WALK_SPEED_THRESHOLD ? 'walk' : 'idle';
     if (next !== current.current) {
@@ -107,6 +126,12 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
   return (
     <group ref={group}>
       <primitive object={scene} scale={scale} position={[0, yOffset, 0]} />
+      <CorruptionArmTendrils
+        leftArm={armBones[0]}
+        rightArm={armBones[1]}
+        activeRef={volatileActive}
+        corruptionRef={corruptionProgress}
+      />
     </group>
   );
 };

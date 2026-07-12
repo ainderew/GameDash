@@ -43,6 +43,18 @@ export interface SessionUI {
   members: SessionMemberUI[];
 }
 
+export interface PlayerScoreUI {
+  playerId: string;
+  name: string;
+  score: number;
+  kills: number;
+}
+
+export interface ExpeditionResultUI {
+  standings: PlayerScoreUI[];
+  mvpPlayerId: string | null;
+}
+
 interface UIState {
   /** Main menu vs in-game. The 3D world only mounts once the player hits PLAY. */
   screen: AppScreen;
@@ -83,6 +95,10 @@ interface UIState {
   zoneCountdown: number | null;
   /** PlayerId currently carrying the relic (null = grounded/in-flight). Drives the carrier icon. */
   relicCarrier: string | null;
+  /** Live server-authoritative standings for the current multiplayer expedition. */
+  runScores: PlayerScoreUI[];
+  /** Final standings shown after the failed party returns to the social hub. */
+  expeditionResult: ExpeditionResultUI | null;
 
   // ── HUD juice: combo counter ──────────────────────────────────────────────
   /** Consecutive landed hits within the combo window. */
@@ -103,6 +119,8 @@ interface UIState {
   setMemberHp: (id: string, hp: number) => void;
   /** Set who holds the relic (playerId), or null when nobody carries it. */
   setRelicCarrier: (id: string | null) => void;
+  setRunScores: (scores: PlayerScoreUI[]) => void;
+  setExpeditionResult: (result: ExpeditionResultUI | null) => void;
   setNetError: (message?: string) => void;
 
   setHealth: (value: number) => void;
@@ -155,6 +173,8 @@ export const useUIStore = create<UIState>((set) => ({
   netError: undefined,
   zoneCountdown: null,
   relicCarrier: null,
+  runScores: [],
+  expeditionResult: null,
 
   setConnectionState: (connectionState) => set({ connectionState }),
   setSession: (session) => set({ session, netError: undefined }),
@@ -187,6 +207,8 @@ export const useUIStore = create<UIState>((set) => ({
       return { session: { ...s.session, members } };
     }),
   setRelicCarrier: (relicCarrier) => set({ relicCarrier }),
+  setRunScores: (runScores) => set({ runScores }),
+  setExpeditionResult: (expeditionResult) => set({ expeditionResult }),
   setNetError: (netError) => set({ netError }),
 
   setHealth: (value) => set({ health: value }),
@@ -233,6 +255,8 @@ export const useUIStore = create<UIState>((set) => ({
       comboCount: 0,
       comboLastAt: 0,
       comboBumpId: 0,
+      runScores: [],
+      expeditionResult: null,
     }),
 }));
 

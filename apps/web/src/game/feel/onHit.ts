@@ -69,6 +69,45 @@ export const spawnImpactVfx = (
   });
 };
 
+/** Large violet friendly-fire burst emitted by the corrupted carrier. */
+export const spawnVolatileDischargeVfx = (
+  world: World<Entity>,
+  point: Vector3Tuple,
+  radius: number,
+  overload: boolean,
+): void => {
+  const spawnedAtReal = performance.now();
+  const color = hexToRgb(overload ? '#fff0ff' : '#b026ff');
+  world.add({
+    transform: { position: [...point], rotationY: 0 },
+    impactFx: {
+      kind: 'spark',
+      strength: 'heavy',
+      spawnedAtReal,
+      lifetimeMs: 680,
+      color,
+      count: 16,
+      radius: radius * 0.92,
+      dirX: 0,
+      dirZ: 0,
+    },
+  });
+  world.add({
+    transform: { position: [...point], rotationY: 0 },
+    impactFx: {
+      kind: 'ring',
+      strength: 'heavy',
+      spawnedAtReal,
+      lifetimeMs: 720,
+      color,
+      count: 0,
+      radius,
+      dirX: 0,
+      dirZ: 0,
+    },
+  });
+};
+
 /**
  * Fire all client feedback for a landed hit. Modular by design — this is the reusable
  * event. Knockback/stagger already happened inside the sim before this fires.

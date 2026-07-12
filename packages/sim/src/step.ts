@@ -11,7 +11,7 @@ import {
   type MeleeResolveOptions,
 } from './systems/weaponSystem';
 import { projectileSystem } from './systems/projectileSystem';
-import { dropRelic, passRelic, relicSystem } from './systems/relicSystem';
+import { dropRelic, onRelicAttackUsed, passRelic, relicSystem } from './systems/relicSystem';
 import { teammateSystem } from './systems/teammateSystem';
 import { aiSystem } from './systems/aiSystem';
 import { knockbackSystem } from './systems/knockbackSystem';
@@ -21,7 +21,8 @@ import { healthSystem } from './systems/healthSystem';
 import { reviveSystem } from './systems/reviveSystem';
 import { pickupSystem, spawnPickupsFromEvents } from './systems/lootSystem';
 import { spawnSystem } from './systems/spawnSystem';
-import { resolveHubCollisions } from './terrain/hubCollision';
+import { resolveHubCollisions, resolveObstacleCollisions } from './terrain/hubCollision';
+import { CollisionLayer } from './terrain/collisionField';
 import { PARRY_TUNING } from '@shared/balance';
 
 export type SimMode = 'hub' | 'expedition';
@@ -141,9 +142,11 @@ export const stepSim = (
     // Entity-spawning + world-mutating verbs are the AUTHORITY's alone — a networked
     // client never spawns a projectile, throws, or drops the relic locally; those replicate.
     if (authority === 'server') {
-      if (intent.ranged) fireRanged(world, player, now, aimAt);
+      if (intent.ranged && fireRanged(world, player, now, aimAt)) {
+        onRelicAttackUsed(world, player, now, events);
+      }
       if (intent.passTo) passRelic(world, player, intent.passTo, now, events);
-      if (intent.drop) dropRelic(world, player, now);
+      if (intent.drop) dropRelic(world, player, now, events);
     }
     // Parry: open a brief block window at will (predicted stance). The negation itself is
     // server-side in dealDamage; predicting the window costs nothing and reads instantly.
@@ -159,6 +162,11 @@ export const stepSim = (
     movementSystem(world, dt);
     for (const player of world.with('transform', 'velocity', 'playerControlled')) {
       resolveHubCollisions(player);
+    }
+    // Monsters (none HUB-native today, but AI/pets/summons may enter) share the rock field
+    // through the same layer-masked resolver — no bespoke per-body collision code.
+    for (const monster of world.with('transform', 'monster')) {
+      resolveObstacleCollisions(monster, CollisionLayer.OBSTACLE);
     }
     return events.drain();
   }

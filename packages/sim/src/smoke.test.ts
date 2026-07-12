@@ -71,7 +71,7 @@ describe('headless smoke sim', () => {
     const p2 = makePlayer(world, 3, 8);
     const relic = world.add({
       transform: { position: [-3, 1.2, 8] as [number, number, number], rotationY: 0 },
-      relic: { phase: 'carried' as const, carrier: p1 as Entity },
+      relic: { phase: 'carried' as const, carrier: p1 as Entity, corruption: 0 },
     });
 
     let lootDrops = 0;
@@ -80,15 +80,21 @@ describe('headless smoke sim', () => {
     const seen: GameEvent['type'][] = [];
 
     let now = 0;
-    const passTick = HZ; // t = 1 s — before the first wave reaches the players
+    const passTicks = new Set([HZ, 9 * HZ, 17 * HZ, 25 * HZ]);
     for (let tick = 0; tick < SECONDS * HZ; tick++) {
       now += DT * 1000;
 
       const i1 = huntIntent(world, p1);
       const i2 = huntIntent(world, p2);
-      if (tick === passTick) {
-        i1.passTo = p2;
-        i1.melee = false; // throwing, not swinging
+      if (passTicks.has(tick)) {
+        const carrier = relic.relic!.carrier;
+        if (carrier === p1) {
+          i1.passTo = p2;
+          i1.melee = false;
+        } else if (carrier === p2) {
+          i2.passTo = p1;
+          i2.melee = false;
+        }
       }
       const intents = new Map<Entity, PlayerIntent>([
         [p1, i1],
@@ -135,7 +141,10 @@ describe('headless smoke sim', () => {
     const p1 = makePlayer(world, 0, 11.5);
 
     const intents = new Map<Entity, PlayerIntent>([
-      [p1, { moveX: 0, moveZ: -1, jump: false, dodge: false, sprint: true, melee: true, ranged: true }],
+      [
+        p1,
+        { moveX: 0, moveZ: -1, jump: false, dodge: false, sprint: true, melee: true, ranged: true },
+      ],
     ]);
     let now = 0;
     for (let tick = 0; tick < 5 * HZ; tick++) {

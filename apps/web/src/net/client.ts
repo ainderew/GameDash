@@ -8,7 +8,12 @@ import {
   PING_EWMA_ALPHA,
   RELIC_PHASE_OF,
 } from '@shared/net/constants';
-import { decodeSnapshot, ENTITY_KIND, type DecodedEntityRecord, type EntityKind } from '@shared/net/snapshot';
+import {
+  decodeSnapshot,
+  ENTITY_KIND,
+  type DecodedEntityRecord,
+  type EntityKind,
+} from '@shared/net/snapshot';
 import { DEFAULT_CHARACTER_ID, isCharacterId, type CharacterId } from '@shared/net/character';
 import type { MonsterArchetype } from '@shared/monsters';
 import type { HitStrength } from '@shared/combat';
@@ -19,6 +24,8 @@ import { realtimeUrl, createTransport, type Transport } from '@/net/transport';
 import { netGame } from '@/net/netGame';
 import { netStats } from '@/net/netStats';
 import { relicNet } from '@/net/relicNet';
+import { spawnImpactVfx } from '@/game/feel/onHit';
+import { feel } from '@/game/feel/config';
 
 /**
  * THE session client: connection state machine (idle → connecting → joined), message
@@ -72,7 +79,10 @@ interface ServerEntityView {
 
 class NetClient {
   private transport: Transport | null = null;
-  private profile: { name: string; character: CharacterId } = { name: 'Adventurer', character: DEFAULT_CHARACTER_ID };
+  private profile: { name: string; character: CharacterId } = {
+    name: 'Adventurer',
+    character: DEFAULT_CHARACTER_ID,
+  };
   private pending: PendingIntent | null = null;
   /** Set once joined — reused to resume across reconnects. */
   private joined: { code: string; resumeToken: string } | null = null;
@@ -160,6 +170,8 @@ class NetClient {
     store.setConnectionState('offline');
     store.setZoneCountdown(null);
     store.setRelicCarrier(null);
+    store.setRunScores([]);
+    store.setExpeditionResult(null);
   }
 
   /** Send an input packet on the binary hot path (SystemRunner → netGame → here). */
@@ -290,8 +302,14 @@ class NetClient {
     const patched = new Map<number, DecodedEntityRecord>();
     for (const rec of entities) patched.set(rec.id, rec);
 
-    for (const [id, baseState] of base) {
+    // A delta may contain a newly spawned entity that did not exist in its keyframe baseline.
+    // Iterate the union; looping only over `base` silently discarded wave monsters/projectiles
+    // until a later keyframe, which made multiplayer expeditions appear empty.
+    const entityIds = new Set([...base.keys(), ...patched.keys()]);
+    for (const id of entityIds) {
       const rec = patched.get(id);
+      const baseState = base.get(id) ?? (rec ? recordToState(rec) : undefined);
+      if (!baseState) continue;
       const pos = rec?.pos ?? baseState.pos;
       const rotY = rec?.rotY ?? baseState.rotY;
       const hp = Math.round(rec?.hp ?? baseState.hp);
@@ -308,7 +326,12 @@ class NetClient {
         }
         if (this.ownEntityId !== null && id === this.ownEntityId) continue; // local: ack path
         if (!playerId) continue;
-        this.remoteBuffer(playerId).push({ t: header.serverTimeMs, pos: [pos[0], pos[1], pos[2]], rotY, flags });
+        this.remoteBuffer(playerId).push({
+          t: header.serverTimeMs,
+          pos: [pos[0], pos[1], pos[2]],
+          rotY,
+          flags,
+        });
       } else if (
         baseState.kind === ENTITY_KIND.monster ||
         baseState.kind === ENTITY_KIND.projectile ||
@@ -323,7 +346,8 @@ class NetClient {
             kind: baseState.kind,
             buffer: new InterpBuffer(),
             hp,
-            archetype: baseState.kind === ENTITY_KIND.monster ? this.monsterArchetypes.get(id) : undefined,
+            archetype:
+              baseState.kind === ENTITY_KIND.monster ? this.monsterArchetypes.get(id) : undefined,
           };
           this.serverEntities.set(id, se);
         }
@@ -333,7 +357,7 @@ class NetClient {
         // Seed a grounded relic from the snapshot when we have none yet — the countdown-entry
         // path gets no welcome/relicGrounded event, so this is the only signal it exists.
         // Reliable relic events own every transition after this initial seed.
-        relicNet.seedFromSnapshot(id, RELIC_PHASE_OF[flags] ?? 'grounded', pos);
+        relicNet.updateFromSnapshot(id, RELIC_PHASE_OF[flags] ?? 'grounded', pos, hp);
       }
     }
   }
@@ -385,7 +409,9 @@ class NetClient {
           }
         }
         store.setRelicCarrier(
-          msg.relic?.carrierId !== undefined ? this.entityOwners.get(msg.relic.carrierId) ?? null : null,
+          msg.relic?.carrierId !== undefined
+            ? (this.entityOwners.get(msg.relic.carrierId) ?? null)
+            : null,
         );
         // Seed the wall-clock offset; snapshots take over with tick time.
         if (this.wallOffset === null) {
@@ -396,6 +422,7 @@ class NetClient {
           playerId: msg.playerId,
           members: msg.session.members.map(toMemberUI),
         });
+        store.setRunScores(msg.scores);
         store.setConnectionState('connected');
         return;
       }
@@ -442,7 +469,11 @@ class NetClient {
         netGame.setMode(msg.zone);
         store.setSceneAuthoritative(msg.zone);
         store.setZoneCountdown(null);
-        if (msg.zone === 'expedition') store.setHuntFailed(false);
+        if (msg.zone === 'expedition') {
+          store.setHuntFailed(false);
+          store.setRunScores([]);
+          store.setExpeditionResult(null);
+        }
         // Expedition entities are zone-scoped — drop the replicated monster view on any
         // transition so a stale monster can't linger into the hub or the next hunt.
         this.serverEntities.clear();
@@ -476,9 +507,19 @@ class NetClient {
         return;
       }
 
+      case 'scoreUpdated': {
+        store.setRunScores(msg.standings);
+        return;
+      }
+
       case 'huntFailed': {
         store.setHuntFailed(true);
         store.setDowned(false);
+        store.setRunScores(msg.standings);
+        store.setExpeditionResult({
+          standings: msg.standings,
+          mvpPlayerId: msg.mvpPlayerId,
+        });
         return;
       }
 
@@ -507,6 +548,14 @@ class NetClient {
           transform: { position: [msg.point[0], msg.point[1], msg.point[2]], rotationY: 0 },
           floatingNumber: { amount: Math.round(msg.amount), spawnedAt: gameNow(), crit: msg.crit },
         });
+        // Networked clients do not run authoritative damage hooks locally, so recreate the
+        // render-only spark/ring markers from the confirmed server event.
+        spawnImpactVfx(
+          world,
+          [msg.point[0], msg.point[1], msg.point[2]],
+          msg.strength,
+          msg.strength === 'heavy' ? feel.vfx.colorHeavy : feel.vfx.colorLight,
+        );
         if (msg.targetKind === 'monster') {
           const se = this.serverEntities.get(msg.targetId);
           if (se) {
@@ -530,6 +579,12 @@ class NetClient {
         return;
       case 'relicCaught':
         relicNet.onCaught(msg);
+        // The server event replaces clientSimHooks.onRelicCaught in multiplayer. Seed the
+        // same render-only absorption burst so Relic catches do not lose their VFX.
+        world.add({
+          transform: { position: [msg.pos[0], msg.pos[1], msg.pos[2]], rotationY: 0 },
+          catchBurstFx: { spawnedAtReal: performance.now() },
+        });
         store.setRelicCarrier(this.entityOwners.get(msg.carrierId) ?? null);
         return;
       case 'relicPassFailed':
@@ -542,6 +597,13 @@ class NetClient {
       case 'relicGrounded':
         relicNet.onGrounded(msg);
         store.setRelicCarrier(null);
+        return;
+      case 'relicErupted':
+        relicNet.onErupted(msg);
+        store.setRelicCarrier(null);
+        return;
+      case 'relicVolatileDischarge':
+        relicNet.onVolatileDischarge(msg);
         return;
       case 'passRejected':
         // The thrower's provisional local flight snaps back with the existing fail feedback.
@@ -566,7 +628,11 @@ class NetClient {
       }
 
       case 'error': {
-        if (msg.code === 'unknown_session' || msg.code === 'session_full' || msg.code === 'server_full') {
+        if (
+          msg.code === 'unknown_session' ||
+          msg.code === 'session_full' ||
+          msg.code === 'server_full'
+        ) {
           this.pending = null;
           // A failed RESUME means the session died while we were away (past the grace window).
           // Fall out to the menu gracefully with a rejoin-by-code hint instead of freezing.

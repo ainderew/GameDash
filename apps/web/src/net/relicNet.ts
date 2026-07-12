@@ -2,10 +2,12 @@ import type { Vector3Tuple } from '@shared/types';
 import type {
   RelicCaughtMessage,
   RelicDroppedMessage,
+  RelicEruptedMessage,
   RelicFlightWire,
   RelicGroundedMessage,
   RelicLaunchedMessage,
   RelicPassFailedMessage,
+  RelicVolatileDischargeMessage,
   RelicWelcomeState,
 } from '@shared/net/messages';
 import { events } from '@/game/ecs/world';
@@ -33,6 +35,8 @@ export interface RelicNetState {
   pos: Vector3Tuple;
   /** Active flight params (inFlight only) — the deterministic arc every client samples. */
   flight: RelicFlightWire | null;
+  /** Latest server snapshot value (0..100). */
+  corruption: number;
 }
 
 class RelicNet {
@@ -42,6 +46,7 @@ class RelicNet {
     carrierId: null,
     pos: [0, 0, 0],
     flight: null,
+    corruption: 0,
   };
 
   /** Our own avatar entity id — gates receiver-side feedback (chime only when WE receive). */
@@ -58,6 +63,7 @@ class RelicNet {
     this.state.carrierId = null;
     this.state.pos = [0, 0, 0];
     this.state.flight = null;
+    this.state.corruption = 0;
   }
 
   /**
@@ -67,12 +73,21 @@ class RelicNet {
    * until someone catches it. Only acts while we have no relic (phase 'absent'); once we know
    * it, the reliable events own every transition (so this never fights a live flight/catch).
    */
-  seedFromSnapshot(entityId: number, phase: RelicNetState['phase'], pos: Vector3Tuple): void {
-    if (this.state.phase !== 'absent') return;
-    this.state.entityId = entityId;
-    this.state.phase = phase;
-    this.state.carrierId = null;
-    this.state.pos = [pos[0], pos[1], pos[2]];
+  updateFromSnapshot(
+    entityId: number,
+    phase: RelicNetState['phase'],
+    pos: Vector3Tuple,
+    corruption: number,
+  ): void {
+    this.state.corruption = corruption;
+    if (this.state.phase === 'absent') {
+      this.state.entityId = entityId;
+      this.state.phase = phase;
+      this.state.carrierId = null;
+      this.state.pos = [pos[0], pos[1], pos[2]];
+    } else if (this.state.phase === 'grounded') {
+      this.state.pos = [pos[0], pos[1], pos[2]];
+    }
   }
 
   /** Seed from the welcome relic block (late join / reconnect reconstructs the live relic). */
@@ -86,6 +101,7 @@ class RelicNet {
     this.state.carrierId = relic.carrierId ?? null;
     this.state.pos = [relic.pos[0], relic.pos[1], relic.pos[2]];
     this.state.flight = relic.flight ?? null;
+    this.state.corruption = relic.corruption;
   }
 
   onLaunched(msg: RelicLaunchedMessage): void {
@@ -99,6 +115,11 @@ class RelicNet {
       toLocalPlayer: msg.flight.targetId !== undefined && msg.flight.targetId === this.ownEntityId,
       from: [msg.flight.from[0], msg.flight.from[1], msg.flight.from[2]],
     });
+    events.emit({
+      type: 'RelicThrown',
+      holderId: msg.flight.throwerId,
+      targetId: msg.flight.targetId,
+    });
   }
 
   onCaught(msg: RelicCaughtMessage): void {
@@ -106,6 +127,7 @@ class RelicNet {
     this.state.carrierId = msg.carrierId;
     this.state.flight = null;
     this.state.pos = [msg.pos[0], msg.pos[1], msg.pos[2]];
+    this.state.corruption = msg.corruption;
     events.emit({
       type: 'RelicCaught',
       byLocalPlayer: msg.carrierId === this.ownEntityId,
@@ -130,6 +152,25 @@ class RelicNet {
     this.state.carrierId = null;
     this.state.flight = null;
     this.state.pos = [msg.pos[0], msg.pos[1], msg.pos[2]];
+  }
+
+  onErupted(msg: RelicEruptedMessage): void {
+    this.state.corruption = 0;
+    events.emit({
+      type: 'RelicErupted',
+      holderId: msg.holderId,
+      position: [msg.pos[0], msg.pos[1], msg.pos[2]],
+    });
+  }
+
+  onVolatileDischarge(msg: RelicVolatileDischargeMessage): void {
+    events.emit({
+      type: 'RelicVolatileDischarge',
+      holderId: msg.holderId,
+      position: [msg.pos[0], msg.pos[1], msg.pos[2]],
+      radius: msg.radius,
+      tierIndex: msg.tierIndex,
+    });
   }
 }
 

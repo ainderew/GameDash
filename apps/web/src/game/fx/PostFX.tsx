@@ -32,11 +32,11 @@ export const PostFX = () => {
       {/* Threshold > 1 so only true HDR emitters (pickups, projectiles, sun disc) bloom —
           at 0.75 the whole Preetham sky crossed it and washed out to white. */}
       <Bloom
-        intensity={0.62}
-        luminanceThreshold={1.08}
-        luminanceSmoothing={0.24}
+        intensity={0.74}
+        luminanceThreshold={1.02}
+        luminanceSmoothing={0.28}
         mipmapBlur
-        radius={0.6}
+        radius={0.68}
       />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
       <HueSaturation saturation={0.02} />

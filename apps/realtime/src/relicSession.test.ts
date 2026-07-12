@@ -42,7 +42,15 @@ const neutral = (s: number): ReturnType<typeof makeInputCmd> =>
   makeInputCmd(s, s, { moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false });
 
 const passCmd = (s: number, intent: Partial<CmdIntent>): ReturnType<typeof makeInputCmd> =>
-  makeInputCmd(s, s, { moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, passHold: true, ...intent });
+  makeInputCmd(s, s, {
+    moveX: 0,
+    moveZ: 0,
+    jump: false,
+    dodge: false,
+    sprint: false,
+    passHold: true,
+    ...intent,
+  });
 
 /** Two players in the expedition, Ana carrying the relic, monsters stripped. */
 const setup = () => {
@@ -88,6 +96,24 @@ describe('Session relic relay (Phase 5)', () => {
     expect(relicInvariantViolation(session.world)).toBeNull();
   });
 
+  it('broadcasts authoritative Volatile Discharge and applies friendly fire', () => {
+    const { session, ana, ben, aLink, bLink } = setup();
+    const relic = session.world.with('relic').first!;
+    ben.entity.transform!.position = [ana.entity.transform!.position[0] + 2, 0, -4];
+    relic.relic!.corruption = 70;
+    relic.relic!.nextVolatileDischargeAt = 0;
+
+    session.step(dt);
+
+    expect(ana.entity.health!.current).toBe(100);
+    expect(ben.entity.health!.current).toBe(88);
+    const message = aLink.ofType('relicVolatileDischarge');
+    expect(message).toHaveLength(1);
+    expect(message[0]!.holderId).toBe(ana.entity.id);
+    expect(message[0]!.radius).toBeGreaterThan(4);
+    expect(bLink.ofType('relicVolatileDischarge')).toHaveLength(1);
+  });
+
   /** Drive Ana's pass to Ben at [x,z]; returns the launch event once observed (or null). */
   const throwAndSettle = (
     ctx: ReturnType<typeof setup>,
@@ -119,7 +145,8 @@ describe('Session relic relay (Phase 5)', () => {
           ben.entity.health!.current = 0;
           ben.entity.downed = true;
         }
-        if (opts.teleportBenAfterLaunch) ben.entity.transform!.position = opts.teleportBenAfterLaunch;
+        if (opts.teleportBenAfterLaunch)
+          ben.entity.transform!.position = opts.teleportBenAfterLaunch;
       }
     }
     return { launched, invariantOk };
@@ -155,7 +182,9 @@ describe('Session relic relay (Phase 5)', () => {
     for (let t = 0; t < 12; t += 1) {
       const s = t + 1;
       if (s === 5) {
-        ben.input.offer(passCmd(s, { passTargetId: ana.entity.id!, aimYaw, viewServerTimeMs: session.simNowMs }));
+        ben.input.offer(
+          passCmd(s, { passTargetId: ana.entity.id!, aimYaw, viewServerTimeMs: session.simNowMs }),
+        );
       } else {
         ben.input.offer(neutral(s));
       }
@@ -169,7 +198,7 @@ describe('Session relic relay (Phase 5)', () => {
 
   it('rejects an out-of-range pass (out_of_range)', () => {
     const ctx = setup();
-    throwAndSettle(ctx, [1.5 + 20, 0, -4]); // 20 m ≫ RELIC_PASS_RANGE (15)
+    throwAndSettle(ctx, [1.5 + 22, 0, -4]); // beyond the configured 20 m pass range
     const rejects = ctx.aLink.ofType('passRejected');
     expect(rejects.length).toBeGreaterThanOrEqual(1);
     expect(rejects[0]!.reason).toBe('out_of_range');
@@ -188,7 +217,9 @@ describe('Session relic relay (Phase 5)', () => {
 
   it('receiver downed mid-flight → RelicPassFailed(receiver_downed) + thrower rotation refund', () => {
     const ctx = setup();
-    const { launched, invariantOk } = throwAndSettle(ctx, [5.5, 0, -4], { downBenAfterLaunch: true });
+    const { launched, invariantOk } = throwAndSettle(ctx, [5.5, 0, -4], {
+      downBenAfterLaunch: true,
+    });
     expect(launched).toBe(true);
     expect(invariantOk).toBe(true);
     const failed = ctx.aLink.ofType('relicPassFailed');
@@ -202,7 +233,9 @@ describe('Session relic relay (Phase 5)', () => {
 
   it('receiver escapes the correction budget mid-flight → RelicPassFailed(receiver_escaped)', () => {
     const ctx = setup();
-    const { launched } = throwAndSettle(ctx, [5.5, 0, -4], { teleportBenAfterLaunch: [1.5, 0, 60] });
+    const { launched } = throwAndSettle(ctx, [5.5, 0, -4], {
+      teleportBenAfterLaunch: [1.5, 0, 60],
+    });
     expect(launched).toBe(true);
     const failed = ctx.aLink.ofType('relicPassFailed');
     expect(failed.length).toBeGreaterThanOrEqual(1);
@@ -210,16 +243,17 @@ describe('Session relic relay (Phase 5)', () => {
     expect(ctx.ana.entity.relicRecatchUntil).toBe(0);
   });
 
-  it('carrier disconnect lobs the relic out with RelicDropped(disconnect)', () => {
+  it('carrier disconnect immediately grounds the relic at retained corruption', () => {
     const { manager, session, ana, bLink } = setup();
     // Ana carries; she disconnects → the relic must lob out at her last position.
+    const relic = session.world.with('relic').first!;
+    const corruption = relic.relic!.corruption;
     manager.removePlayer(session, ana.id, 'disconnected');
     session.step(dt);
-    const dropped = bLink.ofType('relicDropped');
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]!.reason).toBe('disconnect');
+    expect(bLink.ofType('relicGrounded')).toHaveLength(1);
     // A lob launch accompanies it, and the invariant still holds (exactly one relic, in flight).
-    expect(bLink.ofType('relicLaunched').length).toBeGreaterThanOrEqual(1);
+    expect(relic.relic!.phase).toBe('grounded');
+    expect(relic.relic!.corruption).toBe(corruption);
     expect(relicInvariantViolation(session.world)).toBeNull();
   });
 
@@ -233,7 +267,9 @@ describe('Session relic relay (Phase 5)', () => {
     for (let t = 0; t < 60; t += 1) {
       const s = t + 1;
       ana.input.offer(
-        s === 5 ? passCmd(s, { passTargetId: ben.entity.id!, aimYaw, viewServerTimeMs: session.simNowMs }) : neutral(s),
+        s === 5
+          ? passCmd(s, { passTargetId: ben.entity.id!, aimYaw, viewServerTimeMs: session.simNowMs })
+          : neutral(s),
       );
       session.step(dt);
       const relic = session.world.with('relic').first!;

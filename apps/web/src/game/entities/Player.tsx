@@ -19,9 +19,12 @@ import { useWeaponStore } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';
 import { netGame } from '@/net/netGame';
 import { feel } from '@/game/feel/config';
-import { playFootstep } from '@/game/feel/audio';
+import { playFootstep, playJump, playDoubleJump } from '@/game/feel/audio';
 import { heightAt } from '@sim/terrain/terrainHeight';
-import { DODGE_DURATION_MS, RELIC_CATCH_ROOT_MS } from '@shared/balance';
+import { DODGE_DURATION_MS, RELIC_CATCH_ROOT_MS, RELIC_CORRUPTION_TUNING } from '@shared/balance';
+import { relicNet } from '@/net/relicNet';
+import { netClient } from '@/net/client';
+import { CorruptionArmTendrils } from '@/game/fx/CorruptionArmTendrils';
 
 interface Props {
   /** GameCanvas passes this so the camera can follow the player group. */
@@ -81,6 +84,8 @@ const ATTACK_STATE: Record<ComboClip, CharState> = {
  * match by suffix instead of exact name.
  */
 const HAND_BONE_RE = /RightHand$/;
+const LEFT_ARM_RE = /LeftForeArm$/;
+const RIGHT_ARM_RE = /RightForeArm$/;
 
 /**
  * The player: owns the ECS entity + the animated avatar. Movement is authored by the ECS;
@@ -100,6 +105,9 @@ export const Player = ({ playerRef }: Props) => {
 
   // Weapon: find the hand bone once the rig loads, then mount the current weapon onto it.
   const [handBone, setHandBone] = useState<Object3D | null>(null);
+  const [armBones, setArmBones] = useState<[Object3D | null, Object3D | null]>([null, null]);
+  const volatileActive = useRef(false);
+  const corruptionProgress = useRef(0);
   const weaponId = useWeaponStore((s) => s.currentId);
 
   // Which skinned model the avatar uses — all characters share the hero clip set.
@@ -111,19 +119,25 @@ export const Player = ({ playerRef }: Props) => {
 
   const onRigReady = useCallback((root: Object3D) => {
     let hand: Object3D | null = null;
+    let leftArm: Object3D | null = null;
+    let rightArm: Object3D | null = null;
     const mats: { mat: MeshStandardMaterial; base: [number, number, number] }[] = [];
     root.traverse((o) => {
       if (!hand && HAND_BONE_RE.test(o.name)) hand = o;
+      if (!leftArm && LEFT_ARM_RE.test(o.name)) leftArm = o;
+      if (!rightArm && RIGHT_ARM_RE.test(o.name)) rightArm = o;
       const mesh = o as Mesh;
       if (mesh.isMesh) {
         for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
           const sm = m as MeshStandardMaterial;
-          if (sm.isMeshStandardMaterial) mats.push({ mat: sm, base: [sm.emissive.r, sm.emissive.g, sm.emissive.b] });
+          if (sm.isMeshStandardMaterial)
+            mats.push({ mat: sm, base: [sm.emissive.r, sm.emissive.g, sm.emissive.b] });
         }
       }
     });
     flashMats.current = mats;
     setHandBone(hand);
+    setArmBones([leftArm, rightArm]);
   }, []);
 
   const weapon = getWeapon(weaponId);
@@ -146,6 +160,8 @@ export const Player = ({ playerRef }: Props) => {
   const catchUntil = useRef(0);
   /** gameNow() when another foot plant may sound; uses game time, so hitstop stays silent. */
   const nextFootstepAt = useRef(0);
+  /** Last-seen jumpsUsed, to fire the take-off SFX on the 0→1 (ground jump) edge only. */
+  const prevJumpsUsed = useRef(0);
 
   useEffect(() => {
     const entity = world.add(makePlayerEntity());
@@ -208,6 +224,16 @@ export const Player = ({ playerRef }: Props) => {
     // covers pass receptions and walk-in ground pickups alike. Skip the very first
     // observation so spawning with the relic in hand doesn't fire a phantom catch.
     const carrying = rs?.phase === 'carried' && rs.carrier === e;
+    const authoritativeCorruption = netGame.active
+      ? relicNet.state.corruption
+      : (rs?.corruption ?? 0);
+    corruptionProgress.current = Math.max(
+      0,
+      Math.min(1, authoritativeCorruption / RELIC_CORRUPTION_TUNING.max),
+    );
+    volatileActive.current = netGame.active
+      ? relicNet.state.phase === 'carried' && relicNet.state.carrierId === netClient.localEntityId()
+      : carrying;
     if (wasCarrying.current !== null && !wasCarrying.current && carrying) {
       catchUntil.current = now + CATCH_ANIM_MS;
     }
@@ -221,7 +247,9 @@ export const Player = ({ playerRef }: Props) => {
     else if (catching) next = 'catch';
     else if (throwing) next = 'throw';
     else if (hurting) next = 'hurt';
-    else if (y > AIRBORNE_Y) next = 'jump';
+    // Airborne: the second (double) jump plays its own clip; the first jump and any other
+    // airborne moment (walking off a ledge, jumpsUsed 0) play the normal jump.
+    else if (y > AIRBORNE_Y) next = (e.jumpsUsed ?? 0) >= 2 ? 'double-jump' : 'jump';
     else if (speed > RUN_SPEED_THRESHOLD) next = 'run';
     else if (speed > WALK_SPEED_THRESHOLD) next = 'walk';
     else {
@@ -231,6 +259,16 @@ export const Player = ({ playerRef }: Props) => {
     }
     if (next !== 'idle' && next !== 'idle-bored') idleSince.current = null;
     charState.current = next;
+
+    // Jump SFX, keyed off jumpsUsed (climbs on each launch, resets to 0 on landing): the 0→1
+    // edge is the ground take-off (whoosh + voice), the 1→2 edge is the airborne double jump
+    // (its own distinct sample). Edge-gated so each fires exactly once per jump.
+    const jumpsUsed = e.jumpsUsed ?? 0;
+    if (jumpsUsed > prevJumpsUsed.current) {
+      if (jumpsUsed === 1) playJump();
+      else if (jumpsUsed === 2) playDoubleJump();
+    }
+    prevJumpsUsed.current = jumpsUsed;
 
     // Audio follows actual horizontal travel rather than render delta: stopping, collisions,
     // and any future movement-speed buffs naturally retime the left/right foot cadence.
@@ -251,7 +289,9 @@ export const Player = ({ playerRef }: Props) => {
     const flashing = flashUntil > now && !!e.hitFlashColor;
     if (flashing || wasFlashing.current) {
       const dur = feel.flash.durationMs[e.hitReactionStrength ?? 'light'];
-      const k = flashing ? feel.flash.intensity * Math.max(0, Math.min(1, (flashUntil - now) / dur)) : 0;
+      const k = flashing
+        ? feel.flash.intensity * Math.max(0, Math.min(1, (flashUntil - now) / dur))
+        : 0;
       const [fr, fg, fb] = e.hitFlashColor ?? [0, 0, 0];
       for (const { mat, base } of flashMats.current) {
         mat.emissive.setRGB(base[0] + fr * k, base[1] + fg * k, base[2] + fb * k);
@@ -283,6 +323,7 @@ export const Player = ({ playerRef }: Props) => {
         walkPath="/models/hero/anim-walk.glb"
         runPath="/models/hero/anim-run.glb"
         jumpPath="/models/hero/anim-jump.glb"
+        jump2Path="/models/hero/anim-double-jump.glb"
         dodgePath="/models/hero/anim-roll.glb"
         hurtPath="/models/hero/anim-hurt.glb"
         deathPath="/models/hero/anim-death.glb"
@@ -298,6 +339,12 @@ export const Player = ({ playerRef }: Props) => {
         onRigReady={onRigReady}
       />
       {handBone && <WeaponMount bone={handBone} def={weapon} stateRef={charState} />}
+      <CorruptionArmTendrils
+        leftArm={armBones[0]}
+        rightArm={armBones[1]}
+        activeRef={volatileActive}
+        corruptionRef={corruptionProgress}
+      />
     </group>
   );
 };

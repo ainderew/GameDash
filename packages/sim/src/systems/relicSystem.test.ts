@@ -1,16 +1,23 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { World } from 'miniplex';
 import type { Entity } from '../components';
-import { dropRelic, passRelic, relicSystem } from './relicSystem';
+import { dropRelic, getRelicTier, onRelicAttackUsed, passRelic, relicSystem } from './relicSystem';
+import { fireRanged } from './weaponSystem';
+import { projectileSystem } from './projectileSystem';
+import { applyPlayerIntent } from './movementSystem';
 import { EventQueue } from '../events';
 import {
   RELIC_CATCH_RADIUS,
   RELIC_CATCH_ROOT_MS,
+  RELIC_CORRUPTION_TUNING,
   RELIC_FAIL_BOUNCE_DIST,
   RELIC_HANDOFF_SHIELD_MS,
   RELIC_PASS_RECATCH_MS,
   RELIC_RECATCH_DELAY_MS,
   RELIC_THROW_MIN,
+  RANGED_COOLDOWN_MS,
+  RANGED_DAMAGE,
+  PLAYER_WALK_SPEED,
 } from '@shared/balance';
 
 const DT = 0.016;
@@ -37,7 +44,7 @@ const makeTeammate = (x: number, z: number): Entity => ({
 
 const makeCarriedRelic = (carrier: Entity): Entity => ({
   transform: { position: [...carrier.transform!.position], rotationY: 0 },
-  relic: { phase: 'carried', carrier },
+  relic: { phase: 'carried', carrier, corruption: 0 },
 });
 
 /** Tick the sim until the flight resolves, moving entities via their velocity like the
@@ -61,6 +68,7 @@ describe('passRelic', () => {
     const player = world.add(makePlayer());
     const mate = world.add(makeTeammate(8, 0));
     const relic = world.add(makeCarriedRelic(player));
+    relic.relic!.corruption = 74;
 
     expect(passRelic(world, player, mate, 1000, events)).toBe(true);
     expect(relic.relic!.phase).toBe('inFlight');
@@ -70,6 +78,7 @@ describe('passRelic', () => {
     const landedAt = settleFlight(world, relic, 1000);
     expect(relic.relic!.phase).toBe('carried');
     expect(relic.relic!.carrier).toBe(mate);
+    expect(relic.relic!.corruption).toBe(RELIC_CORRUPTION_TUNING.catchResetValue);
     // Handoff shield: the catch frame can't be sniped by a stray hit.
     expect(mate.iframeUntil).toBeGreaterThanOrEqual(landedAt);
     expect(mate.iframeUntil).toBeLessThanOrEqual(landedAt + RELIC_HANDOFF_SHIELD_MS + 20);
@@ -189,6 +198,192 @@ describe('dropRelic', () => {
 });
 
 describe('relicSystem', () => {
+  it('derives every tier and applies its exact attack and movement stats idempotently', () => {
+    const world = new World<Entity>();
+    const player = world.add(makePlayer());
+    const relic = world.add(makeCarriedRelic(player));
+
+    for (const [tierIndex, tier] of RELIC_CORRUPTION_TUNING.tiers.entries()) {
+      relic.relic!.corruption = tier.minCorruption;
+      relicSystem(world, 0, tierIndex * 1000, events);
+      expect(getRelicTier(relic.relic!.corruption)).toBe(tier);
+      expect(player.relicBuff).toEqual({
+        tierIndex,
+        tierName: tier.name,
+        damageMult: tier.damageMult,
+        projectileCount: tier.projectileCount,
+        attackRateMult: tier.attackRateMult,
+        pierce: tier.pierce,
+        knockback: tier.knockback,
+        lifestealPct: tier.lifestealPct,
+        moveSpeedMult: tier.moveSpeedMult,
+      });
+
+      player.rangedReadyAt = 0;
+      expect(fireRanged(world, player, tierIndex * 1000 + 1)).toBe(true);
+      const shots = [...world.with('projectile')];
+      expect(shots).toHaveLength(tier.projectileCount);
+      for (const shot of shots) {
+        expect(shot.damage).toBe(Math.round(RANGED_DAMAGE * tier.damageMult));
+        expect(shot.projectilePierce).toBe(tier.pierce);
+        expect(shot.projectileKnockback).toBe(tier.knockback);
+        expect(shot.projectileLifestealPct).toBe(tier.lifestealPct);
+        world.remove(shot);
+      }
+      expect(player.rangedReadyAt).toBe(
+        tierIndex * 1000 + 1 + RANGED_COOLDOWN_MS / tier.attackRateMult,
+      );
+    }
+  });
+
+  it('drips faster in high tiers and charges once per successful attack use', () => {
+    const world = new World<Entity>();
+    const player = world.add(makePlayer());
+    const relic = world.add(makeCarriedRelic(player));
+
+    relic.relic!.corruption = 10;
+    relicSystem(world, 1, 0, events);
+    expect(relic.relic!.corruption).toBe(15);
+
+    relic.relic!.corruption = 70;
+    relicSystem(world, 1, 1000, events);
+    expect(relic.relic!.corruption).toBe(80);
+    expect(onRelicAttackUsed(world, player, 1001, events)).toBe(true);
+    expect(relic.relic!.corruption).toBe(88);
+  });
+
+  it('applies tier movement speed and heals the holder from Relic projectile damage', () => {
+    const world = new World<Entity>();
+    const player = world.add(makePlayer());
+    player.faction = 'player';
+    player.health!.current = 50;
+    const relic = world.add(makeCarriedRelic(player));
+
+    relic.relic!.corruption = 70;
+    relicSystem(world, 0, 0, events);
+    applyPlayerIntent(player, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: false }, 1);
+    expect(player.velocity!.linear[0]).toBeCloseTo(PLAYER_WALK_SPEED * 1.2);
+
+    relic.relic!.corruption = 45;
+    relicSystem(world, 0, 2, events);
+    player.transform!.rotationY = 0;
+    world.add({
+      transform: { position: [0, 0, 1], rotationY: 0 },
+      health: { current: 100, max: 100 },
+      faction: 'monster',
+      radius: 0.5,
+    });
+    fireRanged(world, player, 10);
+    projectileSystem(world, 0, 10);
+    expect(player.health!.current).toBeGreaterThan(50);
+  });
+
+  it('Overload attack adds its extra cost and erupts immediately at maximum', () => {
+    const world = new World<Entity>();
+    const player = world.add(makePlayer());
+    const relic = world.add(makeCarriedRelic(player));
+    relic.relic!.corruption = 90;
+
+    onRelicAttackUsed(world, player, 10, events);
+
+    expect(player.health!.current).toBe(0);
+    expect(player.relicBuff).toBeUndefined();
+    expect(relic.relic!.phase).toBe('grounded');
+    expect(relic.relic!.corruption).toBe(0);
+    expect([...world.with('monster')]).toHaveLength(1);
+    const types = events.drain().map((event) => event.type);
+    expect(types).toContain('RelicErupted');
+    expect(types).toContain('RelicGrounded');
+  });
+
+  it('Volatile Discharge damages and disrupts nearby enemies and allies but not its carrier', () => {
+    const world = new World<Entity>();
+    const holder = world.add(makePlayer());
+    holder.faction = 'player';
+    const ally = world.add(makePlayer(2, 0));
+    ally.faction = 'player';
+    ally.blockingUntil = 2000;
+    const enemy = world.add({
+      transform: { position: [-2, 0, 0] as [number, number, number], rotationY: 0 },
+      health: { current: 100, max: 100 },
+      faction: 'monster' as const,
+      radius: 0.5,
+    });
+    const farEnemy = world.add({
+      transform: { position: [8, 0, 0] as [number, number, number], rotationY: 0 },
+      health: { current: 100, max: 100 },
+      faction: 'monster' as const,
+    });
+    const relic = world.add(makeCarriedRelic(holder));
+    relic.relic!.corruption = 70;
+    relic.relic!.nextVolatileDischargeAt = 1000;
+
+    relicSystem(world, 0, 1000, events);
+
+    expect(holder.health!.current).toBe(100);
+    expect(ally.health!.current).toBe(88);
+    expect(enemy.health.current).toBe(88);
+    expect(farEnemy.health.current).toBe(100);
+    expect(ally.knockback?.[0]).toBeGreaterThan(0);
+    expect(enemy.knockback?.[0]).toBeLessThan(0);
+    expect(events.drain().map((event) => event.type)).toContain('RelicVolatileDischarge');
+    expect(relic.relic!.nextVolatileDischargeAt).toBeGreaterThan(1000);
+  });
+
+  it('retains corruption on a missed throw and grounded pickup', () => {
+    const world = new World<Entity>();
+    const thrower = world.add(makePlayer());
+    const picker = world.add(makePlayer(20, 20));
+    const relic = world.add(makeCarriedRelic(thrower));
+    relic.relic!.corruption = 63;
+    relicSystem(world, 0, 0, events);
+
+    dropRelic(world, thrower, 100);
+    expect(thrower.relicBuff).toBeUndefined();
+    thrower.transform!.position = [-20, 0, -20];
+    settleFlight(world, relic, 100);
+    expect(relic.relic!.corruption).toBe(63);
+
+    picker.transform!.position = [...relic.transform!.position];
+    relicSystem(world, 0, 4000, events);
+    expect(relic.relic!.carrier).toBe(picker);
+    expect(relic.relic!.corruption).toBe(63);
+    expect(events.drain().map((event) => event.type)).toContain('RelicPickedUp');
+  });
+
+  it('assigns a contested catch to the player nearest the projectile path', () => {
+    const world = new World<Entity>();
+    const farther = world.add(makePlayer(1.5, 0));
+    const nearer = world.add(makePlayer(0.25, 0));
+    const relic = world.add({
+      transform: { position: [0, 0.6, 0] as [number, number, number], rotationY: 0 },
+      relic: { phase: 'grounded' as const, corruption: 40 },
+    });
+
+    relicSystem(world, 0, 0, events);
+    expect(relic.relic!.carrier).toBe(nearer);
+    expect(relic.relic!.carrier).not.toBe(farther);
+  });
+
+  it('downs the carrier and spawns one relic boss exactly at maximum corruption', () => {
+    const world = new World<Entity>();
+    const player = world.add(makePlayer());
+    const relic = world.add(makeCarriedRelic(player));
+
+    relic.relic!.corruption = RELIC_CORRUPTION_TUNING.max - 0.1;
+    relicSystem(world, 0.009, 0, events);
+    expect(player.health!.current).toBe(100);
+    expect([...world.with('monster')]).toHaveLength(0);
+
+    relicSystem(world, 0.02, 20, events);
+    expect(player.health!.current).toBe(0);
+    expect(relic.relic!.phase).toBe('grounded');
+    expect([...world.with('monster')].map((m) => m.monster)).toEqual(['relicBoss']);
+
+    relicSystem(world, DT, 120, events);
+    expect([...world.with('monster')]).toHaveLength(1);
+  });
+
   it('carried relic tracks its carrier', () => {
     const world = new World<Entity>();
     const player = world.add(makePlayer());
@@ -206,7 +401,7 @@ describe('relicSystem', () => {
     const player = world.add(makePlayer(RELIC_CATCH_RADIUS + 1, 0));
     const relic = world.add({
       transform: { position: [0, 0.6, 0] as [number, number, number], rotationY: 0 },
-      relic: { phase: 'grounded' as const },
+      relic: { phase: 'grounded' as const, corruption: 0 },
     });
 
     relicSystem(world, DT, 0, events);
@@ -224,7 +419,7 @@ describe('relicSystem', () => {
     player.relicRecatchUntil = 5000;
     world.add({
       transform: { position: [0, 0.6, 0] as [number, number, number], rotationY: 0 },
-      relic: { phase: 'grounded' as const },
+      relic: { phase: 'grounded' as const, corruption: 0 },
     });
 
     relicSystem(world, DT, 4000, events);
@@ -238,7 +433,7 @@ describe('relicSystem', () => {
     world.add(makePlayer(0.5, 0));
     world.add({
       transform: { position: [0, 0.6, 0] as [number, number, number], rotationY: 0 },
-      relic: { phase: 'grounded' as const, noCatchUntil: 0 },
+      relic: { phase: 'grounded' as const, noCatchUntil: 0, corruption: 0 },
     });
     const monster = world.add({
       transform: { position: [2, 0, 0] as [number, number, number], rotationY: 0 },
@@ -257,7 +452,7 @@ describe('relicSystem', () => {
     player.velocity!.linear = [6, 0, 0]; // caught mid-run — would otherwise slide
     world.add({
       transform: { position: [0, 0.6, 0] as [number, number, number], rotationY: 0 },
-      relic: { phase: 'grounded' as const, noCatchUntil: 0 },
+      relic: { phase: 'grounded' as const, noCatchUntil: 0, corruption: 0 },
     });
 
     relicSystem(world, DT, 5000, events);

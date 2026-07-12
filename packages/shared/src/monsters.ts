@@ -1,6 +1,6 @@
 import type { MonsterDef } from './types';
 
-export type MonsterArchetype = 'chaser' | 'spitter' | 'brute';
+export type MonsterArchetype = 'chaser' | 'spitter' | 'brute' | 'relicBoss';
 
 export interface MonsterArchetypeDef extends MonsterDef {
   archetype: MonsterArchetype;
@@ -75,6 +75,21 @@ export const MONSTER_ARCHETYPES: Record<MonsterArchetype, MonsterArchetypeDef> =
     lootTableId: 'rare',
     color: '#f59e0b',
     radius: 0.85,
+  },
+  relicBoss: {
+    id: 'relicBoss',
+    name: 'Relicborn Tyrant',
+    archetype: 'relicBoss',
+    maxHealth: 900,
+    speed: 2.5,
+    attackDamage: 36,
+    attackRange: 3.2,
+    attackCooldownMs: 1900,
+    attackWindupMs: 680,
+    ranged: false,
+    lootTableId: 'legendary',
+    color: '#f00067',
+    radius: 1.35,
   },
 };
 

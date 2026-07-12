@@ -12,7 +12,11 @@ import {
 } from 'three';
 import type { InstancedMesh, Mesh } from 'three';
 import { passAim } from '@/game/combat/passAim';
-import { relics } from '@/game/ecs/world';
+import { localPlayers, relics, world } from '@/game/ecs/world';
+import { relicNet } from '@/net/relicNet';
+import { netClient } from '@/net/client';
+import { RELIC_CATCH_SOCKET_Y } from '@shared/balance';
+import type { Entity } from '@sim/components';
 
 /**
  * CORRUPTION DRAIN — while the Relic is carried, a single braided tether of sickly
@@ -234,7 +238,31 @@ export const RelicDrainVFX = () => {
     const t = performance.now() * 0.001;
     const relic = relics.first;
     const s = relic?.relic;
-    const carrier = s?.phase === 'carried' ? s.carrier : undefined;
+    const netState = relicNet.state;
+    const networked = netState.phase !== 'absent';
+    let carrier: Entity | undefined;
+    let relicPosition: readonly [number, number, number] | undefined;
+    if (networked && netState.phase === 'carried' && netState.carrierId !== null) {
+      if (netState.carrierId === netClient.localEntityId()) carrier = localPlayers.first;
+      else {
+        for (const entity of world.with('transform')) {
+          if (entity.serverEntityId === netState.carrierId) {
+            carrier = entity;
+            break;
+          }
+        }
+      }
+      relicPosition = carrier?.transform
+        ? [
+            carrier.transform.position[0],
+            carrier.transform.position[1] + RELIC_CATCH_SOCKET_Y,
+            carrier.transform.position[2],
+          ]
+        : netState.pos;
+    } else if (!networked && s?.phase === 'carried') {
+      carrier = s.carrier;
+      relicPosition = relic?.transform.position;
+    }
     const h = hold.current;
 
     // Handoff (or drop) resets the build — passing sheds the corruption.
@@ -250,12 +278,12 @@ export const RelicDrainVFX = () => {
     h.intensity += (target - h.intensity) * (1 - Math.exp(-rate * dt));
     const intensity = h.intensity;
 
-    const show = intensity > 0.02 && carrier?.transform !== undefined && relic !== undefined;
+    const show = intensity > 0.02 && carrier?.transform !== undefined && relicPosition !== undefined;
     const tm = tendrilMesh.current;
     const mo = motes.current;
     if (tm) tm.visible = show;
     if (mo) mo.visible = show;
-    if (!show || !carrier?.transform || !relic) {
+    if (!show || !carrier?.transform || !relicPosition) {
       relicVis.current.started = false;
       if (mo) {
         mo.count = 0;
@@ -265,7 +293,7 @@ export const RelicDrainVFX = () => {
     }
 
     // ── Drawn-crystal position: same chase + bob as Relic.tsx, phase-identical ──
-    const [rx, ry, rz] = relic.transform.position;
+    const [rx, ry, rz] = relicPosition;
     const rv = relicVis.current;
     const bobAmp = passAim.aiming ? 0.02 : 0.07;
     const bob = Math.sin(t * 2.2) * bobAmp;

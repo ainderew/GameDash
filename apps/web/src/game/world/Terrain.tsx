@@ -155,17 +155,31 @@ const TERRAIN_SPLAT = /* glsl */ `
     vec3 ground = slateA * mix(uSlateDeep, uSlate, 0.45 + macro * 0.55);
     ground = mix(ground, basaltA * uAsh, basaltWeight * 0.82);
     ground = mix(ground, violetA * uViolet, mossWeight * 0.18);
-    ground *= 0.9 + 0.2 * tnoise(p * 0.14 + 11.0);
+    // Broad mineral beds, mid-scale mottling, and fine grit keep the open field from
+    // reading as one uniformly rolled clay surface. Each frequency has a restrained
+    // range so the variation stays geological rather than noisy/confetti-like.
+    float mineralBed = tfbm(p * 0.032 + vec2(31.0, 17.0));
+    float surfaceMottle = tfbm(p * 0.24 + vec2(7.0, 43.0));
+    float fineGrit = tnoise(p * 1.85 + 91.0);
+    ground *= 0.78 + mineralBed * 0.34 + surfaceMottle * 0.12 + fineGrit * 0.055;
+    ground = mix(ground, ground * vec3(0.78, 0.87, 1.08), smoothstep(0.58, 0.82, mineralBed) * 0.32);
     float vein = smoothstep(0.34, 0.72, violetRaw.r) * smoothstep(0.3, 0.8, violetRaw.b);
     terrainGlow = vec3(0.38, 0.035, 1.2) * vein * corruption * 2.4;
 
     float trail = tpath(p) * smoothstep(21.0, 33.0, length(p));
     float road = max(trail, troad(p));
-    vec3 pathCol = pow(tstochastic(uSlateMap, p / (uSlateTile * 1.65) + 0.43).rgb, vec3(2.2));
-    pathCol *= uPath * 4.9 * (0.88 + 0.2 * tnoise(p * 0.35 + 7.0));
+    vec3 pathSlate = pow(tstochastic(uSlateMap, p / (uSlateTile * 1.25) + 0.43).rgb, vec3(2.2));
+    vec3 pathAggregate = pow(tstochastic(uBasaltMap, p / (uBasaltTile * 0.55) + vec2(0.73, 0.19)).rgb, vec3(2.2));
+    float pathWear = tfbm(vec2(p.x * 0.31, p.y * 0.72) + vec2(18.0, 6.0));
+    vec3 pathCol = mix(pathSlate * 4.9, pathAggregate * 5.5, 0.24 + pathWear * 0.18);
+    pathCol *= uPath * (1.06 + pathWear * 0.18);
+    float pathLuma = dot(pathCol, vec3(0.2126, 0.7152, 0.0722));
+    pathCol = mix(pathCol, vec3(pathLuma) * vec3(1.02, 1.0, 0.94), 0.42);
     float roadOuter = smoothstep(0.08, 0.54, road);
     float roadCore = smoothstep(0.46, 0.76, road);
-    vec3 verge = mix(ground, pathCol, 0.45) * vec3(0.89, 0.9, 0.93);
+    float roadShoulder = roadOuter * (1.0 - smoothstep(0.34, 0.68, road));
+    vec3 verge = mix(ground, pathCol, 0.32) * vec3(0.72, 0.76, 0.84);
+    ground *= 1.0 - roadShoulder * 0.2;
     ground = mix(ground, verge, roadOuter);
     ground = mix(ground, pathCol, roadCore);
     terrainGlow *= 1.0 - roadCore;
@@ -262,14 +276,15 @@ export const Terrain = () => {
             vec2 nVioletUv = vWorldPos.xz / uVioletTile + vec2(0.57, 0.83);
             float nStep = 0.00125;
             vec3 luma = vec3(0.2126, 0.7152, 0.0722);
-            float hL = dot(texture2D(uBasaltMap, nUv - vec2(nStep, 0.0)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv - vec2(nStep, 0.0)).rgb, luma) * nMoss * 0.45;
-            float hR = dot(texture2D(uBasaltMap, nUv + vec2(nStep, 0.0)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv + vec2(nStep, 0.0)).rgb, luma) * nMoss * 0.45;
-            float hD = dot(texture2D(uBasaltMap, nUv - vec2(0.0, nStep)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv - vec2(0.0, nStep)).rgb, luma) * nMoss * 0.45;
-            float hU = dot(texture2D(uBasaltMap, nUv + vec2(0.0, nStep)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv + vec2(0.0, nStep)).rgb, luma) * nMoss * 0.45;
+            vec2 nSlateUv = vWorldPos.xz / uSlateTile;
+            float hL = dot(texture2D(uSlateMap, nSlateUv - vec2(nStep, 0.0)).rgb, luma) * 0.72 + dot(texture2D(uBasaltMap, nUv - vec2(nStep, 0.0)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv - vec2(nStep, 0.0)).rgb, luma) * nMoss * 0.32;
+            float hR = dot(texture2D(uSlateMap, nSlateUv + vec2(nStep, 0.0)).rgb, luma) * 0.72 + dot(texture2D(uBasaltMap, nUv + vec2(nStep, 0.0)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv + vec2(nStep, 0.0)).rgb, luma) * nMoss * 0.32;
+            float hD = dot(texture2D(uSlateMap, nSlateUv - vec2(0.0, nStep)).rgb, luma) * 0.72 + dot(texture2D(uBasaltMap, nUv - vec2(0.0, nStep)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv - vec2(0.0, nStep)).rgb, luma) * nMoss * 0.32;
+            float hU = dot(texture2D(uSlateMap, nSlateUv + vec2(0.0, nStep)).rgb, luma) * 0.72 + dot(texture2D(uBasaltMap, nUv + vec2(0.0, nStep)).rgb, luma) * nBasalt + dot(texture2D(uVioletMap, nVioletUv + vec2(0.0, nStep)).rgb, luma) * nMoss * 0.32;
             float nTrail = tpath(vWorldPos.xz) * smoothstep(21.0, 33.0, length(vWorldPos.xz));
             float nRoad = max(nTrail, troad(vWorldPos.xz));
             float detailMask = 1.0 - smoothstep(0.12, 0.68, nRoad);
-            vec3 worldDetailNormal = normalize(vWorldNormal + vec3(hL - hR, 0.0, hD - hU) * 3.8 * detailMask);
+            vec3 worldDetailNormal = normalize(vWorldNormal + vec3(hL - hR, 0.0, hD - hU) * 5.4 * detailMask);
             normal = normalize(mat3(viewMatrix) * worldDetailNormal);
           }`,
         )
@@ -280,12 +295,19 @@ export const Terrain = () => {
             vec3 rSplat = texture2D(uSplatMap, vWorldPos.xz / uSplatTile).rgb;
             float rBasalt = smoothstep(0.13, 0.65, rSplat.r);
             float rMoss = smoothstep(0.12, 0.62, rSplat.g);
-            roughnessFactor = mix(0.94, 0.82, rBasalt);
+            roughnessFactor = mix(0.96, 0.79, rBasalt);
             roughnessFactor = mix(roughnessFactor, 0.68, rMoss * 0.7);
-            roughnessFactor *= 0.94 + 0.1 * tnoise(vWorldPos.xz * 2.2);
+            float roughMacro = tfbm(vWorldPos.xz * 0.19 + 29.0);
+            float roughGrit = tnoise(vWorldPos.xz * 2.2);
+            roughnessFactor *= 0.82 + roughMacro * 0.2 + roughGrit * 0.12;
             float rTrail = tpath(vWorldPos.xz) * smoothstep(21.0, 33.0, length(vWorldPos.xz));
             float rRoad = max(rTrail, troad(vWorldPos.xz));
-            roughnessFactor = mix(roughnessFactor, 1.0, smoothstep(0.1, 0.8, rRoad) * 0.55);
+            // Repeated foot traffic compacts the path core while its shoulder stays dry
+            // and rough, producing a readable highlight/value break from gameplay view.
+            float rRoadCore = smoothstep(0.46, 0.78, rRoad);
+            float rRoadShoulder = smoothstep(0.08, 0.5, rRoad) * (1.0 - rRoadCore);
+            roughnessFactor = mix(roughnessFactor, 0.72, rRoadCore * 0.72);
+            roughnessFactor = mix(roughnessFactor, 0.98, rRoadShoulder * 0.65);
             roughnessFactor = clamp(roughnessFactor, 0.55, 1.0);
           }`,
         )
@@ -294,7 +316,7 @@ export const Terrain = () => {
           '#include <emissivemap_fragment>\ntotalEmissiveRadiance += terrainGlow;',
         );
     };
-    mat.customProgramCacheKey = () => 'violet-wasteland-terrain-v3-blue-slate';
+    mat.customProgramCacheKey = () => 'violet-wasteland-terrain-v4-relief-path';
     return { material: mat, splatTexture };
   }, [slateTexture, basaltTexture, violetTexture]);
 

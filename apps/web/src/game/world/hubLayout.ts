@@ -1,3 +1,10 @@
+import { HUB_LANDMARK_POSITIONS } from '@sim/terrain/hubGeometry';
+
+export { HUB_LANDMARK_POSITIONS } from '@sim/terrain/hubGeometry';
+// Plaza dressing geometry moved into the sim (so it can bake collidable plaza rocks); the
+// hub's visual/UX layer still imports it from here.
+export { PLAZA_DRESSING, inPlazaKeepout } from '@sim/terrain/hubPlaza';
+
 export type HubStationId = 'roster' | 'summoning' | 'expedition';
 
 export interface HubStation {
@@ -9,13 +16,13 @@ export interface HubStation {
   action?: string;
 }
 
-/** The hub is deliberately compact: every permanent verb is visible from spawn. */
+/** A widened mirrored hub: every permanent verb remains visible across a larger plaza. */
 export const HUB_STATIONS: readonly HubStation[] = [
   {
     id: 'roster',
     title: 'Roster Lodge',
     description: 'Choose who leads the next expedition.',
-    position: [-10.5, -5.8],
+    position: [HUB_LANDMARK_POSITIONS.lodge[0], HUB_LANDMARK_POSITIONS.lodge[1] + 4.7],
     radius: 4.2,
     action: 'Switch adventurer',
   },
@@ -23,55 +30,25 @@ export const HUB_STATIONS: readonly HubStation[] = [
     id: 'summoning',
     title: 'Summoning Shrine',
     description: 'Recruitment unlocks after expedition rewards are connected.',
-    position: [10.5, -7.4],
+    position: HUB_LANDMARK_POSITIONS.shrine,
     radius: 3.1,
   },
   {
     id: 'expedition',
     title: 'Expedition Gate',
     description: 'Leave the haven and begin the current combat run.',
-    // Centered on the gate model / portal VFX (z = -17). Radius must stay just OUTSIDE the
-    // gate's collision footprint (1.55 + player 0.45 = 2.0 in sim/hubCollision): the player
-    // is walled off at 2.0 from center, so a smaller trigger can never be entered. 2.5 gives
+    // Centered on the gate model / portal VFX. Radius must stay just OUTSIDE the
+    // gate's collision footprint (1.95 + player 0.45 = 2.4 in sim/hubCollision): the player
+    // is walled off at 2.4 from center, so a smaller trigger can never be entered. 3.0 gives
     // a snug reachable ring — departure fires the moment you press up against the portal,
     // and nowhere near as early as the old wide zone. (This region is the proximity TRIGGER.)
-    position: [0, -17],
-    radius: 2.5,
+    position: HUB_LANDMARK_POSITIONS.gate,
+    radius: 3.0,
     action: 'Begin expedition',
   },
 ] as const;
 
-export const HUB_SPAWN: readonly [number, number, number] = [0, 0, 11.5];
-
-// ── Plaza ground dressing ─────────────────────────────────────────────────────
-// The haven's dirt plaza (the brown disk between the cobbles and the treeline) is
-// dressed with its own denser band of grass/weeds/rocks/flowers so it doesn't read
-// as a flat empty plane. These describe where that dressing lives and what it dodges.
-
-/** The dirt-disk annulus the plaza dressing fills: just outside the cobbles to just
- *  inside the outer brick ring. Density is concentrated toward the inner edge (the hub). */
-export const PLAZA_DRESSING = { inner: 6.0, outer: 18.5 } as const;
-
-/** Circular keep-outs so plaza dressing never sprouts on the cobbles, through a
- *  building, or up a lamp post. [x, z, radius]. */
-const PLAZA_KEEPOUT: readonly (readonly [number, number, number])[] = [
-  [0, 0, 5.9], // cobblestone circle + campfire (grass meets the stone edge)
-  [-10.5, -10.5, 5.6], // Roster Lodge footprint
-  [10.5, -7.4, 3.4], // Summoning Shrine + relic base
-  [0, -17, 4.2], // Expedition Gate
-  [-6.8, 7, 1.0], // lamp
-  [6.8, 7, 1.0], // lamp
-  [-14.8, -1.5, 1.0], // lamp
-  [14.8, -1.5, 1.0], // lamp
-] as const;
-
-/** True when (x, z) sits on a plaza structure and must stay clear of dressing. */
-export const inPlazaKeepout = (x: number, z: number): boolean => {
-  for (const [cx, cz, r] of PLAZA_KEEPOUT) {
-    if ((x - cx) * (x - cx) + (z - cz) * (z - cz) < r * r) return true;
-  }
-  return false;
-};
+export const HUB_SPAWN: readonly [number, number, number] = [0, 0, 13.5];
 
 // NOTE (multiplayer Phase 1): the collision half of the hub layout — footprint circles,
 // lodge rear wall, clearing clamp — moved into the headless sim as

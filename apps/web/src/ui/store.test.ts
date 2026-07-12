@@ -16,7 +16,14 @@ const session: SessionUI = {
 };
 
 beforeEach(() => {
-  useUIStore.setState({ session: undefined, scene: 'hub', zoneCountdown: null, relicCarrier: null });
+  useUIStore.setState({
+    session: undefined,
+    scene: 'hub',
+    zoneCountdown: null,
+    relicCarrier: null,
+    runScores: [],
+    expeditionResult: null,
+  });
 });
 
 describe('scene guard (server-authoritative zone in a session)', () => {
@@ -61,5 +68,27 @@ describe('teammate HP + relic carrier', () => {
     expect(useUIStore.getState().relicCarrier).toBe('p_two');
     useUIStore.getState().setRelicCarrier(null);
     expect(useUIStore.getState().relicCarrier).toBeNull();
+  });
+});
+
+describe('multiplayer scoring + MVP result', () => {
+  const standings = [
+    { playerId: 'p_two', name: 'Pal', score: 200, kills: 2 },
+    { playerId: 'p_self', name: 'Me', score: 100, kills: 1 },
+  ];
+
+  it('mirrors authoritative standings and retains the final MVP result', () => {
+    useUIStore.getState().setRunScores(standings);
+    useUIStore.getState().setExpeditionResult({ standings, mvpPlayerId: 'p_two' });
+    expect(useUIStore.getState().runScores).toEqual(standings);
+    expect(useUIStore.getState().expeditionResult?.mvpPlayerId).toBe('p_two');
+  });
+
+  it('reset clears scores and the previous expedition result', () => {
+    useUIStore.getState().setRunScores(standings);
+    useUIStore.getState().setExpeditionResult({ standings, mvpPlayerId: 'p_two' });
+    useUIStore.getState().reset();
+    expect(useUIStore.getState().runScores).toEqual([]);
+    expect(useUIStore.getState().expeditionResult).toBeNull();
   });
 });

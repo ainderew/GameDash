@@ -72,9 +72,17 @@ interface MountedWeaponProps {
   object: Group;
   /** Selects the hand-local grip calibrated for the current locomotion clip. */
   stateRef?: React.MutableRefObject<string>;
+  /** Remote avatars render a weapon but must not replace the local player's trail sockets. */
+  publishSockets?: boolean;
 }
 
-const MountedWeapon = ({ bone, def, object, stateRef }: MountedWeaponProps) => {
+const MountedWeapon = ({
+  bone,
+  def,
+  object,
+  stateRef,
+  publishSockets = true,
+}: MountedWeaponProps) => {
   const holder = useRef<Group>(null);
   const bladeBase = useMemo(() => new Group(), []);
   const bladeTip = useMemo(() => new Group(), []);
@@ -89,13 +97,14 @@ const MountedWeapon = ({ bone, def, object, stateRef }: MountedWeaponProps) => {
   );
   const initialized = useRef(false);
   useEffect(() => {
+    if (!publishSockets) return;
     weaponSockets.base = bladeBase;
     weaponSockets.tip = bladeTip;
     return () => {
       if (weaponSockets.base === bladeBase) weaponSockets.base = null;
       if (weaponSockets.tip === bladeTip) weaponSockets.tip = null;
     };
-  }, [bladeBase, bladeTip]);
+  }, [bladeBase, bladeTip, publishSockets]);
   useFrame((_, delta) => {
     const h = holder.current;
     if (!h) return;
@@ -135,14 +144,23 @@ interface WeaponMountProps {
   bone: Object3D;
   def: WeaponDef;
   stateRef?: React.MutableRefObject<string>;
+  publishSockets?: boolean;
 }
 
-const ProceduralWeaponMount = ({ bone, def, stateRef }: WeaponMountProps) => {
+const ProceduralWeaponMount = ({ bone, def, stateRef, publishSockets }: WeaponMountProps) => {
   const object = useMemo(() => buildProceduralWeapon(def), [def]);
-  return <MountedWeapon bone={bone} def={def} object={object} stateRef={stateRef} />;
+  return (
+    <MountedWeapon
+      bone={bone}
+      def={def}
+      object={object}
+      stateRef={stateRef}
+      publishSockets={publishSockets}
+    />
+  );
 };
 
-const GlbWeaponMount = ({ bone, def, stateRef }: WeaponMountProps) => {
+const GlbWeaponMount = ({ bone, def, stateRef, publishSockets }: WeaponMountProps) => {
   const gltf = useGameModel(def.modelPath!);
   const object = useMemo(() => {
     const g = new Group();
@@ -158,7 +176,15 @@ const GlbWeaponMount = ({ bone, def, stateRef }: WeaponMountProps) => {
     g.add(scene);
     return g;
   }, [def.modelGripPivot, gltf]);
-  return <MountedWeapon bone={bone} def={def} object={object} stateRef={stateRef} />;
+  return (
+    <MountedWeapon
+      bone={bone}
+      def={def}
+      object={object}
+      stateRef={stateRef}
+      publishSockets={publishSockets}
+    />
+  );
 };
 
 /**
@@ -167,9 +193,9 @@ const GlbWeaponMount = ({ bone, def, stateRef }: WeaponMountProps) => {
  * and a GLB weapon remounts (different component); switching among procedural weapons rebuilds
  * the mesh in place.
  */
-export const WeaponMount = ({ bone, def, stateRef }: WeaponMountProps) =>
+export const WeaponMount = ({ bone, def, stateRef, publishSockets }: WeaponMountProps) =>
   def.modelPath ? (
-    <GlbWeaponMount bone={bone} def={def} stateRef={stateRef} />
+    <GlbWeaponMount bone={bone} def={def} stateRef={stateRef} publishSockets={publishSockets} />
   ) : (
-    <ProceduralWeaponMount bone={bone} def={def} stateRef={stateRef} />
+    <ProceduralWeaponMount bone={bone} def={def} stateRef={stateRef} publishSockets={publishSockets} />
   );

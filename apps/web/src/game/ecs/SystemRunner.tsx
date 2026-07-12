@@ -16,7 +16,7 @@ import { currentWeapon } from '@/game/combat/weaponStore';
 import { clientSimHooks } from '@/game/feel/simHooks';
 import { playPassFail, playRelicPickup, playRelicThrow } from '@/game/feel/audio';
 import { RELIC_AIM_MOVE_SCALE } from '@shared/balance';
-import { useInput } from '@/game/input/useInput';
+import { consumeInputEdges, useInput } from '@/game/input/useInput';
 import { useUIStore, COMBO_WINDOW_MS, type GameScene } from '@/ui/store';
 import { advanceTime, gameNow, syncGameTime } from '@/game/feel/time';
 import { createSimStepper } from '@sim/loop';
@@ -24,6 +24,7 @@ import type { CmdIntent } from '@shared/net/input';
 import { MS_PER_TICK, SIM_HZ } from '@shared/net/constants';
 import { netGame } from '@/net/netGame';
 import { netClient } from '@/net/client';
+import { spawnVolatileDischargeVfx } from '@/game/feel/onHit';
 
 /** Bridge ECS player HP → store at ~10Hz, not every frame. */
 const HP_BRIDGE_INTERVAL = 0.1;
@@ -128,7 +129,11 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
     if (networked) {
       const player = localPlayers.first;
       if (!player) return;
-      if (!netGame.active) {
+      // Suspense can remount <Player> when a newly joined peer's model starts loading. The
+      // old prediction engine then points at an entity that Player's cleanup removed from the
+      // world: inputs still reach the server (peers see us move), but our new local entity is
+      // never predicted and appears frozen. Bind by entity identity, not merely active state.
+      if (!netGame.drives(player)) {
         netGame.start(world, events, player, netClient.sendInput);
         stepper.current.reset();
         wasNetworked.current = true;
@@ -160,7 +165,9 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
           // state machine; its chosen receiver → the receiver's SERVER entity id for the wire.
           const localId = netClient.localEntityId();
           const carries =
-            relicNet.state.phase === 'carried' && localId !== null && relicNet.state.carrierId === localId;
+            relicNet.state.phase === 'carried' &&
+            localId !== null &&
+            relicNet.state.carrierId === localId;
           const passTo = updatePassControl(
             world,
             player,
@@ -173,12 +180,8 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
           intent.viewServerTimeMs = Math.max(0, netClient.serverNow() - netClient.interpDelayMs());
         }
         // Consume one-shot edges AFTER building the intent (they must reach the server once).
-        i.jump = false;
-        i.pass = false;
-        i.melee = false;
-        i.ranged = false;
-        i.parry = false;
-        i.drop = false;
+        // Pass/revive/sprint remain held until keyup; long-press E needs every fixed tick.
+        consumeInputEdges(i);
         netGame.clientTick(intent);
       });
       // Renderers read gameNow(): keep it on the tick timeline (+ remainder for smoothness).
@@ -186,6 +189,9 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
       // Age out the floating damage numbers spawned from DamageDealt events (the authority
       // sim that normally does this runs on the server, not in this networked-client tick).
       floatingNumberSystem(world, gameNow());
+      // Confirmed server damage spawns render-only impact markers in client.ts. Age those on
+      // real time here just like solo mode; prediction intentionally does not own them.
+      impactFxSystem(world, performance.now());
       return;
     }
     if (wasNetworked.current) {
@@ -245,11 +251,7 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
       );
       intent.passAiming = passAim.aiming;
     }
-    i.jump = false;
-    i.melee = false;
-    i.ranged = false;
-    i.parry = false;
-    i.drop = false;
+    consumeInputEdges(i);
 
     intents.current.clear();
     intents.current.set(player, intent);
@@ -275,10 +277,12 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
           playRelicThrow();
         } else if (ev.type === 'RelicPassFailed') {
           playPassFail();
-        } else if (ev.type === 'RelicCaught' && ev.byLocalPlayer) {
+        } else if ((ev.type === 'RelicCaught' && ev.byLocalPlayer) || ev.type === 'RelicPickedUp') {
           // Reward stinger for the local player claiming the Relic — teammate/enemy
           // catches stay silent so the sound always means "you have it".
           playRelicPickup();
+        } else if (ev.type === 'RelicVolatileDischarge') {
+          spawnVolatileDischargeVfx(world, ev.position, ev.radius, ev.tierIndex === 4);
         }
       }
       if (gained > 0) store.addMaterials(gained);

@@ -8,9 +8,14 @@ import {
   type CmdIntent,
   type InputCmd,
 } from '@shared/net/input';
-import { ACK_FLAG_DOWNED, decodeSnapshot, ENTITY_KIND, type DecodedEntityRecord } from '@shared/net/snapshot';
+import {
+  ACK_FLAG_DOWNED,
+  decodeSnapshot,
+  ENTITY_KIND,
+  type DecodedEntityRecord,
+} from '@shared/net/snapshot';
 import type { RelicFlightWire, ServerMessage } from '@shared/net/messages';
-import { RELIC_PASS_RECATCH_MS } from '@shared/balance';
+import { RELIC_CATCH_RADIUS, RELIC_PASS_RECATCH_MS } from '@shared/balance';
 import type { Entity } from '@sim/components';
 import type { SimMode } from '@sim/step';
 import { createGameWorld, type GameWorld } from '@sim/world';
@@ -57,7 +62,13 @@ export class BotBrain {
     this.angle = this.rng() * Math.PI * 2;
   }
 
-  intentAt(tick: number): { moveX: number; moveZ: number; jump: boolean; dodge: boolean; sprint: boolean } {
+  intentAt(tick: number): {
+    moveX: number;
+    moveZ: number;
+    jump: boolean;
+    dodge: boolean;
+    sprint: boolean;
+  } {
     if (tick % 45 === 0) this.angle += (this.rng() - 0.5) * Math.PI;
     if (tick % 150 === 0) this.sprint = this.rng() < 0.5;
     return {
@@ -248,7 +259,7 @@ export class BotClient {
     intent.aimYaw = Math.atan2(dx, dz);
     // Kite when hurt: back away from the nearest monster to recover, else close the gap and
     // stop pushing once nearly in reach so the swing lands clean.
-    const ownHp = this.ownEntityId !== null ? this.view.get(this.ownEntityId)?.hp ?? 100 : 100;
+    const ownHp = this.ownEntityId !== null ? (this.view.get(this.ownEntityId)?.hp ?? 100) : 100;
     if (ownHp > 0 && ownHp < 35) {
       intent.moveX = -dx / len;
       intent.moveZ = -dz / len;
@@ -271,7 +282,11 @@ export class BotClient {
   /** The relic's position in the replicated snapshot view (any phase), or null. */
   private relicPos(): Vector3Tuple | null {
     for (const [id, e] of this.view) {
-      if (e.kind === ENTITY_KIND.relic && (this.relicEntityId === null || id === this.relicEntityId)) return e.pos;
+      if (
+        e.kind === ENTITY_KIND.relic &&
+        (this.relicEntityId === null || id === this.relicEntityId)
+      )
+        return e.pos;
     }
     return null;
   }
@@ -307,11 +322,11 @@ export class BotClient {
         const dx = relic[0] - me[0];
         const dz = relic[2] - me[2];
         const len = Math.hypot(dx, dz);
-        // Stop a comfortable margin INSIDE the catch radius (1.3) so the bot has been sending
+        // Stop just INSIDE the configured catch radius so the bot has been sending
         // zero-move cmds for several ticks before the server's catch tick — otherwise the
         // server's catch-plant (zeroed velocity) diverges from a still-moving prediction for a
         // tick (the catch-plant becomes presentation-only client-side in Phase 6).
-        if (len > 1.25) {
+        if (len > RELIC_CATCH_RADIUS - 0.05) {
           intent.moveX = dx / len;
           intent.moveZ = dz / len;
         }
@@ -329,7 +344,10 @@ export class BotClient {
       // Hold past the rotation cooldown so the receiver is eligible, then throw — retried every
       // 500 ms until the relic actually leaves (a lost pass packet must not stall the relay).
       const heldMs = this.latestServerTimeMs - this.carriedSince;
-      if (heldMs > RELIC_PASS_RECATCH_MS + 200 && this.latestServerTimeMs - this.lastPassAttemptMs > 500) {
+      if (
+        heldMs > RELIC_PASS_RECATCH_MS + 200 &&
+        this.latestServerTimeMs - this.lastPassAttemptMs > 500
+      ) {
         intent.passTargetId = other.id;
         this.lastPassAttemptMs = this.latestServerTimeMs;
       }
@@ -412,10 +430,15 @@ export class BotClient {
    * changed fields over the baseline). Mirrors the browser client's stateless-delta decode,
    * so the bot's monster/HP view IS what a real player would render — the replication probe.
    */
-  private updateView(keyframe: boolean, baselineTick: number, records: DecodedEntityRecord[]): void {
+  private updateView(
+    keyframe: boolean,
+    baselineTick: number,
+    records: DecodedEntityRecord[],
+  ): void {
     if (keyframe) {
       const base = new Map<number, ViewEntity>();
-      for (const r of records) base.set(r.id, { kind: r.kind, pos: r.pos ?? [0, 0, 0], hp: r.hp ?? 0 });
+      for (const r of records)
+        base.set(r.id, { kind: r.kind, pos: r.pos ?? [0, 0, 0], hp: r.hp ?? 0 });
       this.baselines.set(baselineTick, base);
       const ticks = [...this.baselines.keys()].sort((a, b) => b - a);
       for (const t of ticks.slice(2)) this.baselines.delete(t);

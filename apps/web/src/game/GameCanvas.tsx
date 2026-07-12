@@ -10,10 +10,10 @@ import { Player } from '@/game/entities/Player';
 import { RemotePlayers } from '@/game/entities/RemotePlayers';
 import { NetworkedWorld } from '@/game/entities/NetworkedWorld';
 import { NetGateInteraction } from '@/game/net/NetGateInteraction';
-import { SlashFX } from '@/game/fx/SlashFX';
 import { BladeTrail } from '@/game/fx/BladeTrail';
 import { AttackArcIndicator } from '@/game/fx/AttackArcIndicator';
 import { ImpactFX } from '@/game/fx/ImpactFX';
+import { RelicCatchFX } from '@/game/fx/RelicCatchFX';
 import { MonsterModels } from '@/game/entities/MonsterModels';
 import { MonsterHealthBars } from '@/game/entities/MonsterHealthBars';
 import { Projectiles } from '@/game/entities/Projectiles';
@@ -22,6 +22,7 @@ import { NetworkedRelic } from '@/game/entities/NetworkedRelic';
 import { Teammates } from '@/game/entities/Teammates';
 import { PassAimUI } from '@/game/fx/PassAimUI';
 import { RelicDrainVFX } from '@/game/fx/RelicDrainVFX';
+import { CorruptionMeter } from '@/game/fx/CorruptionMeter';
 import { Pickups } from '@/game/entities/Pickups';
 import { DamageNumbers } from '@/game/entities/DamageNumbers';
 import { SystemRunner } from '@/game/ecs/SystemRunner';
@@ -85,10 +86,11 @@ export const GameCanvas = () => {
                 {networked ? <NetworkedRelic /> : <Relic />}
                 <PassAimUI />
                 <RelicDrainVFX />
-                <SlashFX />
+                <CorruptionMeter />
                 <BladeTrail />
                 <AttackArcIndicator />
                 <ImpactFX />
+                <RelicCatchFX />
                 <MonsterModels />
                 <MonsterHealthBars />
                 <Projectiles />

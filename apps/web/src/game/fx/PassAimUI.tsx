@@ -13,8 +13,11 @@ import {
 import type { Group, InstancedMesh, Mesh, MeshBasicMaterial } from 'three';
 import { passAim } from '@/game/combat/passAim';
 import { sampleBezier } from '@sim/combat/passTargeting';
-import { relics } from '@/game/ecs/world';
+import { localPlayers, relics, world } from '@/game/ecs/world';
 import { gameNow } from '@/game/feel/time';
+import { relicNet } from '@/net/relicNet';
+import { netClient } from '@/net/client';
+import type { Entity } from '@sim/components';
 import {
   RELIC_CATCH_SOCKET_Y,
   RELIC_FAIL_HOT_MS,
@@ -317,8 +320,13 @@ export const PassAimUI = () => {
     const t = performance.now() * 0.001;
     const relic = relics.first;
     const s = relic?.relic;
-    const inFlightPass = s?.phase === 'inFlight' && s.mode === 'pass';
-    const grounded = s?.phase === 'grounded';
+    const netRelic = relicNet.state;
+    const networked = netRelic.phase !== 'absent';
+    const netFlight = networked && netRelic.phase === 'inFlight' ? netRelic.flight : null;
+    const inFlightPass = networked
+      ? netFlight?.mode === 'pass'
+      : s?.phase === 'inFlight' && s.mode === 'pass';
+    const grounded = networked ? netRelic.phase === 'grounded' : s?.phase === 'grounded';
 
     // ── Ribbon source: aim preview OR live remaining flight path ───────────
     let count = 0;
@@ -341,7 +349,18 @@ export const PassAimUI = () => {
       }
       count = RIBBON_N;
       opacity = passAim.valid ? 0.85 : 0.28; // low until locked, solid when it would fly
-    } else if (inFlightPass && s.from && s.control && s.to) {
+    } else if (networked && netFlight?.mode === 'pass') {
+      const now = netClient.serverNow();
+      const ft = Math.min(1, (now - netFlight.startedAt) / netFlight.flightMs);
+      const fade = Math.min(1, (now - netFlight.startedAt) / FLIGHT_FADE_MS);
+      for (let i = 0; i < RIBBON_N; i++) {
+        const tt = ft + (1 - ft) * (i / (RIBBON_N - 1));
+        sampleBezier(netFlight.from, netFlight.control, netFlight.to, tt, flightPoint);
+        pts[i]!.set(flightPoint[0], flightPoint[1], flightPoint[2]);
+      }
+      count = RIBBON_N;
+      opacity = 0.95 * fade;
+    } else if (inFlightPass && s?.from && s.control && s.to) {
       const now = gameNow();
       const ft = Math.min(1, (now - (s.startedAt ?? now)) / (s.flightMs ?? 1));
       const fade = Math.min(1, (now - (s.startedAt ?? now)) / FLIGHT_FADE_MS);
@@ -462,11 +481,24 @@ export const PassAimUI = () => {
     // ── In-flight: amber catch ring contracting with time-to-impact ────────
     const inc = incoming.current;
     if (inc) {
-      const target = inFlightPass ? s?.target : undefined;
+      let target: Entity | undefined;
+      if (inFlightPass && networked && netFlight?.targetId !== undefined) {
+        if (netFlight.targetId === netClient.localEntityId()) target = localPlayers.first;
+        else {
+          for (const entity of world.with('transform')) {
+            if (entity.serverEntityId === netFlight.targetId) {
+              target = entity;
+              break;
+            }
+          }
+        }
+      } else if (inFlightPass) target = s?.target;
       inc.visible = target?.transform !== undefined;
-      if (target?.transform && s) {
-        const now = gameNow();
-        const ft = Math.min(1, (now - (s.startedAt ?? now)) / (s.flightMs ?? 1));
+      if (target?.transform) {
+        const now = networked ? netClient.serverNow() : gameNow();
+        const startedAt = networked ? (netFlight?.startedAt ?? now) : (s?.startedAt ?? now);
+        const flightMs = networked ? (netFlight?.flightMs ?? 1) : (s?.flightMs ?? 1);
+        const ft = Math.min(1, (now - startedAt) / flightMs);
         const [x, y, z] = target.transform.position;
         inc.position.set(x, y + 0.05, z); // ground disc at the feet, like all markers
         inc.rotation.x = -Math.PI / 2;
@@ -483,10 +515,10 @@ export const PassAimUI = () => {
       bm.visible = grounded === true;
       gr.visible = grounded === true;
       pr.visible = grounded === true;
-      if (grounded && relic) {
+      if (grounded && (networked || relic)) {
         const now = gameNow();
-        const hot = s.failedAt !== undefined && now - s.failedAt < RELIC_FAIL_HOT_MS;
-        const [x, y, z] = relic.transform.position;
+        const hot = !networked && s?.failedAt !== undefined && now - s.failedAt < RELIC_FAIL_HOT_MS;
+        const [x, y, z] = networked ? netRelic.pos : relic!.transform.position;
         const groundY = y - RELIC_GROUND_HOVER;
         bm.position.set(x, groundY + 2.5, z);
         beamMat.uniforms.uTime!.value = t;

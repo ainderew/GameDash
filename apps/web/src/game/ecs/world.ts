@@ -1,11 +1,9 @@
 import {
   createGameWorld,
   movableOf,
-  monstersOf,
   mortalOf,
   pickupsOf,
   playersOf,
-  projectilesOf,
   relicsOf,
 } from '@sim/world';
 import { EventQueue } from '@sim/events';
@@ -36,11 +34,13 @@ export const players = playersOf(world);
 /** Query archetype: THE locally-owned player entity (HUD, camera, input). */
 export const localPlayers = world.with('transform', 'velocity', 'playerControlled', 'localPlayer');
 
-/** Query archetype: living monsters. */
-export const monsters = monstersOf(world);
+/** Render query for monsters. Replicated multiplayer monsters intentionally have no
+ * `aiBrain` (the server owns AI), so this must be broader than sim's `monstersOf`. */
+export const monsters = world.with('transform', 'health', 'monster');
 
-/** Query archetype: in-flight projectiles. */
-export const projectiles = projectilesOf(world);
+/** Render query for projectiles. Replicated projectiles are snapshot-driven and therefore
+ * carry no local `velocity`; the authoritative server still uses the stricter sim query. */
+export const projectiles = world.with('transform', 'projectile');
 
 /** Query archetype: collectible material pickups. */
 export const pickups = pickupsOf(world);

@@ -4,10 +4,19 @@ import type { Vector3Tuple } from '@shared/types';
 import type { EventQueue } from '../events';
 import { NOOP_HOOKS, type SimHooks } from '../hooks';
 import { heightAt } from '../terrain/terrainHeight';
-import { bezierControl, passDurationMs, predictCatchPos, sampleBezier } from '../combat/passTargeting';
+import { createMonster } from './spawnSystem';
+import { dealDamage } from './combatHelpers';
+import {
+  bezierControl,
+  passDurationMs,
+  predictCatchPos,
+  sampleBezier,
+} from '../combat/passTargeting';
 import {
   RELIC_AIM_OFFSET,
   RELIC_CARRY_OFFSET,
+  RELIC_CORRUPTION_BOSS_DISTANCE,
+  RELIC_CORRUPTION_TUNING,
   RELIC_FAIL_BOUNCE_ARC,
   RELIC_FAIL_BOUNCE_DIST,
   RELIC_FAIL_BOUNCE_MS,
@@ -19,6 +28,7 @@ import {
   RELIC_GROUND_HOVER,
   RELIC_HANDOFF_SHIELD_MS,
   RELIC_HOMING_MAX_CORRECTION,
+  RELIC_HOMING_RATE,
   RELIC_HOMING_START_T,
   RELIC_PASS_RECATCH_MS,
   RELIC_RECATCH_DELAY_MS,
@@ -28,12 +38,141 @@ import {
   RELIC_THROW_MIN,
   RELIC_THROW_SPEED,
 } from '@shared/balance';
-
-/** How fast the homing endpoint chases the receiver, 1/s (exponential smoothing). */
-const HOMING_RATE = 10;
+import type { RelicTierDefinition } from '@shared/balance';
 
 /** On arrival, the receiver must be this close to the endpoint or the pass drops. */
 const ARRIVAL_TOLERANCE = 2;
+
+export const getRelicTierIndex = (corruption: number): number => {
+  const value = Math.max(0, Math.min(RELIC_CORRUPTION_TUNING.max, corruption));
+  const tiers = RELIC_CORRUPTION_TUNING.tiers;
+  const found = tiers.findIndex((tier, index) =>
+    index === tiers.length - 1
+      ? value >= tier.minCorruption && value <= tier.maxCorruption
+      : value >= tier.minCorruption && value < tier.maxCorruption,
+  );
+  return found < 0 ? tiers.length - 1 : found;
+};
+
+export const getRelicTier = (corruption: number): RelicTierDefinition =>
+  RELIC_CORRUPTION_TUNING.tiers[getRelicTierIndex(corruption)]!;
+
+export const clearRelicBuffs = (holder?: Entity): void => {
+  if (holder) holder.relicBuff = undefined;
+};
+
+const applyRelicBuffs = (holder: Entity, corruption: number): void => {
+  const tierIndex = getRelicTierIndex(corruption);
+  const tier = RELIC_CORRUPTION_TUNING.tiers[tierIndex]!;
+  holder.relicBuff = {
+    tierIndex,
+    tierName: tier.name,
+    damageMult: tier.damageMult,
+    projectileCount: tier.projectileCount,
+    attackRateMult: tier.attackRateMult,
+    pierce: tier.pierce,
+    knockback: tier.knockback,
+    lifestealPct: tier.lifestealPct,
+    moveSpeedMult: tier.moveSpeedMult,
+  };
+};
+
+const emitCorruption = (events: EventQueue, oldValue: number, value: number): void => {
+  const oldTierIndex = getRelicTierIndex(oldValue);
+  const newTierIndex = getRelicTierIndex(value);
+  if (oldTierIndex !== newTierIndex) {
+    events.emit({
+      type: 'RelicTierChanged',
+      oldTierIndex,
+      newTierIndex,
+      oldTier: RELIC_CORRUPTION_TUNING.tiers[oldTierIndex]!,
+      newTier: RELIC_CORRUPTION_TUNING.tiers[newTierIndex]!,
+    });
+  }
+  events.emit({
+    type: 'RelicCorruptionChanged',
+    value,
+    tierIndex: newTierIndex,
+    tier: RELIC_CORRUPTION_TUNING.tiers[newTierIndex]!,
+  });
+};
+
+const dischargeJitter = (relic: Entity, now: number): number => {
+  const seed = (relic.id ?? 1) * 12.9898 + Math.floor(now) * 0.078233;
+  const unit = Math.sin(seed) * 43758.5453;
+  return (unit - Math.floor(unit)) * 2 - 1;
+};
+
+const scheduleNextDischarge = (relic: Entity, now: number, tierIndex: number): void => {
+  const tuning = RELIC_CORRUPTION_TUNING.volatileDischarge;
+  const overload = tierIndex === RELIC_CORRUPTION_TUNING.tiers.length - 1;
+  const interval = tuning.intervalMs * (overload ? tuning.overloadIntervalMult : 1);
+  relic.relic!.nextVolatileDischargeAt =
+    now + interval * (1 + dischargeJitter(relic, now) * tuning.intervalJitter);
+};
+
+const updateVolatileDischarge = (
+  world: World<Entity>,
+  relic: Entity,
+  holder: Entity,
+  tierIndex: number,
+  now: number,
+  events: EventQueue,
+  hooks: SimHooks,
+): void => {
+  const s = relic.relic!;
+  const tuning = RELIC_CORRUPTION_TUNING.volatileDischarge;
+  if (tierIndex < tuning.minTierIndex) {
+    s.nextVolatileDischargeAt = undefined;
+    return;
+  }
+  if (s.nextVolatileDischargeAt === undefined) {
+    scheduleNextDischarge(relic, now, tierIndex);
+    return;
+  }
+  if (now < s.nextVolatileDischargeAt || !holder.transform) return;
+
+  const origin = holder.transform.position;
+  const overload = tierIndex === RELIC_CORRUPTION_TUNING.tiers.length - 1;
+  const damage = tuning.damage * (overload ? tuning.overloadDamageMult : 1);
+  const radiusSq = tuning.radius * tuning.radius;
+  for (const target of world.with('transform', 'health', 'faction')) {
+    if (target === holder || target.health.current <= 0) continue;
+    const dx = target.transform.position[0] - origin[0];
+    const dz = target.transform.position[2] - origin[2];
+    const distSq = dx * dx + dz * dz;
+    if (distSq > radiusSq) continue;
+    const distance = Math.sqrt(distSq) || 1;
+    dealDamage(
+      world,
+      target,
+      damage,
+      now,
+      false,
+      {
+        attacker: holder,
+        strength: 'heavy',
+        dir: [dx / distance, dz / distance],
+        point: [
+          target.transform.position[0],
+          target.transform.position[1] + 1,
+          target.transform.position[2],
+        ],
+        knockbackScale: tuning.knockbackScale,
+        unblockable: true,
+      },
+      hooks,
+    );
+  }
+  events.emit({
+    type: 'RelicVolatileDischarge',
+    holderId: holder.id,
+    position: [origin[0], origin[1] + 0.8, origin[2]],
+    radius: tuning.radius,
+    tierIndex,
+  });
+  scheduleNextDischarge(relic, now, tierIndex);
+};
 
 const isDead = (e: Entity): boolean => (e.health?.current ?? 1) <= 0;
 
@@ -52,11 +191,15 @@ const catchRelic = (
   hooks: SimHooks,
 ): void => {
   const s = relic.relic!;
+  const caughtInFlight = s.phase === 'inFlight';
+  const oldCorruption = s.corruption;
   s.phase = 'carried';
   s.carrier = catcher;
+  if (caughtInFlight) s.corruption = RELIC_CORRUPTION_TUNING.catchResetValue;
   s.mode = undefined;
   s.target = undefined;
   s.thrower = undefined;
+  s.nextVolatileDischargeAt = undefined;
   s.failedAt = undefined;
   s.from = undefined;
   s.to = undefined;
@@ -65,12 +208,19 @@ const catchRelic = (
   catcher.iframeUntil = Math.max(catcher.iframeUntil ?? 0, now + RELIC_HANDOFF_SHIELD_MS);
   if (catcher.teammate) catcher.relicHeldSince = now;
 
+  applyRelicBuffs(catcher, s.corruption);
+  if (caughtInFlight) emitCorruption(events, oldCorruption, s.corruption);
+
   const point = relic.transform!.position;
-  events.emit({
-    type: 'RelicCaught',
-    byLocalPlayer: catcher.localPlayer === true,
-    position: [point[0], point[1], point[2]],
-  });
+  if (caughtInFlight) {
+    events.emit({
+      type: 'RelicCaught',
+      byLocalPlayer: catcher.localPlayer === true,
+      position: [point[0], point[1], point[2]],
+    });
+  } else {
+    events.emit({ type: 'RelicPickedUp', playerId: catcher.id });
+  }
   // Catch juice (teal shockwave VFX, catch bloom, shake, local-player hitstop) is the
   // client's business — see simHooks.onRelicCaught in apps/web.
   hooks.onRelicCaught?.(world, relic, catcher, [point[0], point[1], point[2]]);
@@ -88,7 +238,11 @@ const catchRelic = (
     const distSq = dx * dx + dz * dz;
     if (distSq > RELIC_SHOCKWAVE_RADIUS * RELIC_SHOCKWAVE_RADIUS) continue;
     const len = Math.sqrt(distSq) || 1;
-    m.knockback = [(dx / len) * RELIC_SHOCKWAVE_KNOCKBACK, 0, (dz / len) * RELIC_SHOCKWAVE_KNOCKBACK];
+    m.knockback = [
+      (dx / len) * RELIC_SHOCKWAVE_KNOCKBACK,
+      0,
+      (dz / len) * RELIC_SHOCKWAVE_KNOCKBACK,
+    ];
     m.staggerUntil = now + RELIC_SHOCKWAVE_STUN_MS;
   }
 };
@@ -113,12 +267,21 @@ const tryCatch = (
   events: EventQueue,
   hooks: SimHooks,
 ): void => {
+  const rp = relic.transform!.position;
+  let nearest: Entity | undefined;
+  let nearestDistSq = Infinity;
   for (const player of world.with('transform', 'playerControlled')) {
-    if (canCatch(relic, player, now)) {
-      catchRelic(world, relic, player, now, events, hooks);
-      return;
+    if (!canCatch(relic, player, now)) continue;
+    const pp = player.transform.position;
+    const dx = pp[0] - rp[0];
+    const dz = pp[2] - rp[2];
+    const distSq = dx * dx + dz * dz;
+    if (distSq < nearestDistSq) {
+      nearest = player;
+      nearestDistSq = distSq;
     }
   }
+  if (nearest) catchRelic(world, relic, nearest, now, events, hooks);
 };
 
 /** The relic this entity is currently carrying, if any. */
@@ -136,8 +299,11 @@ export const carriedRelicOf = (world: World<Entity>, carrier: Entity): Entity | 
  */
 export const spawnRelic = (world: World<Entity>, pos: Vector3Tuple): Entity =>
   world.add({
-    transform: { position: [pos[0], heightAt(pos[0], pos[2]) + RELIC_GROUND_HOVER, pos[2]], rotationY: 0 },
-    relic: { phase: 'grounded' },
+    transform: {
+      position: [pos[0], heightAt(pos[0], pos[2]) + RELIC_GROUND_HOVER, pos[2]],
+      rotationY: 0,
+    },
+    relic: { phase: 'grounded', corruption: 0 },
   });
 
 /**
@@ -150,13 +316,21 @@ export const relicInvariantViolation = (world: World<Entity>): string | null => 
   const found = [...world.with('relic')];
   if (found.length !== 1) return `expected exactly 1 relic, found ${found.length}`;
   const s = found[0]!.relic;
+  if (
+    !Number.isFinite(s.corruption) ||
+    s.corruption < 0 ||
+    s.corruption > RELIC_CORRUPTION_TUNING.max
+  ) {
+    return `relic corruption out of range: ${String(s.corruption)}`;
+  }
   if (s.phase === 'carried') {
     if (!s.carrier) return 'carried relic has no carrier';
     if (s.mode !== undefined) return 'carried relic still has a flight mode';
   } else if (s.phase === 'inFlight') {
     if (s.carrier) return 'in-flight relic still bound to a carrier';
     if (!s.from || !s.to) return 'in-flight relic missing from/to endpoints';
-    if (s.mode !== 'pass' && s.mode !== 'lob') return `in-flight relic has bad mode ${String(s.mode)}`;
+    if (s.mode !== 'pass' && s.mode !== 'lob')
+      return `in-flight relic has bad mode ${String(s.mode)}`;
   } else if (s.phase === 'grounded') {
     if (s.carrier) return 'grounded relic still bound to a carrier';
     if (s.mode !== undefined) return 'grounded relic still has a flight mode';
@@ -189,6 +363,7 @@ export const passRelic = (
   s.phase = 'inFlight';
   s.mode = 'pass';
   s.carrier = undefined;
+  clearRelicBuffs(carrier);
   s.target = target;
   s.thrower = carrier;
   s.from = from;
@@ -199,6 +374,7 @@ export const passRelic = (
   s.flightMs = passDurationMs(dist);
   s.noCatchUntil = 0;
   events.emit({ type: 'RelicPassLaunched', toLocalPlayer: target.localPlayer === true, from });
+  events.emit({ type: 'RelicThrown', holderId: carrier.id, targetId: target.id });
 
   // Face the receiver — the throw animation and the pass read as one motion.
   if (carrier.transform) {
@@ -215,7 +391,12 @@ export const passRelic = (
  * SEPARATE verb from passing — release-to-drop would turn every missed pass into an
  * argument. The lob is walk-in catchable like any grounded relic.
  */
-export const dropRelic = (world: World<Entity>, carrier: Entity, now: number): boolean => {
+export const dropRelic = (
+  world: World<Entity>,
+  carrier: Entity,
+  now: number,
+  events?: EventQueue,
+): boolean => {
   const relic = carriedRelicOf(world, carrier);
   const s = relic?.relic;
   const t = carrier.transform;
@@ -230,20 +411,24 @@ export const dropRelic = (world: World<Entity>, carrier: Entity, now: number): b
   s.phase = 'inFlight';
   s.mode = 'lob';
   s.carrier = undefined;
+  clearRelicBuffs(carrier);
   s.target = undefined;
   s.from = [...relic.transform.position];
   s.to = [tx, heightAt(tx, tz) + RELIC_GROUND_HOVER, tz];
   s.startedAt = now;
   s.flightMs = Math.max(RELIC_FLIGHT_MIN_MS, (dist / RELIC_THROW_SPEED) * 1000);
   s.arcHeight = 1;
-  s.noCatchUntil = now + RELIC_RECATCH_DELAY_MS;
+  // Only the thrower is locked out; teammates may intercept the lob immediately.
+  s.noCatchUntil = 0;
   carrier.relicRecatchUntil = now + RELIC_RECATCH_DELAY_MS;
+  events?.emit({ type: 'RelicThrown', holderId: carrier.id });
   return true;
 };
 
 /** Land the relic where its flight ends and let walk-ins claim it. */
-const ground = (s: NonNullable<Entity['relic']>, pos: Vector3Tuple): void => {
+const ground = (s: NonNullable<Entity['relic']>, pos: Vector3Tuple, events?: EventQueue): void => {
   s.phase = 'grounded';
+  s.nextVolatileDischargeAt = undefined;
   s.mode = undefined;
   s.target = undefined;
   s.thrower = undefined;
@@ -253,6 +438,79 @@ const ground = (s: NonNullable<Entity['relic']>, pos: Vector3Tuple): void => {
   s.control = undefined;
   s.endBase = undefined;
   pos[1] = heightAt(pos[0], pos[2]) + RELIC_GROUND_HOVER;
+  events?.emit({ type: 'RelicGrounded', position: [pos[0], pos[1], pos[2]] });
+};
+
+/** Immediate authoritative drop for death/disconnect; corruption is deliberately retained. */
+export const groundHeldRelic = (
+  world: World<Entity>,
+  holder: Entity,
+  events?: EventQueue,
+): boolean => {
+  const relic = carriedRelicOf(world, holder);
+  if (!relic?.relic || !relic.transform || !holder.transform) return false;
+  clearRelicBuffs(holder);
+  relic.relic.carrier = undefined;
+  relic.transform.position = [...holder.transform.position];
+  ground(relic.relic, relic.transform.position, events);
+  return true;
+};
+
+const erupt = (
+  world: World<Entity>,
+  relic: Entity,
+  holder: Entity,
+  now: number,
+  events: EventQueue,
+): void => {
+  const s = relic.relic!;
+  const cp = holder.transform?.position ?? relic.transform!.position;
+  const rotationY = holder.transform?.rotationY ?? 0;
+  world.add(
+    createMonster('relicBoss', [
+      cp[0] + Math.sin(rotationY) * RELIC_CORRUPTION_BOSS_DISTANCE,
+      0,
+      cp[2] + Math.cos(rotationY) * RELIC_CORRUPTION_BOSS_DISTANCE,
+    ]),
+  );
+  if (holder.health) holder.health.current = 0;
+  clearRelicBuffs(holder);
+  s.corruption = 0;
+  s.carrier = undefined;
+  relic.transform!.position = [cp[0], cp[1], cp[2]];
+  ground(s, relic.transform!.position, events);
+  s.noCatchUntil = now;
+  events.emit({
+    type: 'RelicErupted',
+    holderId: holder.id,
+    position: [cp[0], cp[1], cp[2]],
+  });
+  emitCorruption(events, RELIC_CORRUPTION_TUNING.max, 0);
+};
+
+/** Charge the authoritative Relic once for each successful holder ranged attack. */
+export const onRelicAttackUsed = (
+  world: World<Entity>,
+  holder: Entity,
+  now: number,
+  events: EventQueue,
+): boolean => {
+  const relic = carriedRelicOf(world, holder);
+  if (!relic?.relic) return false;
+  const s = relic.relic;
+  const oldValue = s.corruption;
+  const tier = getRelicTier(oldValue);
+  s.corruption = Math.max(
+    0,
+    Math.min(
+      RELIC_CORRUPTION_TUNING.max,
+      oldValue + RELIC_CORRUPTION_TUNING.abilityCorruptionCost + tier.extraCorruptionPerAttack,
+    ),
+  );
+  emitCorruption(events, oldValue, s.corruption);
+  if (s.corruption >= RELIC_CORRUPTION_TUNING.max) erupt(world, relic, holder, now, events);
+  else applyRelicBuffs(holder, s.corruption);
+  return true;
 };
 
 /** A confirmed pass failed at arrival: bounce once along the remaining momentum. */
@@ -317,8 +575,14 @@ export const relicSystem = (
       const c = s.carrier;
       if (!c?.transform || isDead(c)) {
         // Carrier died (or vanished): the Relic drops where they fell.
+        clearRelicBuffs(c);
         s.carrier = undefined;
-        ground(s, pos);
+        if (c?.transform) {
+          pos[0] = c.transform.position[0];
+          pos[1] = c.transform.position[1];
+          pos[2] = c.transform.position[2];
+        }
+        ground(s, pos, events);
         continue;
       }
       // Float at the carrier's left shoulder; while aiming it steadies forward-left so
@@ -331,6 +595,25 @@ export const relicSystem = (
       pos[0] = cp[0] + ox * Math.cos(cr) + oz * Math.sin(cr);
       pos[1] = cp[1] + oy;
       pos[2] = cp[2] - ox * Math.sin(cr) + oz * Math.cos(cr);
+
+      // Buffs are derived, never accumulated. Apply the current tier, then advance the one
+      // authoritative corruption value with that tier's deliberately escalating drip.
+      applyRelicBuffs(c, s.corruption);
+      const oldCorruption = s.corruption;
+      const tier = getRelicTier(oldCorruption);
+      s.corruption = Math.max(
+        0,
+        Math.min(
+          RELIC_CORRUPTION_TUNING.max,
+          oldCorruption + RELIC_CORRUPTION_TUNING.baseDripPerSecond * tier.dripMult * dt,
+        ),
+      );
+      emitCorruption(events, oldCorruption, s.corruption);
+      if (s.corruption >= RELIC_CORRUPTION_TUNING.max) {
+        erupt(world, relic, c, now, events);
+        continue;
+      }
+      updateVolatileDischarge(world, relic, c, getRelicTierIndex(s.corruption), now, events, hooks);
     } else if (s.phase === 'inFlight' && s.mode === 'pass') {
       const t = Math.min(1, (now - (s.startedAt ?? now)) / (s.flightMs ?? 1));
       const target = s.target;
@@ -353,7 +636,7 @@ export const relicSystem = (
           cy *= k;
           cz *= k;
         }
-        const blend = 1 - Math.exp(-HOMING_RATE * dt);
+        const blend = 1 - Math.exp(-RELIC_HOMING_RATE * dt);
         to[0] += (base[0] + cx - to[0]) * blend;
         to[1] += (base[1] + cy - to[1]) * blend;
         to[2] += (base[2] + cz - to[2]) * blend;
@@ -364,8 +647,7 @@ export const relicSystem = (
       if (t >= 1) {
         const tp = target?.transform?.position;
         const near =
-          tp !== undefined &&
-          Math.hypot(tp[0] - pos[0], tp[2] - pos[2]) <= ARRIVAL_TOLERANCE;
+          tp !== undefined && Math.hypot(tp[0] - pos[0], tp[2] - pos[2]) <= ARRIVAL_TOLERANCE;
         if (target && tp && !isDead(target) && near) {
           catchRelic(world, relic, target, now, events, hooks);
         } else {
@@ -374,7 +656,12 @@ export const relicSystem = (
           // as a mini-lob before settling; lob flights are walk-in catchable, so the
           // bounce itself is already recoverable. The thrower's rotation cooldown is
           // refunded — failure shouldn't strand them next to their own relic.
-          failPass(relic, now, target && !isDead(target) ? 'receiver_escaped' : 'receiver_downed', events);
+          failPass(
+            relic,
+            now,
+            target && !isDead(target) ? 'receiver_escaped' : 'receiver_downed',
+            events,
+          );
         }
       }
     } else if (s.phase === 'inFlight') {
@@ -385,7 +672,7 @@ export const relicSystem = (
       pos[0] = from[0] + (to[0] - from[0]) * t;
       pos[2] = from[2] + (to[2] - from[2]) * t;
       pos[1] = from[1] + (to[1] - from[1]) * t + (s.arcHeight ?? 1.5) * 4 * t * (1 - t);
-      if (t >= 1) ground(s, pos);
+      if (t >= 1) ground(s, pos, events);
       else tryCatch(world, relic, now, events, hooks);
     } else {
       // grounded: hold the hover height (terrain may differ from where the throw aimed).

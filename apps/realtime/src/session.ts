@@ -1,6 +1,7 @@
 import type { PlayerId, Vector3Tuple } from '@shared/types';
 import type {
   ImpulseMessage,
+  PlayerScoreWire,
   RelicFlightWire,
   RelicWelcomeState,
   ServerMessage,
@@ -13,6 +14,9 @@ import {
   ANIM_FLAG_ATTACK,
   ANIM_FLAG_DODGE,
   ANIM_FLAG_DOWNED,
+  ANIM_FLAG_HURT,
+  ANIM_FLAG_RELIC_CATCH,
+  ANIM_FLAG_RELIC_THROW,
   ANIM_FLAG_SPRINT,
   DEFAULT_IDLE_SESSION_TIMEOUT_MS,
   DEFAULT_MAX_SESSIONS,
@@ -32,9 +36,9 @@ import {
 import {
   MATERIAL_PER_PICKUP,
   NET_MELEE_PAD,
-  RELIC_GROUND_HOVER,
   RELIC_PASS_RANGE,
   RELIC_RELEASE_CONE_DEG,
+  SCORE_PER_ENEMY_KILL,
 } from '@shared/balance';
 import {
   ACK_FLAG_DOWNED,
@@ -49,13 +53,18 @@ import { createGameWorld, type GameWorld } from '@sim/world';
 import { EventQueue, type GameEvent } from '@sim/events';
 import { stepSim, type IntentsByPlayer, type PlayerIntent, type SimMode } from '@sim/step';
 import { applyImpulse } from '@sim/prediction';
-import { dropRelic, spawnRelic } from '@sim/systems/relicSystem';
+import { groundHeldRelic, spawnRelic } from '@sim/systems/relicSystem';
 import { combatFromCmd } from '@shared/net/input';
 import { heightAt } from '@sim/terrain/terrainHeight';
 import { rewindPos } from './lagComp';
 import { PlayerInputQueue } from './inputQueue';
 import { makeServerCombatHooks, type CapturedHit } from './combatHooks';
-import { makeMeleeRewind, viewTickFromMs, NET_LAGCOMP_MAX_TICKS, type HistorySample } from './lagComp';
+import {
+  makeMeleeRewind,
+  viewTickFromMs,
+  NET_LAGCOMP_MAX_TICKS,
+  type HistorySample,
+} from './lagComp';
 import { logger, type Logger } from './log';
 
 /** Where players spawn when the party enters the expedition (ring around the arena origin). */
@@ -124,13 +133,22 @@ interface PendingImpulse {
   staggerMs: number;
 }
 
+interface PlayerRunStats {
+  score: number;
+  kills: number;
+  damage: number;
+}
+
 /** Spawn ring around the hub campfire — one slot per join order. */
 const spawnPos = (index: number): Vector3Tuple => {
   const angle = (index % SESSION_MAX_PLAYERS) * (Math.PI / 2) + Math.PI / 4;
   return [Math.sin(angle) * 3.2, 0, Math.cos(angle) * 3.2];
 };
 
-const animFlagsFor = (e: Entity, now: number): number => {
+const REMOTE_HURT_ANIM_MS = 700;
+const REMOTE_THROW_ANIM_MS = 550;
+
+export const playerAnimFlagsFor = (e: Entity, now: number, relic?: Entity | null): number => {
   if (!e.transform || !e.velocity) return 0;
   const [x, y, z] = e.transform.position;
   const speed = Math.hypot(e.velocity.linear[0], e.velocity.linear[2]);
@@ -142,6 +160,19 @@ const animFlagsFor = (e: Entity, now: number): number => {
   // matching one-shot clip so a teammate's swing/roll is visible (not just locomotion).
   if (now < (e.attackAnimUntil ?? 0)) flags |= ANIM_FLAG_ATTACK;
   if (now < (e.dodgingUntil ?? 0)) flags |= ANIM_FLAG_DODGE;
+  if (e.hitReactionAt !== undefined && now < e.hitReactionAt + REMOTE_HURT_ANIM_MS) {
+    flags |= ANIM_FLAG_HURT;
+  }
+  if (now < (e.catchRootUntil ?? 0)) flags |= ANIM_FLAG_RELIC_CATCH;
+  const relicState = relic?.relic;
+  if (
+    relicState?.phase === 'inFlight' &&
+    relicState.thrower === e &&
+    relicState.startedAt !== undefined &&
+    now < relicState.startedAt + REMOTE_THROW_ANIM_MS
+  ) {
+    flags |= ANIM_FLAG_RELIC_THROW;
+  }
   return flags;
 };
 
@@ -183,6 +214,8 @@ export class Session {
   private countdownLastSecond = -1;
   /** SHARED-POOL material tally — everyone's count. Server-authoritative (loot events only). */
   materials = 0;
+  /** Per-expedition results, retained through the hub return for the MVP screen. */
+  private readonly runStats = new Map<PlayerId, PlayerRunStats>();
   /** Confirmed hits captured from the sim this tick → DamageDealt/ParrySuccess wire events. */
   private readonly hitSink: CapturedHit[] = [];
   private readonly combatHooks = makeServerCombatHooks(this.hitSink, (target, impulse, staggerMs) =>
@@ -255,6 +288,24 @@ export class Session {
     }));
   }
 
+  scoreStandings(): PlayerScoreWire[] {
+    return [...this.players.values()]
+      .sort((a, b) => {
+        const sa = this.runStats.get(a.id) ?? { score: 0, kills: 0, damage: 0 };
+        const sb = this.runStats.get(b.id) ?? { score: 0, kills: 0, damage: 0 };
+        return (
+          sb.score - sa.score ||
+          sb.damage - sa.damage ||
+          a.joinedAt - b.joinedAt ||
+          a.id.localeCompare(b.id)
+        );
+      })
+      .map((player) => {
+        const stats = this.runStats.get(player.id) ?? { score: 0, kills: 0, damage: 0 };
+        return { playerId: player.id, name: player.name, score: stats.score, kills: stats.kills };
+      });
+  }
+
   broadcast(msg: ServerMessage, exceptId?: PlayerId): void {
     for (const player of this.players.values()) {
       if (player.id === exceptId) continue;
@@ -263,7 +314,9 @@ export class Session {
   }
 
   /** Spawn a player avatar into the session world (at the current zone's origin ring). */
-  attachAvatar(player: Omit<SessionPlayer, 'entity' | 'input' | 'ackState' | 'posHistory'>): SessionPlayer {
+  attachAvatar(
+    player: Omit<SessionPlayer, 'entity' | 'input' | 'ackState' | 'posHistory'>,
+  ): SessionPlayer {
     const pos = this.playerSpawnPos(this.spawnCounter++);
     const entity = this.world.add({
       transform: { position: [...pos] as Vector3Tuple, rotationY: Math.PI },
@@ -282,6 +335,9 @@ export class Session {
       posHistory: [],
     };
     this.players.set(full.id, full);
+    if (!this.runStats.has(full.id)) {
+      this.runStats.set(full.id, { score: 0, kills: 0, damage: 0 });
+    }
     this.emptySince = null;
     // Membership changed → the next snapshot must be a keyframe (existence is
     // keyframe-authoritative and the joiner has no baseline yet).
@@ -299,7 +355,11 @@ export class Session {
   private playerSpawnPos(index: number): Vector3Tuple {
     if (this.zone === 'expedition') {
       const angle = (index % SESSION_MAX_PLAYERS) * (Math.PI / 2) + Math.PI / 4;
-      return [EXPEDITION_ORIGIN[0] + Math.sin(angle) * 2.5, 0, EXPEDITION_ORIGIN[2] + Math.cos(angle) * 2.5];
+      return [
+        EXPEDITION_ORIGIN[0] + Math.sin(angle) * 2.5,
+        0,
+        EXPEDITION_ORIGIN[2] + Math.cos(angle) * 2.5,
+      ];
     }
     return spawnPos(index);
   }
@@ -414,6 +474,10 @@ export class Session {
     // block for late joiners — no separate spawn broadcast, so the combat/relay send stream
     // isn't perturbed by an extra reliable frame. Carrier binding + flight arcs are events.
     if (zone === 'expedition') {
+      this.runStats.clear();
+      for (const player of this.players.values()) {
+        this.runStats.set(player.id, { score: 0, kills: 0, damage: 0 });
+      }
       this.relicEntity = spawnRelic(this.world, RELIC_SPAWN);
       this.relicWire = {
         phase: 'grounded',
@@ -499,7 +563,10 @@ export class Session {
         // Record the view tick at each melee PRESS — the whole swing rewinds to what the
         // attacker saw when they pressed (clamped to the ≤200 ms policy window on read).
         if (c.melee) {
-          const view = Math.max(this.tick - NET_LAGCOMP_MAX_TICKS, Math.min(this.tick, viewTickFromMs(c.viewServerTimeMs)));
+          const view = Math.max(
+            this.tick - NET_LAGCOMP_MAX_TICKS,
+            Math.min(this.tick, viewTickFromMs(c.viewServerTimeMs)),
+          );
           this.attackerViewTick.set(player.entity.id!, view);
         }
         // Relic pass release: a non-zero passTargetId is "throw to this receiver THIS tick".
@@ -560,8 +627,10 @@ export class Session {
   /** Reliable removal signal for projectiles/pickups gone since last tick (see knownEntities). */
   private detectEntityDespawns(): void {
     const current = new Set<number>();
-    for (const p of this.world.with('projectile', 'transform')) if (p.id !== undefined) current.add(p.id);
-    for (const pk of this.world.with('pickup', 'transform')) if (pk.id !== undefined) current.add(pk.id);
+    for (const p of this.world.with('projectile', 'transform'))
+      if (p.id !== undefined) current.add(p.id);
+    for (const pk of this.world.with('pickup', 'transform'))
+      if (pk.id !== undefined) current.add(pk.id);
     for (const id of this.knownEntities) {
       if (!current.has(id)) this.broadcast({ type: 'entityGone', serverTick: this.tick, id });
     }
@@ -580,7 +649,9 @@ export class Session {
   }
 
   /** Capture per-player reconciliation anchors + the position-history ring (Phase 3 seam). */
-  private captureAckStatesAndHistory(consumed: { player: SessionPlayer; seq: number | null }[]): void {
+  private captureAckStatesAndHistory(
+    consumed: { player: SessionPlayer; seq: number | null }[],
+  ): void {
     for (const { player, seq } of consumed) {
       const e = player.entity;
       if (!e.transform || !e.velocity) continue;
@@ -626,6 +697,11 @@ export class Session {
       for (const p of this.players.values()) if (p.entity.id === entityId) return p.id;
       return undefined;
     };
+    const playerIdOfAttacker = (attacker: Entity | undefined): PlayerId | undefined => {
+      const owner = attacker?.projectileOwner ?? attacker;
+      if (owner?.ownerId && this.players.has(owner.ownerId)) return owner.ownerId;
+      return ownerOf(owner?.id);
+    };
 
     // Confirmed hits/parries (from the sim's feel hooks the server captured).
     for (const h of this.hitSink) {
@@ -634,6 +710,25 @@ export class Session {
         const pid = ownerOf(ctx.target.id);
         if (pid) this.broadcast({ type: 'parrySuccess', serverTick: this.tick, playerId: pid });
         continue;
+      }
+      if (!ctx.target.playerControlled) {
+        const scorerId = playerIdOfAttacker(ctx.attacker);
+        if (scorerId) {
+          const stats = this.runStats.get(scorerId) ?? { score: 0, kills: 0, damage: 0 };
+          stats.damage += ctx.amount;
+          if (ctx.lethal) {
+            stats.kills += 1;
+            stats.score += SCORE_PER_ENEMY_KILL;
+            this.broadcast({
+              type: 'scoreUpdated',
+              serverTick: this.tick,
+              scorerId,
+              points: SCORE_PER_ENEMY_KILL,
+              standings: this.scoreStandings(),
+            });
+          }
+          this.runStats.set(scorerId, stats);
+        }
       }
       this.broadcast({
         type: 'damageDealt',
@@ -688,6 +783,26 @@ export class Session {
           this.keyframeRequested = true; // the pickup entity was removed
           break;
         }
+        case 'RelicErupted': {
+          this.broadcast({
+            type: 'relicErupted',
+            serverTick: this.tick,
+            holderId: ev.holderId,
+            pos: [ev.position[0], ev.position[1], ev.position[2]],
+          });
+          break;
+        }
+        case 'RelicVolatileDischarge': {
+          this.broadcast({
+            type: 'relicVolatileDischarge',
+            serverTick: this.tick,
+            holderId: ev.holderId,
+            pos: [ev.position[0], ev.position[1], ev.position[2]],
+            radius: ev.radius,
+            tierIndex: ev.tierIndex,
+          });
+          break;
+        }
         default:
           break; // LootDropped is internal (spawns a pickup entity, replicated by snapshot)
       }
@@ -738,7 +853,13 @@ export class Session {
       }
     }
     if (anyAlive) return;
-    this.broadcast({ type: 'huntFailed', serverTick: this.tick });
+    const standings = this.scoreStandings();
+    this.broadcast({
+      type: 'huntFailed',
+      serverTick: this.tick,
+      standings,
+      mvpPlayerId: standings[0]?.playerId ?? null,
+    });
     this.enterZone('hub');
   }
 
@@ -763,7 +884,9 @@ export class Session {
     aimYaw: number,
     viewServerTimeMs: number,
   ): Entity | null {
-    const reject = (reason: 'not_carrier' | 'target_invalid' | 'out_of_range' | 'rotation'): null => {
+    const reject = (
+      reason: 'not_carrier' | 'target_invalid' | 'out_of_range' | 'rotation',
+    ): null => {
       thrower.link.send({ type: 'passRejected', serverTick: this.tick, reason });
       return null;
     };
@@ -804,7 +927,11 @@ export class Session {
   private flightWire(s: NonNullable<Entity['relic']>): RelicFlightWire {
     const from = s.from ?? [0, 0, 0];
     const to = s.to ?? [0, 0, 0];
-    const control = s.control ?? [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2];
+    const control = s.control ?? [
+      (from[0] + to[0]) / 2,
+      (from[1] + to[1]) / 2,
+      (from[2] + to[2]) / 2,
+    ];
     return {
       mode: s.mode === 'pass' ? 'pass' : 'lob',
       from: [from[0], from[1], from[2]],
@@ -831,7 +958,11 @@ export class Session {
     const pos = r.transform.position;
     const at = (): [number, number, number] => [pos[0], pos[1], pos[2]];
 
-    if (s.phase === 'inFlight' && s.startedAt !== undefined && s.startedAt !== this.relicWire.startedAt) {
+    if (
+      s.phase === 'inFlight' &&
+      s.startedAt !== undefined &&
+      s.startedAt !== this.relicWire.startedAt
+    ) {
       this.relicWire.startedAt = s.startedAt;
       this.broadcast({ type: 'relicLaunched', serverTick: this.tick, flight: this.flightWire(s) });
       // A failed pass bounces as a lob — announce the failure (reason drives the fail feedback).
@@ -845,14 +976,29 @@ export class Session {
         });
       } else if (s.mode === 'lob' && this.pendingLobReason) {
         // An intentional G-drop or a carrier-disconnect lob — carries its own reason.
-        this.broadcast({ type: 'relicDropped', serverTick: this.tick, reason: this.pendingLobReason, pos: at() });
+        this.broadcast({
+          type: 'relicDropped',
+          serverTick: this.tick,
+          reason: this.pendingLobReason,
+          pos: at(),
+        });
       }
       this.pendingLobReason = null;
     }
 
-    if (s.phase === 'carried' && s.carrier?.id !== undefined && s.carrier.id !== this.relicWire.carrierId) {
+    if (
+      s.phase === 'carried' &&
+      s.carrier?.id !== undefined &&
+      s.carrier.id !== this.relicWire.carrierId
+    ) {
       this.relicWire.carrierId = s.carrier.id;
-      this.broadcast({ type: 'relicCaught', serverTick: this.tick, carrierId: s.carrier.id, pos: at() });
+      this.broadcast({
+        type: 'relicCaught',
+        serverTick: this.tick,
+        carrierId: s.carrier.id,
+        pos: at(),
+        corruption: s.corruption,
+      });
     }
     if (s.phase !== 'carried') this.relicWire.carrierId = -1;
 
@@ -872,6 +1018,7 @@ export class Session {
       entityId: r.id!,
       phase: s.phase,
       pos: [p[0], p[1], p[2]],
+      corruption: s.corruption,
       carrierId: s.phase === 'carried' ? s.carrier?.id : undefined,
       flight: s.phase === 'inFlight' ? this.flightWire(s) : undefined,
     };
@@ -884,8 +1031,8 @@ export class Session {
    */
   handleCarrierDisconnect(entity: Entity): void {
     if (this.carriedRelic(entity)) {
-      this.pendingLobReason = 'disconnect';
-      dropRelic(this.world, entity, this.simNowMs);
+      this.pendingLobReason = null;
+      groundHeldRelic(this.world, entity, this.events);
     }
   }
 
@@ -893,7 +1040,8 @@ export class Session {
   broadcastSnapshots(): void {
     if (this.players.size === 0) return;
     const now = this.simNowMs;
-    const keyframe = this.keyframeRequested || now - this.lastKeyframeAtMs >= SNAPSHOT_KEYFRAME_INTERVAL_MS;
+    const keyframe =
+      this.keyframeRequested || now - this.lastKeyframeAtMs >= SNAPSHOT_KEYFRAME_INTERVAL_MS;
 
     const states: QuantEntityState[] = [];
     for (const player of this.players.values()) {
@@ -907,7 +1055,7 @@ export class Session {
           rotY: e.transform.rotationY,
           hp: e.health?.current ?? 0,
           vel: e.velocity.linear,
-          flags: animFlagsFor(e, now),
+          flags: playerAnimFlagsFor(e, now, this.relicEntity),
         }),
       );
     }
@@ -965,7 +1113,9 @@ export class Session {
             kind: ENTITY_KIND.relic,
             pos: relic.transform.position,
             rotY: 0,
-            hp: 0,
+            // The generic uint16 HP lane carries Relic corruption at snapshot rate. It is
+            // authoritative scalar state and avoids a noisy reliable JSON event every tick.
+            hp: relic.relic.corruption,
             vel: [0, 0, 0],
             flags: RELIC_PHASE_FLAG[relic.relic.phase],
           }),
@@ -1116,27 +1266,48 @@ export class SessionManager {
   destroySession(session: Session, reason: 'internal_error' | 'idle'): void {
     for (const player of [...session.players.values()]) {
       try {
-        player.link.send({ type: 'error', code: 'not_in_session', message: `session ended (${reason})` });
+        player.link.send({
+          type: 'error',
+          code: 'not_in_session',
+          message: `session ended (${reason})`,
+        });
       } catch {
         // socket already dying — the ws close handler will clean up.
       }
     }
     this.sessions.delete(session.code);
-    this.log.warn('session_destroyed', { code: session.code, reason, players: session.players.size });
+    this.log.warn('session_destroyed', {
+      code: session.code,
+      reason,
+      players: session.players.size,
+    });
   }
 
   // ── Aggregate metrics for the /metrics endpoint (Phase 6 Task 5) ─────────────
-  metricsSnapshot(): { sessions: number; players: number; snapshotBytes: number; eventQueueDepth: number } {
+  metricsSnapshot(): {
+    sessions: number;
+    players: number;
+    snapshotBytes: number;
+    eventQueueDepth: number;
+  } {
     let snapshotBytes = 0;
     let eventQueueDepth = 0;
     for (const s of this.sessions.values()) {
       snapshotBytes += s.lastSnapshotBytes;
       eventQueueDepth += s.eventQueueDepth;
     }
-    return { sessions: this.sessions.size, players: this.playerCount, snapshotBytes, eventQueueDepth };
+    return {
+      sessions: this.sessions.size,
+      players: this.playerCount,
+      snapshotBytes,
+      eventQueueDepth,
+    };
   }
 
-  createSession(profile: PlayerProfile, link: PeerLink): { session: Session; player: SessionPlayer } {
+  createSession(
+    profile: PlayerProfile,
+    link: PeerLink,
+  ): { session: Session; player: SessionPlayer } {
     let code = generateSessionCode();
     while (this.sessions.has(code)) code = generateSessionCode(); // collision paranoia
     const session = new Session(code, this.now());
@@ -1146,7 +1317,12 @@ export class SessionManager {
     return { session, player };
   }
 
-  joinSession(code: string, profile: PlayerProfile, link: PeerLink, resumeToken?: string): JoinResult {
+  joinSession(
+    code: string,
+    profile: PlayerProfile,
+    link: PeerLink,
+    resumeToken?: string,
+  ): JoinResult {
     const session = this.sessions.get(code);
     if (!session) return { ok: false, error: 'unknown_session' };
 
@@ -1155,7 +1331,8 @@ export class SessionManager {
       const departed = session.departed.get(resumeToken);
       if (departed && this.now() - departed.leftAt <= RESUME_WINDOW_MS) {
         session.departed.delete(resumeToken);
-        if (session.players.size >= SESSION_MAX_PLAYERS) return { ok: false, error: 'session_full' };
+        if (session.players.size >= SESSION_MAX_PLAYERS)
+          return { ok: false, error: 'session_full' };
         const player = this.attach(session, profile, link, departed.id, resumeToken);
         this.log.info('session_resumed', { code, playerId: player.id });
         return { ok: true, session, player, resumed: true };
@@ -1164,7 +1341,12 @@ export class SessionManager {
 
     if (session.players.size >= SESSION_MAX_PLAYERS) return { ok: false, error: 'session_full' };
     const player = this.attach(session, profile, link, generatePlayerId());
-    this.log.info('session_joined', { code, playerId: player.id, name: player.name, players: session.players.size });
+    this.log.info('session_joined', {
+      code,
+      playerId: player.id,
+      name: player.name,
+      players: session.players.size,
+    });
     return { ok: true, session, player, resumed: false };
   }
 
@@ -1219,7 +1401,12 @@ export class SessionManager {
     });
     session.broadcast({ type: 'playerLeft', playerId, reason });
     if (session.players.size === 0) session.emptySince = this.now();
-    this.log.info('session_left', { code: session.code, playerId, reason, players: session.players.size });
+    this.log.info('session_left', {
+      code: session.code,
+      playerId,
+      reason,
+      players: session.players.size,
+    });
   }
 
   /**

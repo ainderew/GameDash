@@ -122,12 +122,25 @@ const VERT = /* glsl */ `
   varying vec2  vUv;
   varying vec3  vTint;
   varying vec3  vWorldNormal;
+  varying vec2  vNoise; // x = dry↔lush hue drift, y = value patch — both coherent in world space
   #include <fog_pars_vertex>
 
   float hash12(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+  }
+
+  // Smooth (bilinear) value noise so colour drifts in coherent patches instead of confetti.
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
 
   void main() {
@@ -146,6 +159,15 @@ const VERT = /* glsl */ `
     vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
     vWorldNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
 
+    // Coherent world-space colour variation: two octaves for the hue drift, a finer
+    // one for value patches. Sampled at the root so a whole tuft shares one tone.
+    vNoise.x = vnoise(root.xz * 0.045 + 3.1) * 0.65 + vnoise(root.xz * 0.13 + 19.7) * 0.35;
+    vNoise.y = vnoise(root.xz * 0.11 + 41.3) * 0.6 + vnoise(root.xz * 0.34 + 7.9) * 0.4;
+
+    // Taller tufts sway further: the instance Y-scale (world height) amplifies the bend
+    // so a knee-high blade doesn't whip as hard as a waist-high one.
+    float instH = length(instanceMatrix[1].xyz);
+
     float phase  = dot(root.xz, uWindDir) * uWindScale;
     float jitter = hash12(root.xz) * 6.2831;
     float wave =
@@ -155,13 +177,18 @@ const VERT = /* glsl */ `
     // Slow gust envelope so the field breathes instead of metronoming.
     float gust = 0.6 + 0.4 * sin(phase * 0.15 + uTime * uWindSpeed * 0.30);
 
-    // CRUCIAL: scaled by the height fraction — roots pinned at 0, tips fly.
-    float sway = wave * gust * uWindStrength * pow(aT, 1.5);
+    // CRUCIAL: scaled by the height fraction — roots pinned at 0, tips fly. The instance
+    // height factor makes tall grass sway more than short so motion varies across the field.
+    float sway = wave * gust * uWindStrength * pow(aT, 1.5) * (0.55 + instH * 0.5);
     world.xz += uWindDir * sway;
     world.y  -= sway * sway * 0.5 * aT; // bent blades shorten, they don't stretch
 
     vec4 mvPosition = viewMatrix * world;
     gl_Position = projectionMatrix * mvPosition;
+    // This shader builds world position itself (instancing + wind), so hand it straight
+    // to the atmospheric fog instead of letting the chunk rebuild it from a transformed
+    // local vertex we do not have (see FOG_WORLDPOS_MANUAL in atmosphericFog.ts).
+    vFogWorldPosition = world.xyz;
     #include <fog_vertex>
   }
 `;
@@ -179,20 +206,34 @@ const FRAG = /* glsl */ `
   varying vec2  vUv;
   varying vec3  vTint;
   varying vec3  vWorldNormal;
+  varying vec2  vNoise; // x = dry↔lush hue drift, y = value patch
   #include <fog_pars_fragment>
 
   void main() {
     vec3 atlas = texture2D(uMap, vUv).rgb;
     float atlasValue = dot(atlas, vec3(0.2126, 0.7152, 0.0722));
-    vec3 col = mix(vec3(0.045, 0.05, 0.058), vec3(0.16, 0.17, 0.19), smoothstep(0.08, 0.78, atlasValue));
-    // Melt the lowest part of each tuft into the terrain colour.
-    col = mix(uRootColor, col, smoothstep(0.04, 0.62, vT));
+    // Slightly wider value band than before so blade tips read against the ground.
+    vec3 col = mix(vec3(0.038, 0.043, 0.05), vec3(0.175, 0.188, 0.205), smoothstep(0.06, 0.8, atlasValue));
+
+    // Coherent dry↔lush drift: some drifts of the field skew warm/parched, others cool.
+    // Kept subtle (±~8%) to stay inside the achromatic wasteland palette.
+    vec3 dryTint  = vec3(1.08, 1.00, 0.86);
+    vec3 lushTint = vec3(0.90, 1.00, 1.07);
+    col *= mix(dryTint, lushTint, vNoise.x);
+    // Large-scale value patches — lighter clearings, darker thickets.
+    col *= mix(0.80, 1.16, vNoise.y);
+
+    // Melt the lowest part of each tuft into the terrain colour, with a touch more
+    // root→tip contrast so individual blades have depth.
+    col = mix(uRootColor, col, smoothstep(0.03, 0.60, vT));
     // Pack's baked occlusion separates blades without turning clump interiors black.
-    col *= mix(0.74, 1.02, vAO);
+    col *= mix(0.72, 1.03, vAO);
     vec3 n = normalize(vWorldNormal);
     float wrappedSun = clamp((dot(n, normalize(uSunDir)) + 0.48) / 1.48, 0.0, 1.0);
     float skyFacing = 0.72 + 0.28 * clamp(n.y, 0.0, 1.0);
     col *= uAmbientLight * skyFacing + uSunLight * wrappedSun * 0.76;
+    // Faint tip highlight so silhouettes catch the light, strongest in the lush drifts.
+    col += vec3(0.018, 0.020, 0.022) * pow(vT, 2.5) * (0.4 + vNoise.x * 0.6);
     // Restrained warm translucency on sun-facing tips.
     col += uSSSColor * pow(vT, 3.0) * wrappedSun * 0.01;
     col *= mix(vec3(1.0), vTint, 0.7);
@@ -285,6 +326,31 @@ const meadowNoise = (x: number, z: number) => {
   return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
 };
 
+/** Coherent large-scale HEIGHT field — independent of density so tall and short grass
+ *  form their own rolling regions (a short-cropped hollow, a tall overgrown drift) rather
+ *  than height tracking density one-to-one. Larger cell than the meadow so the bands read
+ *  at a bigger scale. Decorrelated hash from cellHash so the two fields don't line up. */
+const HEIGHT_CELL = 21;
+const heightCellHash = (ix: number, iz: number) => {
+  const s = Math.sin(ix * 269.5 + iz * 183.31) * 43758.5453;
+  return s - Math.floor(s);
+};
+const heightField = (x: number, z: number) => {
+  const gx = x / HEIGHT_CELL;
+  const gz = z / HEIGHT_CELL;
+  const ix = Math.floor(gx);
+  const iz = Math.floor(gz);
+  let fx = gx - ix;
+  let fz = gz - iz;
+  fx = fx * fx * (3 - 2 * fx);
+  fz = fz * fz * (3 - 2 * fz);
+  const a = heightCellHash(ix, iz);
+  const b = heightCellHash(ix + 1, iz);
+  const c = heightCellHash(ix, iz + 1);
+  const d = heightCellHash(ix + 1, iz + 1);
+  return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
+};
+
 /** Extra plaza tufts as a share of each variant's meadow count — heavily weighted to
  *  the short base grass so the plaza reads as low, trodden ground cover, not a meadow. */
 const PLAZA_GRASS_SHARE = [0.035, 0.012, 0.01, 0.006];
@@ -314,6 +380,9 @@ const buildField = (
     },
     side: DoubleSide,
     fog: true,
+    // The custom vertex shader assigns vFogWorldPosition directly, so tell the patched
+    // fog_vertex chunk not to rebuild it from `transformed` (which this shader lacks).
+    defines: { FOG_WORLDPOS_MANUAL: '' },
   });
 
   const rng = mulberry32(20260709);
@@ -352,11 +421,14 @@ const buildField = (
       if (rng() > 0.07 + meadow * 0.96) continue;
 
       const s = variant.scale[0] + rng() * (variant.scale[1] - variant.scale[0]);
-      // Lush patches also grow TALLER — height follows concentration.
+      // Height comes from three decoupled sources so the silhouette varies richly:
+      // a coherent large-scale height field (tall drifts vs cropped hollows), the local
+      // meadow concentration (lush = a bit taller), and per-tuft randomness.
+      const hfield = heightField(x + vi * 12.7, z - vi * 8.3);
       const sy =
         s *
         (variant.yScale[0] + rng() * (variant.yScale[1] - variant.yScale[0])) *
-        (0.78 + meadow * 0.5);
+        (0.6 + hfield * 0.75 + meadow * 0.28);
       dummy.position.set(x, heightAt(x, z) - 0.02, z);
       dummy.rotation.set((rng() - 0.5) * 0.22, rng() * Math.PI * 2, (rng() - 0.5) * 0.22);
       dummy.scale.set(s * (0.72 + rng() * 0.56), sy, s * (0.72 + rng() * 0.56));

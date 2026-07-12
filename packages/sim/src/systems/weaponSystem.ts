@@ -88,26 +88,38 @@ export const fireRanged = (
   player: Entity,
   now: number,
   aimAt?: [number, number],
-): void => {
-  if (now < (player.rangedReadyAt ?? 0)) return;
+): boolean => {
+  if (now < (player.rangedReadyAt ?? 0)) return false;
   const t = player.transform;
-  if (!t) return;
+  if (!t) return false;
   if (aimAt) faceToward(player, aimAt);
-  player.rangedReadyAt = now + RANGED_COOLDOWN_MS;
+  const buff = player.relicBuff;
+  player.rangedReadyAt = now + RANGED_COOLDOWN_MS / (buff?.attackRateMult ?? 1);
 
-  const dirX = Math.sin(t.rotationY);
-  const dirZ = Math.cos(t.rotationY);
-  world.add({
-    transform: {
-      position: [t.position[0] + dirX, t.position[1] + 1, t.position[2] + dirZ],
-      rotationY: t.rotationY,
-    },
-    velocity: { linear: [dirX * PROJECTILE_SPEED, 0, dirZ * PROJECTILE_SPEED] },
-    projectile: true,
-    faction: 'player',
-    damage: computeDamage(RANGED_DAMAGE),
-    spawnedAt: now,
-  });
+  const count = buff?.projectileCount ?? 1;
+  const spreadRad = (6 * Math.PI) / 180;
+  for (let i = 0; i < count; i += 1) {
+    const yaw = t.rotationY + (i - (count - 1) / 2) * spreadRad;
+    const dirX = Math.sin(yaw);
+    const dirZ = Math.cos(yaw);
+    world.add({
+      transform: {
+        position: [t.position[0] + dirX, t.position[1] + 1, t.position[2] + dirZ],
+        rotationY: yaw,
+      },
+      velocity: { linear: [dirX * PROJECTILE_SPEED, 0, dirZ * PROJECTILE_SPEED] },
+      projectile: true,
+      projectileOwner: player,
+      projectilePierce: buff?.pierce ?? false,
+      projectileHitSet: new Set<Entity>(),
+      projectileKnockback: buff?.knockback,
+      projectileLifestealPct: buff?.lifestealPct ?? 0,
+      faction: 'player',
+      damage: computeDamage(RANGED_DAMAGE * (buff?.damageMult ?? 1)),
+      spawnedAt: now,
+    });
+  }
+  return true;
 };
 
 /**
@@ -172,6 +184,11 @@ export const weaponSystem = (
 
   for (const player of world.with('attackState', 'transform', 'playerControlled')) {
     const atk = player.attackState;
+    // Some combat interrupts clear the component value before Miniplex updates its query.
+    if (!atk) {
+      expired.push(player);
+      continue;
+    }
     if (atk.kind !== 'melee') continue;
     // A dodge cancels the swing — kill the hitbox immediately (rooting/anim were already
     // cleared by applyPlayerIntent when the dash started).

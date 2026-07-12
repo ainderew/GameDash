@@ -1,12 +1,13 @@
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatedCharacter } from '@/game/entities/AnimatedCharacter';
 import type { CharState } from '@/game/entities/AnimatedCharacter';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
 import { feel } from '@/game/feel/config';
 import { resumeAudio, syncAudioSettings } from '@/game/feel/audio';
 import { beginIntroAudio, preloadIntroImages } from '@/ui/intro/introAudio';
-import { startMenuMusic, stopMenuMusic, syncMenuMusic } from '@/ui/menuMusic';
+import { startMenuMusic, stopMenuMusic, syncMenuMusic, whenMenuMusicReady } from '@/ui/menuMusic';
+import { MenuLoadingScreen } from '@/ui/MenuLoadingScreen';
 import { INTRO_SCENES } from '@/ui/intro/introScenes';
 import { useSession } from '@/net/useSession';
 import { useUIStore } from '@/ui/store';
@@ -20,10 +21,16 @@ const BORED_MS = 5200;
  * alive on its idle clip and drifting into the bored fidget on a timer. Same
  * AnimatedCharacter as gameplay — one rig pipeline everywhere.
  */
-const MenuHero = () => {
+const MenuHero = ({ onReady }: { onReady?: () => void }) => {
   const characterId = useUIStore((s) => s.playerCharacter);
   const charState = useRef<CharState>('idle');
   const nextSwapAt = useRef(performance.now() + IDLE_MS);
+
+  // This effect only commits once the Suspense boundary resolves — i.e. every hero glb
+  // (mesh + all clips) has loaded and decoded. That's our "hero is ready" signal.
+  useEffect(() => {
+    onReady?.();
+  }, [onReady]);
 
   useFrame(() => {
     if (performance.now() < nextSwapAt.current) return;
@@ -43,6 +50,7 @@ const MenuHero = () => {
         walkPath="/models/hero/anim-walk.glb"
         runPath="/models/hero/anim-run.glb"
         jumpPath="/models/hero/anim-jump.glb"
+        jump2Path="/models/hero/anim-double-jump.glb"
         dodgePath="/models/hero/anim-roll.glb"
         hurtPath="/models/hero/anim-hurt.glb"
         deathPath="/models/hero/anim-death.glb"
@@ -99,6 +107,33 @@ export const MainMenu = () => {
   const [audioOn, setAudioOn] = useState(feel.audio.enabled);
   const [volume, setVolume] = useState(feel.audio.masterVolume);
   const [quitHint, setQuitHint] = useState(false);
+
+  // ── Initial-load gate: hold a splash over the menu until the backdrop, the harp theme,
+  //    and the hero model have all loaded, so the menu never assembles itself on screen. ──
+  const [bgReady, setBgReady] = useState(false);
+  const [musicReady, setMusicReady] = useState(false);
+  const [heroReady, setHeroReady] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false); // true once the splash has faded away
+  const markHeroReady = useCallback(() => setHeroReady(true), []);
+  const bgImgRef = useRef<HTMLImageElement>(null);
+  const assetsReady = bgReady && musicReady && heroReady;
+  const loadProgress = (Number(bgReady) + Number(musicReady) + Number(heroReady)) / 3;
+
+  useEffect(() => {
+    let alive = true;
+    whenMenuMusicReady().then(() => {
+      if (alive) setMusicReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // A cached backdrop can finish loading before React attaches onLoad, so its event never
+  // fires — cover that by checking `complete` once on mount.
+  useEffect(() => {
+    if (bgImgRef.current?.complete) setBgReady(true);
+  }, []);
 
   // ── Multiplayer: Play Together (Phase 6 Task 1) ────────────────────────────
   const { session, connectionState, netError, createSession, joinSession, leaveSession } =
@@ -193,8 +228,11 @@ export const MainMenu = () => {
     <div className="absolute inset-0 overflow-hidden bg-black">
       {/* Blurred key art backdrop, oversized so the blur never reveals edges. */}
       <img
-        src="/menu/keyart.png"
+        ref={bgImgRef}
+        src="/menu/keyart.webp"
         alt=""
+        onLoad={() => setBgReady(true)}
+        onError={() => setBgReady(true)} // never wedge the gate on a backdrop that fails to load
         className="absolute inset-0 h-full w-full scale-110 object-cover blur-lg brightness-[0.55] saturate-[1.1]"
       />
       {/* Readability gradients: darker left column for the menu, vignette at the base. */}
@@ -212,7 +250,7 @@ export const MainMenu = () => {
           <directionalLight position={[2.5, 3, 4]} intensity={2.2} color="#fff2dd" />
           <directionalLight position={[-3, 2, -2]} intensity={1.1} color="#7dd8ff" />
           <Suspense fallback={null}>
-            <MenuHero />
+            <MenuHero onReady={markHeroReady} />
           </Suspense>
         </Canvas>
       </div>
@@ -440,6 +478,15 @@ export const MainMenu = () => {
         <span>Pre-alpha · In development</span>
         <span>Relic Relay</span>
       </div>
+
+      {/* Loading splash: covers the assembling menu until every heavy asset is in. */}
+      {!gateOpen && (
+        <MenuLoadingScreen
+          progress={loadProgress}
+          ready={assetsReady}
+          onDismiss={() => setGateOpen(true)}
+        />
+      )}
     </div>
   );
 };

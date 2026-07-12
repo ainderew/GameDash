@@ -22,8 +22,51 @@ const FADE_MS = 800;
 let audio: HTMLAudioElement | null = null;
 let gestureUnbind: (() => void) | null = null;
 let fadeRaf: number | null = null;
+/** Resolves once the track has buffered enough to play through (drives the menu loader). */
+let readyPromise: Promise<void> | null = null;
 
 const canRaf = (): boolean => typeof requestAnimationFrame !== 'undefined';
+
+/** Create the shared audio element (idempotent). Kicks off buffering via preload='auto'. */
+const ensureAudio = (): HTMLAudioElement | null => {
+  if (typeof window === 'undefined' || typeof Audio === 'undefined') return null;
+  if (!audio) {
+    audio = new Audio(TRACK_URL);
+    audio.loop = true;
+    audio.preload = 'auto';
+  }
+  return audio;
+};
+
+/**
+ * Preload the menu track and resolve when it can play through — or after `timeoutMs`, so a
+ * browser that withholds `canplaythrough` (or a stalled network) never wedges the loader.
+ * The music is not visually critical: the loading screen waits on it, but only briefly.
+ */
+export const whenMenuMusicReady = (timeoutMs = 8000): Promise<void> => {
+  if (readyPromise) return readyPromise;
+  const el = ensureAudio();
+  if (!el) return Promise.resolve();
+  readyPromise = new Promise<void>((resolve) => {
+    if (el.readyState >= 4 /* HAVE_ENOUGH_DATA */) return resolve();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      el.removeEventListener('canplaythrough', finish);
+      el.removeEventListener('loadeddata', finish);
+      el.removeEventListener('error', finish);
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    el.addEventListener('canplaythrough', finish);
+    el.addEventListener('loadeddata', finish); // fallback if canplaythrough is withheld
+    el.addEventListener('error', finish); // don't block the menu on a missing/broken file
+    el.load();
+  });
+  return readyPromise;
+};
 
 /** The volume the loop should currently sit at: 0 when audio is off, else bed × master. */
 const targetVolume = (): number =>
@@ -89,12 +132,7 @@ const unbindGesture = (): void => {
 
 /** Start (or resume) the menu loop, fading it in. Safe to call repeatedly. */
 export const startMenuMusic = (): void => {
-  if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
-  if (!audio) {
-    audio = new Audio(TRACK_URL);
-    audio.loop = true;
-    audio.preload = 'auto';
-  }
+  if (!ensureAudio() || !audio) return;
   clearFade();
   audio.volume = 0;
   void audio

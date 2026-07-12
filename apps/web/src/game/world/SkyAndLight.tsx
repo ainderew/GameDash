@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { BackSide, Color, ShaderMaterial, Vector3 } from 'three';
+import { installAtmosphericFog } from '@/game/world/atmosphericFog';
 
 /** Golden-hour sun shared by the sky, foliage shaders, and shadow light. */
 export const SUN_POSITION: [number, number, number] = [-30, 11, -56];
@@ -14,6 +15,11 @@ export const WORLD_PALETTE = {
   sun: '#ddd4ff',
   fog: '#3b3957',
 };
+
+// Upgrade the global fog chunks to height fog + sun-tinted inscattering. Runs at module
+// eval (before any material compiles) so every fog-enabled surface picks it up. Baked to
+// the same sun the lighting uses and the sky's own sunset colour, so fog and dome agree.
+installAtmosphericFog(SUN_POSITION, WORLD_PALETTE.sunset);
 
 const skyVertex = /* glsl */ `
   varying vec3 vDir;

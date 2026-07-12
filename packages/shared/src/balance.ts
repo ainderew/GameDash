@@ -146,12 +146,132 @@ export const REVIVE_RANGE = 2.2;
 export const REVIVE_HP_FRACTION = 0.5;
 /** Materials granted per collected pickup — a SHARED POOL: every member's tally rises. */
 export const MATERIAL_PER_PICKUP = 1;
+/** Expedition points awarded to the player who lands an enemy's killing blow. */
+export const SCORE_PER_ENEMY_KILL = 100;
 
 // ── Relic (RELIC RELAY core object) ───────────────────────────────────────
 /** Carried Relic float anchor: behind and above the LEFT shoulder (local to facing). */
 export const RELIC_CARRY_OFFSET: readonly [number, number, number] = [-0.85, 1.7, -0.35];
 /** Aim-mode anchor: forward into the left edge of frame, steadier and readable. */
 export const RELIC_AIM_OFFSET: readonly [number, number, number] = [-0.55, 1.45, 0.6];
+export type RelicKnockbackLevel = 'none' | 'light' | 'medium' | 'strong';
+
+export interface RelicTierDefinition {
+  readonly name: 'Dormant' | 'Stirring' | 'Charged' | 'Volatile' | 'Overload';
+  readonly minCorruption: number;
+  readonly maxCorruption: number;
+  readonly damageMult: number;
+  readonly projectileCount: number;
+  readonly attackRateMult: number;
+  readonly pierce: boolean;
+  readonly knockback: RelicKnockbackLevel;
+  readonly lifestealPct: number;
+  readonly moveSpeedMult: number;
+  readonly dripMult: number;
+  readonly extraCorruptionPerAttack: number;
+}
+
+/**
+ * Designer-owned Relic Relay tuning. This is the TypeScript equivalent of an inspector data
+ * asset: simulation code reads this object and contains no duplicated gameplay constants.
+ */
+export const RELIC_CORRUPTION_TUNING = {
+  max: 100,
+  baseDripPerSecond: 5,
+  abilityCorruptionCost: 8,
+  catchResetValue: 0,
+  bossDistance: 7,
+  volatileDischarge: {
+    /** First active tier is Volatile (zero-based tier index 3). */
+    minTierIndex: 3,
+    radius: 4.25,
+    damage: 12,
+    intervalMs: 1400,
+    /** Deterministic timing varies by this fraction in either direction. */
+    intervalJitter: 0.25,
+    overloadIntervalMult: 0.65,
+    overloadDamageMult: 1.35,
+    knockbackScale: 1.1,
+  },
+  tiers: [
+    {
+      name: 'Dormant',
+      minCorruption: 0,
+      maxCorruption: 20,
+      damageMult: 1,
+      projectileCount: 1,
+      attackRateMult: 1,
+      pierce: false,
+      knockback: 'none',
+      lifestealPct: 0,
+      moveSpeedMult: 1,
+      dripMult: 1,
+      extraCorruptionPerAttack: 0,
+    },
+    {
+      name: 'Stirring',
+      minCorruption: 20,
+      maxCorruption: 45,
+      damageMult: 1.3,
+      projectileCount: 1,
+      attackRateMult: 1.25,
+      pierce: false,
+      knockback: 'none',
+      lifestealPct: 0,
+      moveSpeedMult: 1,
+      dripMult: 1,
+      extraCorruptionPerAttack: 0,
+    },
+    {
+      name: 'Charged',
+      minCorruption: 45,
+      maxCorruption: 70,
+      damageMult: 1.5,
+      projectileCount: 2,
+      attackRateMult: 1.25,
+      pierce: false,
+      knockback: 'light',
+      lifestealPct: 0.15,
+      moveSpeedMult: 1,
+      dripMult: 1.25,
+      extraCorruptionPerAttack: 0,
+    },
+    {
+      name: 'Volatile',
+      minCorruption: 70,
+      maxCorruption: 90,
+      damageMult: 1.8,
+      projectileCount: 2,
+      attackRateMult: 1.4,
+      pierce: true,
+      knockback: 'medium',
+      lifestealPct: 0.15,
+      moveSpeedMult: 1.2,
+      dripMult: 2,
+      extraCorruptionPerAttack: 0,
+    },
+    {
+      name: 'Overload',
+      minCorruption: 90,
+      maxCorruption: 100,
+      damageMult: 2.4,
+      projectileCount: 3,
+      attackRateMult: 1.5,
+      pierce: true,
+      knockback: 'strong',
+      lifestealPct: 0.2,
+      moveSpeedMult: 1.2,
+      dripMult: 2,
+      extraCorruptionPerAttack: 6,
+    },
+  ] satisfies readonly RelicTierDefinition[],
+} as const;
+
+/** Backward-compatible presentation thresholds, now sourced from the tier data. */
+export const RELIC_CORRUPTION_WARNING = 0.7;
+export const RELIC_CORRUPTION_CRITICAL = 0.9;
+/** Spawn distance from the carrier so the eruption boss reads clearly without overlapping them. */
+export const RELIC_CORRUPTION_BOSS_DISTANCE = RELIC_CORRUPTION_TUNING.bossDistance;
 /** Ground speed of a thrown Relic along its arc, world units/sec. */
 export const RELIC_THROW_SPEED = 14;
 /** Maximum throw distance, world units (aim past this and the throw clamps). */
@@ -161,11 +281,11 @@ export const RELIC_THROW_MIN = 2;
 /** Floor on flight time so short lobs still read as an arc, ms. */
 export const RELIC_FLIGHT_MIN_MS = 280;
 /** XZ radius within which a player catches the Relic (in flight or grounded). */
-export const RELIC_CATCH_RADIUS = 1.3;
+export const RELIC_CATCH_RADIUS = 2;
 /** Max vertical separation for a catch — you can't catch it at the top of its arc. */
 export const RELIC_CATCH_HEIGHT = 2.2;
 /** After a throw, nobody can catch it for this long (stops instant self-recatch), ms. */
-export const RELIC_RECATCH_DELAY_MS = 300;
+export const RELIC_RECATCH_DELAY_MS = 3000;
 /** How high the grounded Relic hovers above the terrain, world units. */
 export const RELIC_GROUND_HOVER = 0.6;
 /** Radius of the defensive shockwave a successful catch releases, world units. */
@@ -177,19 +297,19 @@ export const RELIC_SHOCKWAVE_KNOCKBACK = 7;
 
 // ── Relic passing (soft auto-aim + deterministic Bézier flight) ───────────
 /** Max pass distance, world units. */
-export const RELIC_PASS_RANGE = 15;
+export const RELIC_PASS_RANGE = 20;
 /** Half-angle of the aimed-pass selection cone around camera forward, degrees. */
-export const RELIC_PASS_CONE_DEG = 35;
+export const RELIC_PASS_CONE_DEG = 60;
 /** Quick pass (tap) requires stronger intent — a narrower cone. */
 export const RELIC_QUICK_CONE_DEG = 27;
 /** Selected target is only dropped once it leaves this wider cone (hysteresis). */
-export const RELIC_RELEASE_CONE_DEG = 48;
+export const RELIC_RELEASE_CONE_DEG = 72;
 /** Another candidate must beat the selected target's score by this much to steal lock. */
 export const RELIC_SWITCH_MARGIN = 0.15;
 /** Holding E longer than this enters aim mode; releasing earlier is a quick pass, ms. */
 export const RELIC_QUICK_TAP_MS = 160;
 /** After passing, that player can't receive again for this long (forces rotation), ms. */
-export const RELIC_PASS_RECATCH_MS = 2500;
+export const RELIC_PASS_RECATCH_MS = RELIC_RECATCH_DELAY_MS;
 /** How far ahead of the receiver's velocity the throw leads them, seconds. */
 export const RELIC_LEAD_S = 0.15;
 /** Flight duration = clamp(distance / this, min, max) — seconds and world units/sec. */
@@ -201,6 +321,8 @@ export const RELIC_PASS_ARC_MIN = 0.6;
 export const RELIC_PASS_ARC_MAX = 2.2;
 /** Homing begins in the last portion of flight (fraction of t). */
 export const RELIC_HOMING_START_T = 0.62;
+/** Endpoint steering rate, 1/s (exponential smoothing). */
+export const RELIC_HOMING_RATE = 10;
 /** Max endpoint correction while homing; beyond this the pass fails into a drop. */
 export const RELIC_HOMING_MAX_CORRECTION = 3;
 /** One-hit handoff shield granted to the receiver on catch, ms. */

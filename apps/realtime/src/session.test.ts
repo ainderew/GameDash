@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerMessage } from '@shared/net/messages';
-import { MS_PER_TICK, POSITION_HISTORY_TICKS, SESSION_GC_GRACE_MS } from '@shared/net/constants';
+import {
+  ANIM_FLAG_HURT,
+  ANIM_FLAG_RELIC_CATCH,
+  ANIM_FLAG_RELIC_THROW,
+  MS_PER_TICK,
+  POSITION_HISTORY_TICKS,
+  SESSION_GC_GRACE_MS,
+} from '@shared/net/constants';
 import { decodeSnapshot } from '@shared/net/snapshot';
 import { makeInputCmd } from '@shared/net/input';
 import { createMonster } from '@sim/systems/spawnSystem';
-import { SessionManager, type PeerLink, type PlayerProfile } from './session';
+import { playerAnimFlagsFor, SessionManager, type PeerLink, type PlayerProfile } from './session';
 import { silentLogger } from './log';
 
 class FakeLink implements PeerLink {
@@ -31,6 +38,23 @@ const makeManager = () => {
 };
 
 describe('SessionManager', () => {
+  it('replicates hurt, Relic catch, and Relic throw presentation windows', () => {
+    const player = {
+      transform: { position: [0, 0, 0] as [number, number, number], rotationY: 0 },
+      velocity: { linear: [0, 0, 0] as [number, number, number] },
+      hitReactionAt: 500,
+      catchRootUntil: 1_400,
+    };
+    const relic = {
+      relic: { phase: 'inFlight' as const, corruption: 0, thrower: player, startedAt: 900 },
+    };
+
+    const flags = playerAnimFlagsFor(player, 1_000, relic);
+    expect(flags & ANIM_FLAG_HURT).not.toBe(0);
+    expect(flags & ANIM_FLAG_RELIC_CATCH).not.toBe(0);
+    expect(flags & ANIM_FLAG_RELIC_THROW).not.toBe(0);
+  });
+
   it('creates a session with a well-formed 6-char code and the creator attached', () => {
     const { manager } = makeManager();
     const link = new FakeLink();
@@ -288,6 +312,17 @@ describe('Session authoritative combat (Phase 4)', () => {
     const despawn = aLink.ofType('monsterDespawned');
     expect(despawn.length).toBe(1);
     expect(despawn[0]!).toMatchObject({ id: monster.id, reason: 'killed' });
+
+    // Killing blow awards authoritative score once and broadcasts identical standings.
+    const scoreA = aLink.ofType('scoreUpdated');
+    const scoreB = bLink.ofType('scoreUpdated');
+    expect(scoreA).toHaveLength(1);
+    expect(scoreB).toEqual(scoreA);
+    expect(scoreA[0]).toMatchObject({ scorerId: ana.id, points: 100 });
+    expect(scoreA[0]!.standings.find((entry) => entry.playerId === ana.id)).toMatchObject({
+      score: 100,
+      kills: 1,
+    });
   });
 
   it('SHARED-POOL loot: a collected pickup tallies to EVERY member from server events', () => {
@@ -323,6 +358,10 @@ describe('Session authoritative combat (Phase 4)', () => {
     player.entity.downed = true;
     session.step(dt);
     expect(link.ofType('huntFailed')).toHaveLength(1);
+    expect(link.ofType('huntFailed')[0]).toMatchObject({
+      mvpPlayerId: player.id,
+      standings: [{ playerId: player.id, name: 'Ana', score: 0, kills: 0 }],
+    });
     expect(session.zone).toBe('hub');
     // Returning to the hub full-heals + clears downed (the party respawns at the campfire).
     expect(player.entity.downed).toBe(false);

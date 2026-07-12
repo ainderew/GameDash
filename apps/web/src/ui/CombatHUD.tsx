@@ -17,6 +17,8 @@ export const CombatHUD = () => {
   const huntFailed = useUIStore((s) => s.huntFailed);
   const comboCount = useUIStore((s) => s.comboCount);
   const comboBumpId = useUIStore((s) => s.comboBumpId);
+  const session = useUIStore((s) => s.session);
+  const runScores = useUIStore((s) => s.runScores);
   const pct = Math.max(0, Math.min(100, (health / maxHealth) * 100));
 
   // Return to the hub after a failed hunt. Networked: ask the server to flip the whole party
@@ -88,6 +90,26 @@ export const CombatHUD = () => {
           <span className="text-emerald-300">◆</span> Materials{' '}
           <span className="font-bold tabular-nums">{materials}</span>
         </div>
+        {session && runScores.length > 0 && (
+          <div className="mt-1 w-56 rounded-lg border border-amber-200/15 bg-black/55 px-3 py-2 shadow-lg backdrop-blur-sm">
+            <div className="mb-1.5 flex items-center justify-between text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-white/45">
+              <span>Expedition score</span>
+              <span className="text-amber-300">100 / elim</span>
+            </div>
+            <ol className="space-y-1">
+              {runScores.map((entry, index) => (
+                <li key={entry.playerId} className="flex items-center gap-2 text-xs">
+                  <span className="w-4 font-mono text-white/35">{index + 1}</span>
+                  <span className={`min-w-0 flex-1 truncate ${entry.playerId === session.playerId ? 'font-bold text-teal-200' : 'text-white/75'}`}>
+                    {entry.name}
+                  </span>
+                  <span className="font-mono text-white/40">{entry.kills}×</span>
+                  <span className="w-12 text-right font-mono font-bold tabular-nums text-amber-200">{entry.score}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
       </div>
 
       {/* Controls hint */}

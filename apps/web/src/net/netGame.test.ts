@@ -59,4 +59,30 @@ describe('netGame input-seq epoch (movement-lock regression)', () => {
     netGame.resetEpoch();
     expect(netGame.tickTimeMs).toBe(0);
   });
+
+  it('rebinds prediction when the rendered local-player entity is remounted', () => {
+    const first = makeLocalPlayer();
+    const second = makeLocalPlayer();
+    const noop = (): void => {};
+
+    netGame.resetEpoch();
+    netGame.start(first.world, new EventQueue(), first.entity, noop);
+    netGame.clientTick(MOVE);
+    const seqBeforeRemount = netGame.tickTimeMs;
+    expect(netGame.drives(first.entity)).toBe(true);
+    expect(netGame.drives(second.entity)).toBe(false);
+
+    // Mirrors a Suspense-driven <Player> remount: SystemRunner sees a different local entity
+    // while netGame is still active and must replace the stale prediction engine.
+    netGame.start(second.world, new EventQueue(), second.entity, noop);
+    expect(netGame.drives(first.entity)).toBe(false);
+    expect(netGame.drives(second.entity)).toBe(true);
+
+    const before = [...second.entity.transform!.position];
+    netGame.clientTick(MOVE);
+    expect(second.entity.transform!.position).not.toEqual(before);
+    expect(netGame.tickTimeMs).toBeGreaterThan(seqBeforeRemount); // same server input epoch
+
+    netGame.resetEpoch();
+  });
 });

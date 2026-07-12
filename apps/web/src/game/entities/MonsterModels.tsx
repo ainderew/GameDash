@@ -1,16 +1,9 @@
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
-import {
-  Box3,
-  DynamicDrawUsage,
-  InstancedBufferAttribute,
-  Object3D,
-  Vector3,
-} from 'three';
-import type { BufferGeometry, InstancedMesh, Material, Mesh } from 'three';
+import { Box3, Color, DynamicDrawUsage, InstancedBufferAttribute, Object3D, Vector3 } from 'three';
+import type { BufferGeometry, InstancedMesh, Material, Mesh, MeshStandardMaterial } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { monsters } from '@/game/ecs/world';
-import type { Entity } from '@sim/components';
 import { useGameModel } from '@/lib/loaders';
 import { MutantMonsters } from '@/game/entities/MutantModels';
 import { hitSquash } from '@/game/entities/hitSquash';
@@ -32,6 +25,7 @@ interface ArchMeta {
 const ARCHES: Partial<Record<MonsterArchetype, ArchMeta>> = {
   spitter: { path: '/models/monster-spitter.glb', height: 1.3, faceOffset: -Math.PI / 2 },
   brute: { path: '/models/monster-brute.glb', height: 2.7, faceOffset: -Math.PI / 2 },
+  relicBoss: { path: '/models/monster-brute.glb', height: 4.2, faceOffset: -Math.PI / 2 },
 };
 
 const dummy = new Object3D();
@@ -64,7 +58,6 @@ const attackPose = (elapsedMs: number, windupMs: number): [number, number, numbe
   return [1 - k, 1.12 - 0.12 * k, 0.92 + 0.08 * k];
 };
 
-
 /** Bake a GLB scene into a single unit-height geometry (feet at y=0, centered in XZ). */
 const bake = (scene: Object3D): { geometry: BufferGeometry; material: Material } => {
   scene.updateWorldMatrix(true, true);
@@ -86,9 +79,7 @@ const bake = (scene: Object3D): { geometry: BufferGeometry; material: Material }
       geometry = geoms[0]!;
     }
   }
-  const box = new Box3().setFromBufferAttribute(
-    geometry.getAttribute('position') as never,
-  );
+  const box = new Box3().setFromBufferAttribute(geometry.getAttribute('position') as never);
   const size = box.getSize(new Vector3());
   geometry.translate(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
   const h = size.y || 1;
@@ -115,8 +106,14 @@ const withFlash = (geometry: BufferGeometry, src: Material): Material => {
     shader.fragmentShader =
       'varying vec3 vFlash;\n' +
       shader.fragmentShader
-        .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n  gl_FragColor.rgb += vFlash;')
-        .replace('#include <output_fragment>', '#include <output_fragment>\n  gl_FragColor.rgb += vFlash;');
+        .replace(
+          '#include <opaque_fragment>',
+          '#include <opaque_fragment>\n  gl_FragColor.rgb += vFlash;',
+        )
+        .replace(
+          '#include <output_fragment>',
+          '#include <output_fragment>\n  gl_FragColor.rgb += vFlash;',
+        );
   };
   (material as Material & { customProgramCacheKey: () => string }).customProgramCacheKey = () =>
     'monster-flash-v1';
@@ -132,8 +129,17 @@ const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
   const ref = useRef<InstancedMesh>(null);
   const { geometry, material } = useMemo(() => {
     const baked = bake(scene.clone(true));
-    return { geometry: baked.geometry, material: withFlash(baked.geometry, baked.material) };
-  }, [scene]);
+    const rendered = withFlash(baked.geometry, baked.material);
+    if (archetype === 'relicBoss') {
+      const bossMaterial = rendered as MeshStandardMaterial;
+      if (bossMaterial.color) bossMaterial.color.lerp(new Color('#7e185f'), 0.42);
+      if (bossMaterial.emissive) {
+        bossMaterial.emissive.set('#9d174d');
+        bossMaterial.emissiveIntensity = 0.7;
+      }
+    }
+    return { geometry: baked.geometry, material: rendered };
+  }, [archetype, scene]);
 
   useFrame(() => {
     const mesh = ref.current;
@@ -160,11 +166,7 @@ const ArchetypeInstances = ({ archetype }: { archetype: MonsterArchetype }) => {
         z + Math.cos(m.transform.rotationY) * lunge,
       );
       dummy.rotation.set(0, m.transform.rotationY + meta.faceOffset, 0);
-      dummy.scale.set(
-        meta.height * sxz * hsXZ,
-        meta.height * sy * hsY,
-        meta.height * sxz * hsXZ,
-      );
+      dummy.scale.set(meta.height * sxz * hsXZ, meta.height * sy * hsY, meta.height * sxz * hsXZ);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
 
@@ -206,5 +208,6 @@ export const MonsterModels = () => (
     <MutantMonsters />
     <ArchetypeInstances archetype="spitter" />
     <ArchetypeInstances archetype="brute" />
+    <ArchetypeInstances archetype="relicBoss" />
   </>
 );

@@ -130,6 +130,11 @@ export class PredictionEngine {
     this.authority = opts.authority ?? 'local';
   }
 
+  /** Whether this engine is predicting the given locally rendered entity instance. */
+  drives(entity: Entity): boolean {
+    return this.entity === entity;
+  }
+
   /** Predict one fixed tick: run stepSim with this cmd's intent and capture the result. */
   predict(seq: number, intent: PlayerIntent, tickTimeMs: number): void {
     this.applyImpulsesFor(seq, tickTimeMs);

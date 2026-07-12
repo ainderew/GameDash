@@ -2,24 +2,28 @@ import { Html } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import {
+  AdditiveBlending,
   Box3,
   CanvasTexture,
   CircleGeometry,
   Color,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   SRGBColorSpace,
+  SpriteMaterial,
   Vector3,
 } from 'three';
-import type { Group, Mesh, Object3D as Object3DType } from 'three';
+import type { BufferGeometry, Group, Mesh, Object3D as Object3DType, PointLight, Sprite } from 'three';
 import { players } from '@/game/ecs/world';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
 import { useGameModel } from '@/lib/loaders';
 import { useUIStore } from '@/ui/store';
-import { HUB_SPAWN, nearestHubStation, type HubStationId } from '@/game/world/hubLayout';
+import { HUB_LANDMARK_POSITIONS, HUB_SPAWN, nearestHubStation, type HubStationId } from '@/game/world/hubLayout';
 import { Terrain } from '@/game/world/Terrain';
 import { GrassField } from '@/game/world/GrassField';
 import { Trees } from '@/game/world/Trees';
 import { Scatter } from '@/game/world/Scatter';
+import { HUB_SCATTER_CLEAR } from '@sim/terrain/hubObstacles';
 import { SpireBackdrop } from '@/game/world/SpireBackdrop';
 import { SummoningShrineRelic } from '@/game/world/SummoningShrineRelic';
 import { ExpeditionPortalVFX } from '@/game/world/ExpeditionPortalVFX';
@@ -34,30 +38,179 @@ const MODEL_PATHS = {
   shrine: '/models/hub/summoning-shrine.glb',
   gate: '/models/hub/expedition-gate.glb',
   curvedLamp: '/models/hub/lamp_1.glb',
-  straightLamp: '/models/hub/lantern-straight.glb',
+  straightLamp: '/models/hub/lamp_2.glb',
   campfire: '/models/hub/campfire.glb',
+  bench: '/models/hub/bench.glb',
+  banner: '/models/hub/banner.glb',
 } as const;
+
+const createLanternHaloTexture = () => {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d')!;
+  const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.12, 'rgba(255,255,255,0.9)');
+  gradient.addColorStop(0.38, 'rgba(255,255,255,0.34)');
+  gradient.addColorStop(0.72, 'rgba(255,255,255,0.08)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, size, size);
+  return new CanvasTexture(canvas);
+};
+
+/** A visible HDR flame/core plus a soft additive halo and localized inverse-square light. */
+const VioletLanternGlow = ({
+  position,
+  size = 1,
+  intensity = 3.5,
+  phase = 0,
+}: {
+  position: [number, number, number];
+  size?: number;
+  intensity?: number;
+  phase?: number;
+}) => {
+  const light = useRef<PointLight>(null);
+  const halo = useRef<Sprite>(null);
+  const { haloTexture, haloMaterial, coreMaterial } = useMemo(() => {
+    const haloTexture = createLanternHaloTexture();
+    const haloMaterial = new SpriteMaterial({
+      map: haloTexture,
+      color: new Color('#a84dff').multiplyScalar(2.35),
+      transparent: true,
+      opacity: 0.58,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const coreMaterial = new MeshBasicMaterial({
+      color: new Color('#d9a0ff').multiplyScalar(4.2),
+      toneMapped: false,
+    });
+    return { haloTexture, haloMaterial, coreMaterial };
+  }, []);
+
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime + phase;
+    const flicker = 0.96 + Math.sin(t * 7.1) * 0.025 + Math.sin(t * 13.7 + 1.3) * 0.014;
+    if (light.current) light.current.intensity = intensity * flicker;
+    if (halo.current) halo.current.scale.set(size * flicker, size * flicker, 1);
+    haloMaterial.opacity = 0.54 + Math.sin(t * 5.3) * 0.035;
+  });
+
+  useEffect(
+    () => () => {
+      haloTexture.dispose();
+      haloMaterial.dispose();
+      coreMaterial.dispose();
+    },
+    [coreMaterial, haloMaterial, haloTexture],
+  );
+
+  return (
+    <group position={position}>
+      <sprite ref={halo} material={haloMaterial} scale={[size, size, 1]} renderOrder={3} />
+      <mesh material={coreMaterial}>
+        <sphereGeometry args={[size * 0.055, 12, 8]} />
+      </mesh>
+      <pointLight ref={light} color="#a95cff" intensity={intensity} distance={size * 5.2} decay={2} />
+    </group>
+  );
+};
 
 interface HubModelProps {
   path: string;
   targetHeight?: number;
   targetWidth?: number;
+  /** Normalize by the model's longest horizontal axis; ideal for props whose authored
+   * long axis may be X or Z (benches, tables, fences). */
+  targetSpan?: number;
   position: [number, number, number];
   rotationY?: number;
   /** Corrects a model's authored front axis after applying gameplay-facing rotation. */
   faceOffset?: number;
+  /** Flow the mesh like wind-blown cloth (banners): top-anchored GPU vertex displacement. */
+  wind?: boolean;
 }
 
+/**
+ * Injects a cloth-wind displacement into a MeshStandardMaterial's vertex stage (keeps the
+ * banner's own texture/lighting). The cloth is pinned at the top edge and billows freest at
+ * the bottom; a slow two-tone gust envelope makes wind surge through "from time to time"
+ * over a steady breeze. Driven by `userData.shader.uniforms.uTime`, ticked in HubModel.
+ */
+const applyBannerWind = (material: MeshStandardMaterial, geometry: BufferGeometry) => {
+  geometry.computeBoundingBox();
+  const bb = geometry.boundingBox!;
+  const [minY, maxY, minZ, maxZ] = [bb.min.y, bb.max.y, bb.min.z, bb.max.z];
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = { value: 0 };
+    shader.uniforms.uMinY = { value: minY };
+    shader.uniforms.uMaxY = { value: maxY };
+    shader.uniforms.uMinZ = { value: minZ };
+    shader.uniforms.uMaxZ = { value: maxZ };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uTime;
+        uniform float uMinY;
+        uniform float uMaxY;
+        uniform float uMinZ;
+        uniform float uMaxZ;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        {
+          float hy = clamp((uMaxY - transformed.y) / max(uMaxY - uMinY, 1e-4), 0.0, 1.0); // 0 top → 1 bottom
+          float hz = clamp((transformed.z - uMinZ) / max(uMaxZ - uMinZ, 1e-4), 0.0, 1.0); // 0..1 across width
+          // The cloth is a membrane suspended inside a RIGID frame: a top bar (hy < ~0.16), a
+          // ground-planted base (hy > ~0.9) and two vertical side rails near the Z edges. Pin
+          // all four frame edges to zero displacement and only billow the interior membrane, so
+          // the pole/frame stays dead straight and planted while the cloth breathes.
+          float vert  = smoothstep(0.16, 0.34, hy) * (1.0 - smoothstep(0.80, 0.92, hy));
+          float horiz = smoothstep(0.14, 0.30, hz) * (1.0 - smoothstep(0.70, 0.86, hz));
+          float amp = vert * horiz;
+          // Two detuned oscillators: a steady breeze with occasional aligned surges (gusts).
+          float g = sin(uTime * 0.53) + sin(uTime * 0.27 + 2.1);
+          float gust = 0.55 + smoothstep(0.55, 1.85, g) * 1.7;
+          // Layered ripples travelling across the membrane.
+          float p = uTime * 2.4;
+          float wave = sin(p + transformed.z * 9.0 + transformed.y * 3.5) * 0.6
+                     + sin(p * 1.7 + transformed.z * 17.0 - transformed.y * 6.0) * 0.28
+                     + sin(p * 2.9 + hz * 22.0) * 0.14;
+          float disp = wave * amp * gust * 0.16;
+          transformed.x += disp;              // billow perpendicular to the cloth face
+          transformed.z += disp * 0.06;
+        }`,
+      );
+    material.userData.shader = shader;
+  };
+  // Distinct cache key so these share one compiled program without colliding with plain
+  // MeshStandardMaterials; per-material uniforms keep each banner independent.
+  material.customProgramCacheKey = () => 'banner-wind';
+  material.needsUpdate = true;
+};
+
 /** Normalizes arbitrary Tripo export scale/pivot while preserving the authored proportions. */
-const HubModel = ({ path, targetHeight, targetWidth, position, rotationY = 0, faceOffset = 0 }: HubModelProps) => {
+const HubModel = ({ path, targetHeight, targetWidth, targetSpan, position, rotationY = 0, faceOffset = 0, wind = false }: HubModelProps) => {
   const gltf = useGameModel(path);
-  const { object, scale, offset } = useMemo(() => {
+  const { object, scale, offset, windMaterials } = useMemo(() => {
     const clone = gltf.scene.clone(true);
     const box = new Box3().setFromObject(gltf.scene);
     const size = box.getSize(new Vector3());
     const center = box.getCenter(new Vector3());
-    const s = targetWidth ? targetWidth / Math.max(size.x, 0.001) : (targetHeight ?? 1) / Math.max(size.y, 0.001);
+    const s = targetSpan
+      ? targetSpan / Math.max(size.x, size.z, 0.001)
+      : targetWidth
+        ? targetWidth / Math.max(size.x, 0.001)
+        : (targetHeight ?? 1) / Math.max(size.y, 0.001);
 
+    const windMaterials: MeshStandardMaterial[] = [];
     clone.traverse((child) => {
       const mesh = child as Mesh;
       if (!mesh.isMesh) return;
@@ -71,6 +224,10 @@ const HubModel = ({ path, targetHeight, targetWidth, position, rotationY = 0, fa
           material.roughness = Math.max(0.55, material.roughness);
           material.envMapIntensity = 0.35;
         }
+        if (wind && material.isMeshStandardMaterial) {
+          applyBannerWind(material, mesh.geometry as BufferGeometry);
+          windMaterials.push(material);
+        }
         return material;
       });
       mesh.material = multipleMaterials ? clonedMaterials : clonedMaterials[0]!;
@@ -80,8 +237,20 @@ const HubModel = ({ path, targetHeight, targetWidth, position, rotationY = 0, fa
       object: clone,
       scale: s,
       offset: [-center.x * s, -box.min.y * s, -center.z * s] as [number, number, number],
+      windMaterials,
     };
-  }, [gltf.scene, targetHeight, targetWidth]);
+  }, [gltf.scene, targetHeight, targetSpan, targetWidth, wind]);
+
+  // Per-instance phase so multiple banners don't ripple in lockstep. Cheap, position is stable.
+  const windPhase = position[0] * 1.3 + position[2] * 0.7;
+  useFrame(({ clock }) => {
+    if (windMaterials.length === 0) return;
+    const t = clock.elapsedTime + windPhase;
+    for (const material of windMaterials) {
+      const shader = (material.userData as { shader?: { uniforms: { uTime: { value: number } } } }).shader;
+      if (shader) shader.uniforms.uTime.value = t;
+    }
+  });
 
   return (
     <group position={position} rotation={[0, rotationY + faceOffset, 0]}>
@@ -491,7 +660,55 @@ const CobblestoneCircle = ({ radius = 5.85 }: { radius?: number }) => {
  */
 const HavenPlaza = () => (
   <group>
-    <CobblestoneCircle radius={5.85} />
+    <CobblestoneCircle radius={6.35} />
+  </group>
+);
+
+/** Temporary modular crystal dressing; replace with authored cluster GLBs when ready. */
+const CrystalCluster = ({
+  position,
+  scale = 1,
+}: {
+  position: [number, number, number];
+  scale?: number;
+}) => (
+  <group position={position} scale={scale}>
+    <mesh castShadow receiveShadow position={[0, 0.12, 0]} scale={[1.45, 0.35, 1.05]}>
+      <dodecahedronGeometry args={[0.62, 0]} />
+      <meshStandardMaterial color="#303343" roughness={0.96} />
+    </mesh>
+    {([
+      [-0.36, 0.72, 0.04, 0.28, 1.25, -0.18],
+      [0.05, 1.0, 0, 0.38, 1.75, 0.08],
+      [0.42, 0.6, 0.12, 0.24, 0.95, 0.22],
+      [0.18, 0.48, -0.32, 0.2, 0.72, -0.1],
+    ] as const).map(([x, y, z, width, height, lean], index) => (
+      <mesh key={index} castShadow position={[x, y, z]} rotation={[lean, 0, lean * 0.45]} scale={[width, height, width]}>
+        <octahedronGeometry args={[0.72, 0]} />
+        <meshStandardMaterial
+          color={index === 1 ? '#8d65c8' : '#67469b'}
+          emissive="#56248c"
+          emissiveIntensity={0.36}
+          roughness={0.32}
+          metalness={0.08}
+        />
+      </mesh>
+    ))}
+    <pointLight position={[0, 0.85, 0]} color="#9a5cff" intensity={1.15} distance={3.4} decay={2} />
+  </group>
+);
+
+/** Purposeful mid-ground dressing based on the concept's gathering-place silhouette. */
+const HavenDressing = () => (
+  <group>
+    <HubModel path={MODEL_PATHS.bench} targetSpan={2.15} position={[-6.5, 0, 5.8]} rotationY={0.73} />
+    <HubModel path={MODEL_PATHS.bench} targetSpan={2.15} position={[6.5, 0, 5.8]} rotationY={Math.PI - 0.73} />
+    <HubModel path={MODEL_PATHS.banner} targetHeight={3.35} position={[-5.2, 0, -18.1]} rotationY={-Math.PI / 2} wind />
+    <HubModel path={MODEL_PATHS.banner} targetHeight={3.35} position={[5.2, 0, -18.1]} rotationY={-Math.PI / 2} wind />
+    <CrystalCluster position={[-19, 0, -13.5]} scale={1.05} />
+    <CrystalCluster position={[19, 0, -13.5]} scale={1.05} />
+    <CrystalCluster position={[-17.5, 0, 12]} scale={0.68} />
+    <CrystalCluster position={[17.5, 0, 12]} scale={0.68} />
   </group>
 );
 
@@ -567,6 +784,9 @@ const HubInteractions = () => {
 /** Heartwood Haven: a compact social hub built from the first production asset set. */
 export const SocialHub = ({ obstacles }: Props) => {
   const landmarks = useRef<Group>(null);
+  const [lodgeX, lodgeZ] = HUB_LANDMARK_POSITIONS.lodge;
+  const [shrineX, shrineZ] = HUB_LANDMARK_POSITIONS.shrine;
+  const [gateX, gateZ] = HUB_LANDMARK_POSITIONS.gate;
 
   useEffect(() => {
     const meshes: Mesh[] = [];
@@ -583,45 +803,46 @@ export const SocialHub = ({ obstacles }: Props) => {
   return (
     <>
       <Terrain />
-      <GrassField clearRadius={20.5} plazaFill />
-      <Scatter clearRadius={24} groundClearRadius={21} plazaFill />
-      <Trees clearRadius={21.5} />
+      <GrassField clearRadius={24.5} plazaFill />
+      <Scatter clearRadius={HUB_SCATTER_CLEAR.boulder} groundClearRadius={HUB_SCATTER_CLEAR.ground} plazaFill />
+      <Trees clearRadius={25.5} />
       <SpireBackdrop />
       <HavenPlaza />
+      <HavenDressing />
       <group ref={landmarks}>
-        <HubModel path={MODEL_PATHS.lodge} targetWidth={9.4} position={[-10.5, 0, -10.5]} rotationY={0} />
-        <HubModel path={MODEL_PATHS.shrine} targetHeight={3.35} position={[10.5, 0.08, -7.4]} rotationY={-0.35} />
+        <HubModel path={MODEL_PATHS.lodge} targetWidth={9.4} position={[lodgeX, 0, lodgeZ]} rotationY={Math.PI / 4} />
+        <HubModel path={MODEL_PATHS.shrine} targetHeight={3.65} position={[shrineX, 0.08, shrineZ]} rotationY={Math.PI - 0.25} />
         <HubModel
           path={MODEL_PATHS.gate}
-          targetHeight={4.5}
-          position={[0, 0.08, -17]}
-          rotationY={Math.PI}
+          targetHeight={5.65}
+          position={[gateX, 0.08, gateZ]}
+          rotationY={0}
           faceOffset={-Math.PI / 2}
         />
-        <HubModel path={MODEL_PATHS.curvedLamp} targetHeight={2.55} position={[-6.8, 0.04, 7]} rotationY={0.45} />
-        <HubModel path={MODEL_PATHS.straightLamp} targetHeight={3.05} position={[6.8, 0.04, 7]} rotationY={-0.45} />
-        <HubModel path={MODEL_PATHS.curvedLamp} targetHeight={2.3} position={[-14.8, 0.04, -1.5]} rotationY={0.9} />
-        <HubModel path={MODEL_PATHS.straightLamp} targetHeight={2.7} position={[14.8, 0.04, -1.5]} rotationY={-0.9} />
+        <HubModel path={MODEL_PATHS.curvedLamp} targetHeight={2.55} position={[-7.8, 0.04, 8]} rotationY={0.45} />
+        <HubModel path={MODEL_PATHS.straightLamp} targetHeight={3.05} position={[7.8, 0.04, 8]} rotationY={-0.45} />
+        <HubModel path={MODEL_PATHS.curvedLamp} targetHeight={2.3} position={[-18, 0.04, -1.5]} rotationY={0.9} />
+        <HubModel path={MODEL_PATHS.straightLamp} targetHeight={2.7} position={[18, 0.04, -1.5]} rotationY={-0.9} />
+        <HubModel path={MODEL_PATHS.curvedLamp} targetHeight={2.25} position={[-7.2, 0.04, -17.1]} rotationY={0.25} />
+        <HubModel path={MODEL_PATHS.curvedLamp} targetHeight={2.25} position={[7.2, 0.04, -17.1]} rotationY={-0.25} />
         <HubModel path={MODEL_PATHS.campfire} targetWidth={1.7} position={[0, 0.06, 0]} rotationY={0.6} />
       </group>
       <CampfireVFX />
 
-      <StationRing position={[0, 0.105, -17]} color="#8f63ff" radius={2.05} />
-      <ExpeditionPortalVFX position={[0, 2.02, -17.03]} radius={1.56} />
-      <SummoningShrineRelic position={[10.5, 1.7, -7.4]} rotationY={-0.35} />
+      <StationRing position={[gateX, 0.105, gateZ]} color="#8f63ff" radius={2.5} />
+      <ExpeditionPortalVFX position={[gateX, 2.5, gateZ - 0.03]} radius={1.96} />
+      <SummoningShrineRelic position={[shrineX, 2, shrineZ]} rotationY={Math.PI - 0.25} />
 
-      {[
-        [-6.8, 2.1, 7],
-        [6.8, 2.5, 7],
-        [-14.8, 1.9, -1.5],
-        [14.8, 2.25, -1.5],
-      ].map((position, i) => (
-        <pointLight key={i} position={position as [number, number, number]} color="#a95cff" intensity={5} distance={5.5} decay={2} />
-      ))}
-      <pointLight position={[0, 2, -17]} color="#66e1dc" intensity={9} distance={7} decay={2} />
+      <VioletLanternGlow position={[-7.8, 2.1, 8]} size={1.15} intensity={4.1} phase={0.2} />
+      <VioletLanternGlow position={[7.8, 2.5, 8]} size={1.15} intensity={4.1} phase={1.7} />
+      <VioletLanternGlow position={[-18, 1.9, -1.5]} size={1.02} intensity={3.5} phase={2.8} />
+      <VioletLanternGlow position={[18, 2.25, -1.5]} size={1.02} intensity={3.5} phase={4.1} />
+      <VioletLanternGlow position={[-7.2, 1.85, -17.1]} size={0.9} intensity={2.7} phase={5.3} />
+      <VioletLanternGlow position={[7.2, 1.85, -17.1]} size={0.9} intensity={2.7} phase={6.6} />
+      <pointLight position={[gateX, 2.5, gateZ]} color="#66e1dc" intensity={11} distance={8.5} decay={2} />
       <directionalLight position={[2, 9, 12]} color="#c4c1c9" intensity={0.85} />
 
-      <Html position={[-10.5, 3.55, -9.75]} center distanceFactor={13} style={{ pointerEvents: 'none' }}>
+      <Html position={[lodgeX, 3.55, lodgeZ + 0.75]} center distanceFactor={13} style={{ pointerEvents: 'none' }}>
         <div className="whitespace-nowrap rounded-full border border-amber-100/20 bg-[#21170f]/75 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.24em] text-amber-100 shadow-lg backdrop-blur-sm">
           Roster Lodge
         </div>

@@ -17,6 +17,7 @@ export type CharState =
   | 'walk'
   | 'run'
   | 'jump'
+  | 'double-jump'
   | 'dodge'
   | 'hurt'
   | 'death'
@@ -37,6 +38,8 @@ interface Props {
   walkPath: string;
   runPath: string;
   jumpPath: string;
+  /** Airborne SECOND jump — a distinct clip played on the double jump (jumpsUsed 2). */
+  jump2Path: string;
   dodgePath: string;
   hurtPath: string;
   deathPath: string;
@@ -124,6 +127,7 @@ const LOOPS: Record<CharState, boolean> = {
   walk: true,
   run: true,
   jump: false,
+  'double-jump': false,
   dodge: false,
   hurt: false,
   death: false,
@@ -148,6 +152,7 @@ export const AnimatedCharacter = ({
   walkPath,
   runPath,
   jumpPath,
+  jump2Path,
   dodgePath,
   hurtPath,
   deathPath,
@@ -168,6 +173,7 @@ export const AnimatedCharacter = ({
   const walk = useGameModel(walkPath);
   const run = useGameModel(runPath);
   const jump = useGameModel(jumpPath);
+  const jump2 = useGameModel(jump2Path);
   const dodge = useGameModel(dodgePath);
   const hurt = useGameModel(hurtPath);
   const death = useGameModel(deathPath);
@@ -220,6 +226,7 @@ export const AnimatedCharacter = ({
       ['walk', walk.animations[0]],
       ['run', run.animations[0]],
       ['jump', jump.animations[0]],
+      ['double-jump', jump2.animations[0]],
       ['dodge', dodge.animations[0]],
       ['hurt', hurt.animations[0]],
       ['death', death.animations[0]],
@@ -255,6 +262,7 @@ export const AnimatedCharacter = ({
     walk.animations,
     run.animations,
     jump.animations,
+    jump2.animations,
     dodge.animations,
     hurt.animations,
     death.animations,

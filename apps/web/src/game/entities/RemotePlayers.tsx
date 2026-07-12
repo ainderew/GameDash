@@ -12,6 +12,9 @@ import {
   ANIM_FLAG_ATTACK,
   ANIM_FLAG_DODGE,
   ANIM_FLAG_DOWNED,
+  ANIM_FLAG_HURT,
+  ANIM_FLAG_RELIC_CATCH,
+  ANIM_FLAG_RELIC_THROW,
   INTERP_UNDERRUN_DEADRECKON_MS,
   INTERP_UNDERRUN_HOLD_MS,
 } from '@shared/net/constants';
@@ -19,8 +22,13 @@ import { useGameModel } from '@/lib/loaders';
 import { collectNodeNames, prepareClip } from '@/lib/animClips';
 import { deMetalize } from '@/lib/materials';
 import { PLAYER_CHARACTERS, type PlayerCharacterId } from '@/game/entities/characters';
+import { WeaponMount } from '@/game/entities/Weapon';
+import { DEFAULT_WEAPON_ID, getWeapon } from '@/game/combat/weapons';
 import { netClient } from '@/net/client';
 import { useUIStore, type SessionMemberUI } from '@/ui/store';
+import { relicNet } from '@/net/relicNet';
+import { RELIC_CORRUPTION_TUNING } from '@shared/balance';
+import { CorruptionArmTendrils } from '@/game/fx/CorruptionArmTendrils';
 
 /**
  * Remote session members rendered in the shared hub: one ECS entity + druid-style cloned
@@ -37,15 +45,27 @@ const JUMP_PATH = '/models/hero/anim-jump.glb';
 const ATTACK_PATH = '/models/hero/anim-attack-l1.glb';
 const DODGE_PATH = '/models/hero/anim-roll.glb';
 const DOWNED_PATH = '/models/hero/anim-death.glb';
+const HURT_PATH = '/models/hero/anim-hurt.glb';
+const THROW_PATH = '/models/hero/anim-throw.glb';
+const CATCH_PATH = '/models/hero/anim-catch.glb';
 
 /** Same locomotion thresholds as Player.tsx so remote avatars read identically. */
 const WALK_SPEED_THRESHOLD = 0.5;
 const RUN_SPEED_THRESHOLD = 4.4;
 const FADE_S = 0.15;
 
-type RemoteAnim = 'idle' | 'walk' | 'run' | 'jump' | 'attack' | 'dodge' | 'downed';
+type RemoteAnim =
+  'idle' | 'walk' | 'run' | 'jump' | 'attack' | 'dodge' | 'hurt' | 'throw' | 'catch' | 'downed';
 /** Combat poses play ONCE and hold the last frame (no looping swing/roll/corpse). */
-const ONE_SHOT: ReadonlySet<RemoteAnim> = new Set(['attack', 'dodge', 'downed']);
+const ONE_SHOT: ReadonlySet<RemoteAnim> = new Set([
+  'attack',
+  'dodge',
+  'hurt',
+  'throw',
+  'catch',
+  'downed',
+]);
+const HAND_BONE_RE = /RightHand$/;
 
 const isPlayerCharacterId = (v: string): v is PlayerCharacterId => v in PLAYER_CHARACTERS;
 
@@ -77,8 +97,29 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
   const attack = useGameModel(ATTACK_PATH);
   const dodge = useGameModel(DODGE_PATH);
   const downed = useGameModel(DOWNED_PATH);
+  const hurt = useGameModel(HURT_PATH);
+  const throwClip = useGameModel(THROW_PATH);
+  const catchClip = useGameModel(CATCH_PATH);
 
   const scene = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
+  const handBone = useMemo(() => {
+    let hand: Group | null = null;
+    scene.traverse((object) => {
+      if (!hand && HAND_BONE_RE.test(object.name)) hand = object as Group;
+    });
+    return hand;
+  }, [scene]);
+  const armBones = useMemo(() => {
+    let left: Group | null = null;
+    let right: Group | null = null;
+    scene.traverse((object) => {
+      if (!left && /LeftForeArm$/.test(object.name)) left = object as Group;
+      if (!right && /RightForeArm$/.test(object.name)) right = object as Group;
+    });
+    return [left, right] as const;
+  }, [scene]);
+  const volatileActive = useRef(false);
+  const corruptionProgress = useRef(0);
   // Measure the ORIGINAL cached scene (cloned skinned rigs report bogus bounds — see
   // Teammates.tsx). yOffsetAdd is a baked world-unit correction, added raw.
   const { scale, yOffset } = useMemo(() => {
@@ -98,8 +139,11 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
       prepareClip(attack.animations[0]!, 'attack', bones),
       prepareClip(dodge.animations[0]!, 'dodge', bones),
       prepareClip(downed.animations[0]!, 'downed', bones),
+      prepareClip(hurt.animations[0]!, 'hurt', bones),
+      prepareClip(throwClip.animations[0]!, 'throw', bones),
+      prepareClip(catchClip.animations[0]!, 'catch', bones),
     ];
-  }, [scene, idle, walk, run, jump, attack, dodge, downed]);
+  }, [scene, idle, walk, run, jump, attack, dodge, downed, hurt, throwClip, catchClip]);
   const { actions } = useAnimations(clips, scene);
   const current = useRef<RemoteAnim>('idle');
 
@@ -159,14 +203,23 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
     // …and onto the scene graph.
     g.position.set(sample.pos[0], sample.pos[1], sample.pos[2]);
     g.rotation.y = sample.rotY;
+    volatileActive.current =
+      relicNet.state.phase === 'carried' && relicNet.state.carrierId === member.entityId;
+    corruptionProgress.current = Math.max(
+      0,
+      Math.min(1, relicNet.state.corruption / RELIC_CORRUPTION_TUNING.max),
+    );
 
     // Pose priority mirrors the local avatar (Player.tsx): downed > attack > dodge > jump,
     // then locomotion from interpolated velocity. Combat poses ride the networked flag byte.
     const speed = Math.hypot(sample.velocity[0], sample.velocity[2]);
     let next: RemoteAnim;
     if ((sample.flags & ANIM_FLAG_DOWNED) !== 0) next = 'downed';
-    else if ((sample.flags & ANIM_FLAG_ATTACK) !== 0) next = 'attack';
     else if ((sample.flags & ANIM_FLAG_DODGE) !== 0) next = 'dodge';
+    else if ((sample.flags & ANIM_FLAG_ATTACK) !== 0) next = 'attack';
+    else if ((sample.flags & ANIM_FLAG_RELIC_CATCH) !== 0) next = 'catch';
+    else if ((sample.flags & ANIM_FLAG_RELIC_THROW) !== 0) next = 'throw';
+    else if ((sample.flags & ANIM_FLAG_HURT) !== 0) next = 'hurt';
     else if ((sample.flags & ANIM_FLAG_AIRBORNE) !== 0) next = 'jump';
     else if (speed > RUN_SPEED_THRESHOLD) next = 'run';
     else if (speed > WALK_SPEED_THRESHOLD) next = 'walk';
@@ -188,6 +241,20 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
   return (
     <group ref={group} visible={false}>
       <primitive object={scene} scale={scale} position={[0, yOffset, 0]} />
+      {handBone && (
+        <WeaponMount
+          bone={handBone}
+          def={getWeapon(DEFAULT_WEAPON_ID)}
+          stateRef={current}
+          publishSockets={false}
+        />
+      )}
+      <CorruptionArmTendrils
+        leftArm={armBones[0]}
+        rightArm={armBones[1]}
+        activeRef={volatileActive}
+        corruptionRef={corruptionProgress}
+      />
       {/* Name tag: world-space billboard above the head. */}
       <Billboard position={[0, 2.25, 0]}>
         <Text

@@ -105,7 +105,8 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     velocity.linear[2] = 0;
   } else {
     // Plain WASD walks; Shift sprints.
-    const speed = intent.sprint ? PLAYER_SPEED : PLAYER_WALK_SPEED;
+    const speed =
+      (intent.sprint ? PLAYER_SPEED : PLAYER_WALK_SPEED) * (entity.relicBuff?.moveSpeedMult ?? 1);
     velocity.linear[0] = intent.moveX * speed;
     velocity.linear[2] = intent.moveZ * speed;
     // Face the movement direction when actually moving.

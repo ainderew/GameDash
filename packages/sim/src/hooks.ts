@@ -21,6 +21,8 @@ export interface HitContext {
   amount: number;
   strength: HitStrength;
   crit: boolean;
+  /** True only for the hit that moved the target from alive to zero HP. */
+  lethal: boolean;
   /** Contact point in world space — where sparks + shockwave spawn. */
   point: Vector3Tuple;
   /** Unit knockback direction in XZ (away from the attacker). */

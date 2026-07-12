@@ -86,6 +86,14 @@ export interface SessionMemberInfo {
   connected: boolean;
 }
 
+/** Server-authoritative expedition score for one party member. */
+export interface PlayerScoreWire {
+  playerId: PlayerId;
+  name: string;
+  score: number;
+  kills: number;
+}
+
 /**
  * A relic flight fully described by its launch params (Phase 5). Identical shape to sim's
  * `RelicFlightParams` (structural match — shared must not depend on sim). Every client
@@ -116,6 +124,8 @@ export interface RelicWelcomeState {
   entityId: number;
   phase: 'carried' | 'inFlight' | 'grounded';
   pos: [number, number, number];
+  /** Authoritative corruption value, retained through throws and grounding. */
+  corruption: number;
   /** Carrier avatar entity id (carried only). */
   carrierId?: number;
   /** Active flight params (inFlight only). */
@@ -134,6 +144,8 @@ export interface WelcomeMessage {
   /** Present in expedition: the live monster roster (id → archetype) so a joiner/reconnector
    * renders the RIGHT model — a late client missed the MonsterSpawned events that teach it. */
   monsters?: { id: number; archetype: string }[];
+  /** Current standings, including eliminations that happened before a join/reconnect. */
+  scores: PlayerScoreWire[];
 }
 
 export interface PlayerJoinedMessage {
@@ -292,10 +304,22 @@ export interface PlayerRevivedMessage {
   playerId: PlayerId;
 }
 
+/** A monster elimination changed the authoritative expedition standings. */
+export interface ScoreUpdatedMessage {
+  type: 'scoreUpdated';
+  serverTick: number;
+  scorerId: PlayerId;
+  points: number;
+  standings: PlayerScoreWire[];
+}
+
 /** Every party member is downed — the hunt failed; the session returns to the hub. */
 export interface HuntFailedMessage {
   type: 'huntFailed';
   serverTick: number;
+  standings: PlayerScoreWire[];
+  /** Highest score wins; damage dealt and join order provide deterministic tie-breaks. */
+  mvpPlayerId: PlayerId | null;
 }
 
 /**
@@ -332,6 +356,8 @@ export interface RelicCaughtMessage {
   serverTick: number;
   carrierId: number;
   pos: [number, number, number];
+  /** Authoritative post-transition value (0 for an aerial catch; retained for pickup). */
+  corruption: number;
 }
 
 /** A targeted pass failed at arrival (receiver downed/escaped) — drives the fail feedback. */
@@ -355,6 +381,23 @@ export interface RelicGroundedMessage {
   type: 'relicGrounded';
   serverTick: number;
   pos: [number, number, number];
+}
+
+/** Corruption reached maximum: the holder was downed and the Relic discharged. */
+export interface RelicEruptedMessage {
+  type: 'relicErupted';
+  serverTick: number;
+  holderId?: number;
+  pos: [number, number, number];
+}
+
+export interface RelicVolatileDischargeMessage {
+  type: 'relicVolatileDischarge';
+  serverTick: number;
+  holderId?: number;
+  pos: [number, number, number];
+  radius: number;
+  tierIndex: number;
 }
 
 /**
@@ -400,6 +443,7 @@ export type ServerMessage =
   | ParrySuccessMessage
   | PlayerDownedMessage
   | PlayerRevivedMessage
+  | ScoreUpdatedMessage
   | HuntFailedMessage
   | MaterialTallyMessage
   | RelicLaunchedMessage
@@ -407,5 +451,7 @@ export type ServerMessage =
   | RelicPassFailedMessage
   | RelicDroppedMessage
   | RelicGroundedMessage
+  | RelicEruptedMessage
+  | RelicVolatileDischargeMessage
   | PassRejectedMessage
   | ErrorMessage;

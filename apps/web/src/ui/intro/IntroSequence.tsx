@@ -6,7 +6,6 @@ import { useUIStore } from '@/ui/store';
 const FADE_MS = 850;
 const CAPTION_FADE_MS = 320;
 const HOLD_TO_SKIP_MS = 750;
-const BGM_DUCK_MS = 650;
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -165,10 +164,25 @@ const SceneView = ({ scene, durationMs, failedLayers, startedAt, reducedMotion, 
 
       const movementScale = reducedMotion ? 0.25 : 1;
       const kenBurns = scene.kenBurns;
-      const scale = lerp(kenBurns.fromScale, kenBurns.toScale, eased * movementScale);
-      const x = lerp(kenBurns.fromX, kenBurns.toX, eased * movementScale) * 100;
-      const y = lerp(kenBurns.fromY, kenBurns.toY, eased * movementScale) * 100;
-      if (stageRef.current) stageRef.current.style.transform = `translate3d(${x}%, ${y}%, 0) scale(${scale})`;
+      let scale = lerp(kenBurns.fromScale, kenBurns.toScale, eased * movementScale);
+      let x = lerp(kenBurns.fromX, kenBurns.toX, eased * movementScale) * 100;
+      let y = lerp(kenBurns.fromY, kenBurns.toY, eased * movementScale) * 100;
+      let originX = 50;
+      let originY = 50;
+      for (const event of scene.cameraEvents ?? []) {
+        const eventProgress = (elapsed - event.atMs) / event.durationMs;
+        if (eventProgress < 0 || eventProgress > 1) continue;
+        const envelope = Math.sin(eventProgress * Math.PI);
+        scale += event.zoom * envelope * movementScale;
+        x += Math.sin(elapsed * 0.085) * event.shake * envelope * movementScale;
+        y += Math.cos(elapsed * 0.11) * event.shake * 0.65 * envelope * movementScale;
+        originX = event.originX;
+        originY = event.originY;
+      }
+      if (stageRef.current) {
+        stageRef.current.style.transformOrigin = `${originX}% ${originY}%`;
+        stageRef.current.style.transform = `translate3d(${x}%, ${y}%, 0) scale(${scale})`;
+      }
 
       scene.layers.forEach((layer, index) => {
         const element = layerRefs.current[index];
@@ -179,8 +193,26 @@ const SceneView = ({ scene, durationMs, failedLayers, startedAt, reducedMotion, 
         const amount = reducedMotion ? layerProgress * 0.25 : layerProgress;
         const px = lerp(motion.fromX, motion.toX, amount);
         const py = lerp(motion.fromY, motion.toY, amount);
-        const layerScale = lerp(motion.fromScale, motion.toScale, amount);
-        element.style.transform = `translate3d(${px}%, ${py}%, 0) scale(${layerScale})`;
+        let eventX = 0;
+        let eventY = 0;
+        let layerScale = lerp(motion.fromScale, motion.toScale, amount);
+        let rotateDeg = 0;
+        let brightness = 1;
+        let saturate = 1;
+        for (const event of layer.motionEvents ?? []) {
+          const eventProgress = (elapsed - event.atMs) / event.durationMs;
+          if (eventProgress < 0 || eventProgress > 1) continue;
+          const envelope = Math.sin(eventProgress * Math.PI) * movementScale;
+          eventX += (event.x ?? 0) * envelope;
+          eventY += (event.y ?? 0) * envelope;
+          layerScale += (event.scale ?? 0) * envelope;
+          rotateDeg += (event.rotateDeg ?? 0) * envelope;
+          brightness += ((event.brightness ?? 1) - 1) * envelope;
+          saturate += ((event.saturate ?? 1) - 1) * envelope;
+        }
+        element.style.transformOrigin = `${motion.originX ?? 50}% ${motion.originY ?? 50}%`;
+        element.style.transform = `translate3d(${px + eventX}%, ${py + eventY}%, 0) scale(${layerScale}) rotate(${rotateDeg}deg)`;
+        element.style.filter = `brightness(${brightness}) saturate(${saturate})`;
         if (layer.opacityKeys) {
           const nextIndex = layer.opacityKeys.findIndex((key) => key.atMs > elapsed);
           const previous = layer.opacityKeys[Math.max(0, nextIndex === -1 ? layer.opacityKeys.length - 1 : nextIndex - 1)]!;
@@ -299,7 +331,7 @@ export const IntroSequence = () => {
   const mutedRef = useRef(false);
   const [holdProgress, setHoldProgress] = useState(0);
   const holdFrame = useRef(0);
-  const bgmRef = useRef<HTMLAudioElement | null>(null);
+  const musicRefs = useRef<HTMLAudioElement[]>([]);
   const voiceRef = useRef<HTMLAudioElement | null>(null);
   const sfxRef = useRef<HTMLAudioElement[]>([]);
   const audioStartedAt = useRef<number | null>(null);
@@ -320,7 +352,7 @@ export const IntroSequence = () => {
   const stopAudio = useCallback(() => {
     stopIntroAudio();
     voiceRef.current = null;
-    bgmRef.current = null;
+    musicRefs.current = [];
     sfxRef.current = [];
     audioStartedAt.current = null;
   }, []);
@@ -342,6 +374,7 @@ export const IntroSequence = () => {
   const connectAudioSession = useCallback(
     (forceNew = false) => {
       if (forceNew) {
+        stopIntroAudio();
         setClock(null);
         setAudioReady(false);
       }
@@ -349,20 +382,9 @@ export const IntroSequence = () => {
         ? beginIntroAudio(scene, mutedRef.current)
         : getIntroAudio(scene.id) ?? beginIntroAudio(scene, mutedRef.current);
       voiceRef.current = session.voice ?? null;
-      bgmRef.current = session.bgm ?? null;
+      musicRefs.current = session.music;
       sfxRef.current = session.sfx ?? [];
       audioStartedAt.current = session.startedAt;
-
-      const voice = session.voice;
-      const updateDuration = () => {
-        if (scene.durationMode === 'fixed') return;
-        const seconds = voice?.duration;
-        if (seconds && Number.isFinite(seconds)) {
-          setDurationMs(scene.voiceDelayMs + seconds * 1000 + scene.tailMs);
-        }
-      };
-      updateDuration();
-      voice?.addEventListener('loadedmetadata', updateDuration, { once: true });
 
       void session.started.then((started) => {
         if (!started) audioStartedAt.current = performance.now();
@@ -390,27 +412,10 @@ export const IntroSequence = () => {
   useEffect(() => {
     mutedRef.current = muted;
     const voice = voiceRef.current;
-    const bgm = bgmRef.current;
     if (voice) voice.muted = muted;
-    if (bgm) bgm.muted = muted;
+    for (const music of musicRefs.current) music.muted = muted;
     for (const effect of sfxRef.current) effect.muted = muted;
   }, [muted]);
-
-  useEffect(() => {
-    if (sceneStartedAt === null) return;
-    let frame = 0;
-    const fadeBgm = (now: number) => {
-      const elapsed = now - sceneStartedAt;
-      const remaining = durationMs - elapsed;
-      const duck = smoothstep(clamp01((elapsed - scene.voiceDelayMs) / BGM_DUCK_MS));
-      const narrativeVolume = lerp(scene.bgmVolume, scene.bgmDuckVolume, duck);
-      const exitFade = index === INTRO_SCENES.length - 1 ? clamp01(remaining / 1200) : 1;
-      if (bgmRef.current) bgmRef.current.volume = narrativeVolume * exitFade;
-      if (remaining > 0) frame = requestAnimationFrame(fadeBgm);
-    };
-    frame = requestAnimationFrame(fadeBgm);
-    return () => cancelAnimationFrame(frame);
-  }, [durationMs, index, scene, sceneStartedAt]);
 
   useEffect(() => {
     const keyDown = (event: KeyboardEvent) => {

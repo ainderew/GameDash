@@ -33,6 +33,11 @@ class NetGame {
     return this.engine !== null;
   }
 
+  /** True only when prediction is bound to the currently rendered local-player entity. */
+  drives(entity: Entity): boolean {
+    return this.engine?.drives(entity) ?? false;
+  }
+
   get tickTimeMs(): number {
     return this.seq * MS_PER_TICK;
   }
@@ -57,6 +62,7 @@ class NetGame {
     // full disconnect(), where a brand-new connection genuinely starts a new epoch.
     this.cmdRing.length = 0;
     this.offset = [0, 0, 0];
+    this.offsetUpdatedAt = 0;
     netStats.reset();
   }
 
@@ -65,6 +71,7 @@ class NetGame {
     this.send = null;
     this.cmdRing.length = 0;
     this.offset = [0, 0, 0];
+    this.offsetUpdatedAt = 0;
   }
 
   /** Full teardown on disconnect: the next connection is a new input epoch, so reset seq. */

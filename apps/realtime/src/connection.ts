@@ -265,6 +265,7 @@ export class ClientConnection implements PeerLink {
       serverTime: this.now(),
       relic: session.relicWelcome(),
       monsters: session.monsterRoster(),
+      scores: session.scoreStandings(),
     });
   }
 

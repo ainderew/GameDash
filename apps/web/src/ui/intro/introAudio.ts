@@ -1,83 +1,174 @@
 import type { IntroScene } from '@/ui/intro/introScenes';
 
-export interface IntroAudioSession {
-  sceneId: string;
-  voice?: HTMLAudioElement;
-  bgm?: HTMLAudioElement;
+const MASTER_VOICE_SRC = '/intro/audio/intro-voice.mp3';
+const MASTER_MUSIC_VOLUME = 0.46;
+const MUSIC_ONE_STOP_SECONDS = 55;
+const MUSIC_TWO_START_SECONDS = 60;
+const MUSIC_SYNC_TOLERANCE_SECONDS = 0.25;
+
+const MASTER_MUSIC = [
+  '/intro/audio/intro-bgm-1.mp3',
+  '/intro/audio/intro-bgm-2.mp3',
+] as const;
+
+interface IntroAudioMaster {
+  voice: HTMLAudioElement;
+  music: HTMLAudioElement[];
   startedAt: number;
   started: Promise<boolean>;
   voiceStarted: Promise<boolean>;
-  voiceTimer?: number;
+  /** Music-only lead-in, in seconds, before the narration is released. */
+  prerollSeconds: number;
+  voiceReleased: boolean;
+  releaseVoice: (started: boolean) => void;
+  schedulerFrame?: number;
+}
+
+export interface IntroAudioSession {
+  sceneId: string;
+  voice: HTMLAudioElement;
+  music: HTMLAudioElement[];
+  /** Scene-local visual clock. The master voice has its own uninterrupted clock. */
+  startedAt: number;
+  started: Promise<boolean>;
+  voiceStarted: Promise<boolean>;
   sfx?: HTMLAudioElement[];
   sfxTimers?: number[];
 }
 
+let activeMaster: IntroAudioMaster | undefined;
 let activeSession: IntroAudioSession | undefined;
 
-const makeAudio = (src: string | undefined, loop = false) => {
-  if (!src) return undefined;
+const makeAudio = (src: string, loop = false) => {
   const audio = new Audio(src);
   audio.preload = 'auto';
   audio.loop = loop;
   return audio;
 };
 
+const setPlaying = (audio: HTMLAudioElement, shouldPlay: boolean) => {
+  if (!shouldPlay) {
+    if (!audio.paused) audio.pause();
+    return;
+  }
+  if (audio.paused) void audio.play().catch(() => undefined);
+};
+
+const syncTrack = (
+  audio: HTMLAudioElement,
+  desiredTime: number,
+  shouldPlay: boolean,
+) => {
+  if (Math.abs(audio.currentTime - desiredTime) > MUSIC_SYNC_TOLERANCE_SECONDS) {
+    audio.currentTime = Math.max(0, desiredTime);
+  }
+  setPlaying(audio, shouldPlay);
+};
+
+const startMusicScheduler = (master: IntroAudioMaster) => {
+  const update = () => {
+    if (activeMaster !== master) return;
+    const elapsed = (performance.now() - master.startedAt) / 1000;
+
+    // Hold the narration through a music-only pre-roll so the fade-from-black can
+    // breathe while the score builds tension, then release the voice exactly once.
+    if (!master.voiceReleased && elapsed >= master.prerollSeconds) {
+      master.voiceReleased = true;
+      void master.voice
+        .play()
+        .then(() => master.releaseVoice(true))
+        .catch(() => master.releaseVoice(false));
+    }
+
+    const musicOne = master.music[0]!;
+    const musicTwo = master.music[1]!;
+
+    // The music rides its own wall-clock (independent of the delayed voice) so the
+    // score's internal cross-fade still lands at the song's natural seam.
+    syncTrack(
+      musicOne,
+      Math.min(elapsed, MUSIC_ONE_STOP_SECONDS),
+      elapsed < MUSIC_ONE_STOP_SECONDS,
+    );
+    syncTrack(
+      musicTwo,
+      Math.max(0, elapsed - MUSIC_TWO_START_SECONDS),
+      elapsed >= MUSIC_TWO_START_SECONDS,
+    );
+
+    master.schedulerFrame = window.requestAnimationFrame(update);
+  };
+  master.schedulerFrame = window.requestAnimationFrame(update);
+};
+
+const createMaster = (muted: boolean, prerollMs: number): IntroAudioMaster => {
+  const voice = makeAudio(MASTER_VOICE_SRC);
+  const music = MASTER_MUSIC.map((src) => makeAudio(src));
+  voice.muted = muted;
+  voice.volume = 1;
+  for (const track of music) {
+    track.muted = muted;
+    track.volume = MASTER_MUSIC_VOLUME;
+  }
+
+  // The narration is released later by the scheduler, once the pre-roll elapses.
+  // We hand back a promise so callers can still await the voice actually starting.
+  let releaseVoice: (started: boolean) => void = () => undefined;
+  const voiceStarted = new Promise<boolean>((resolve) => {
+    releaseVoice = resolve;
+  });
+
+  // bgm-1 starts immediately so the song builds tension under the fade-from-black.
+  const musicOneStarted = music[0]!.play().then(() => true).catch(() => false);
+  const master: IntroAudioMaster = {
+    voice,
+    music,
+    startedAt: performance.now(),
+    // The cinematic clock is gated on the music, not the delayed voice, so the
+    // fade-in and rising score begin together at t0.
+    started: musicOneStarted,
+    voiceStarted,
+    prerollSeconds: Math.max(0, prerollMs / 1000),
+    voiceReleased: false,
+    releaseVoice,
+  };
+  activeMaster = master;
+  startMusicScheduler(master);
+  return master;
+};
+
 export const stopIntroAudio = () => {
-  if (!activeSession) return;
-  if (activeSession.voiceTimer !== undefined) window.clearTimeout(activeSession.voiceTimer);
-  for (const timer of activeSession.sfxTimers ?? []) window.clearTimeout(timer);
-  for (const audio of [activeSession.voice, activeSession.bgm, ...(activeSession.sfx ?? [])]) {
-    if (!audio) continue;
+  if (activeMaster?.schedulerFrame !== undefined) {
+    window.cancelAnimationFrame(activeMaster.schedulerFrame);
+  }
+  for (const timer of activeSession?.sfxTimers ?? []) window.clearTimeout(timer);
+  for (const audio of activeSession?.sfx ?? []) {
     audio.pause();
     audio.currentTime = 0;
   }
+  if (activeMaster) {
+    for (const audio of [activeMaster.voice, ...activeMaster.music]) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+  }
   activeSession = undefined;
+  activeMaster = undefined;
 };
 
 /**
- * Start the cinematic media from the menu click. Calling play here, while the browser
- * still has the user's activation, avoids an extra "enable sound" interstitial.
+ * The voice and music belong to the complete intro and survive scene changes.
+ * Scene sessions only provide a fresh visual clock and scene-local sound effects.
  */
 export const beginIntroAudio = (scene: IntroScene, muted = false): IntroAudioSession => {
-  const previous = activeSession;
-  const canReuseBgm = Boolean(
-    previous?.bgm && scene.bgm && previous.bgm.src === new URL(scene.bgm, window.location.href).href,
-  );
-  const canReuseVoice = Boolean(scene.continueVoice && previous?.voice && !previous.voice.ended);
-  if (previous) {
-    if (previous.voiceTimer !== undefined) window.clearTimeout(previous.voiceTimer);
-    for (const timer of previous.sfxTimers ?? []) window.clearTimeout(timer);
-    for (const audio of [...(canReuseVoice ? [] : [previous.voice]), ...(previous.sfx ?? [])]) {
-      audio?.pause();
-    }
-    if (!canReuseBgm) previous.bgm?.pause();
-  }
+  for (const timer of activeSession?.sfxTimers ?? []) window.clearTimeout(timer);
+  for (const audio of activeSession?.sfx ?? []) audio.pause();
 
-  const voice = canReuseVoice ? previous?.voice : makeAudio(scene.vo);
-  const bgm = canReuseBgm ? previous?.bgm : makeAudio(scene.bgm, true);
-  const sfx = (scene.sfx ?? []).map((cue) => makeAudio(cue.src)!).filter(Boolean);
-  if (voice) {
-    voice.muted = muted;
-    voice.volume = 1;
-  }
-  if (bgm) {
-    bgm.muted = muted;
-    bgm.volume = scene.bgmVolume;
-  }
+  const master = activeMaster ?? createMaster(muted, scene.voiceDelayMs);
+  master.voice.muted = muted;
+  for (const track of master.music) track.muted = muted;
 
-  const startedAt = performance.now();
-  const bgmStart = canReuseBgm
-    ? Promise.resolve(true)
-    : bgm?.play().then(() => true) ?? Promise.resolve(true);
-  const started = bgmStart.catch(() => false);
-  let voiceTimer: number | undefined;
-  const voiceStarted = voice && !canReuseVoice
-    ? new Promise<boolean>((resolve) => {
-        voiceTimer = window.setTimeout(() => {
-          void voice.play().then(() => resolve(true)).catch(() => resolve(false));
-        }, scene.voiceDelayMs);
-      })
-    : Promise.resolve(true);
+  const sfx = (scene.sfx ?? []).map((cue) => makeAudio(cue.src));
   const sfxTimers = (scene.sfx ?? []).map((cue, index) => window.setTimeout(() => {
     const effect = sfx[index];
     if (!effect) return;
@@ -88,12 +179,11 @@ export const beginIntroAudio = (scene: IntroScene, muted = false): IntroAudioSes
 
   activeSession = {
     sceneId: scene.id,
-    voice,
-    bgm,
-    startedAt,
-    started,
-    voiceStarted,
-    voiceTimer,
+    voice: master.voice,
+    music: master.music,
+    startedAt: performance.now(),
+    started: master.started,
+    voiceStarted: master.voiceStarted,
     sfx,
     sfxTimers,
   };

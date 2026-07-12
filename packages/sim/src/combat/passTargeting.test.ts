@@ -17,6 +17,7 @@ import {
   RELIC_PASS_CONE_DEG,
   RELIC_PASS_DURATION_MAX_S,
   RELIC_PASS_DURATION_MIN_S,
+  RELIC_RELEASE_CONE_DEG,
 } from '@shared/balance';
 
 const ent = (): Entity => ({});
@@ -57,7 +58,9 @@ describe('selectPassTarget', () => {
   });
 
   it('returns null when nobody is inside the cone', () => {
-    expect(selectPassTarget(null, [cand(40, 8)], RELIC_PASS_CONE_DEG)).toBeNull();
+    expect(
+      selectPassTarget(null, [cand(RELIC_PASS_CONE_DEG + 1, 8)], RELIC_PASS_CONE_DEG),
+    ).toBeNull();
   });
 
   it('sticks with the previous target against a marginally better challenger', () => {
@@ -77,10 +80,10 @@ describe('selectPassTarget', () => {
   });
 
   it('keeps the lock outside the aim cone until the release cone breaks', () => {
-    const drifted = cand(44, 8); // outside 35° aim cone, inside 48° release cone
+    const drifted = cand(RELIC_PASS_CONE_DEG + 4, 8);
     expect(selectPassTarget(drifted.entity, [drifted], RELIC_PASS_CONE_DEG)).toBe(drifted.entity);
 
-    const gone = cand(50, 8); // outside the release cone — lock drops
+    const gone = cand(RELIC_RELEASE_CONE_DEG + 1, 8);
     expect(selectPassTarget(gone.entity, [gone], RELIC_PASS_CONE_DEG)).toBeNull();
   });
 

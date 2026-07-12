@@ -1,6 +1,13 @@
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
-import { Color, DynamicDrawUsage, InstancedBufferAttribute, Object3D, PlaneGeometry, ShaderMaterial } from 'three';
+import {
+  Color,
+  DynamicDrawUsage,
+  InstancedBufferAttribute,
+  Object3D,
+  PlaneGeometry,
+  ShaderMaterial,
+} from 'three';
 import type { InstancedMesh } from 'three';
 import type { Entity } from '@sim/components';
 import { monsters } from '@/game/ecs/world';
@@ -21,7 +28,12 @@ const BAR_H = 0.14;
  * live in the renderers (MutantModels HEIGHT for the chaser, MonsterModels ARCHES
  * for the rest) — keep in sync if a model is rescaled.
  */
-const BAR_Y: Record<string, number> = { chaser: 2.75, spitter: 1.65, brute: 3.05 };
+const BAR_Y: Record<string, number> = {
+  chaser: 2.75,
+  spitter: 1.65,
+  brute: 3.05,
+  relicBoss: 4.55,
+};
 
 const dummy = new Object3D();
 
