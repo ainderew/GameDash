@@ -8,6 +8,7 @@ import {
   INTERP_UNDERRUN_HOLD_MS,
 } from '@shared/net/constants';
 import { MONSTER_ARCHETYPES } from '@shared/monsters';
+import { gameNow } from '@/game/feel/time';
 import { netClient } from '@/net/client';
 
 /**
@@ -59,6 +60,12 @@ export const NetworkedWorld = () => {
         e.transform.rotationY = sample.rotY;
       }
       if (e.health) e.health.current = se.hp;
+      // Confirmed-hit flash (set from DamageDealt in client.ts) → the mesh reads these fields.
+      if (se.flashUntil !== undefined && se.flashUntil > gameNow()) {
+        e.hitFlashUntil = se.flashUntil;
+        e.hitReactionStrength = se.flashStrength;
+        e.hitFlashColor = se.flashStrength === 'heavy' ? [1, 0.35, 0.3] : [1, 1, 1];
+      }
     }
 
     // Remove entities whose server id is gone from the view (killed / despawned / zone change).

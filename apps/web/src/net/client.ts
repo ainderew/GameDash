@@ -11,6 +11,9 @@ import {
 import { decodeSnapshot, ENTITY_KIND, type DecodedEntityRecord, type EntityKind } from '@shared/net/snapshot';
 import { DEFAULT_CHARACTER_ID, isCharacterId, type CharacterId } from '@shared/net/character';
 import type { MonsterArchetype } from '@shared/monsters';
+import type { HitStrength } from '@shared/combat';
+import { world } from '@/game/ecs/world';
+import { gameNow } from '@/game/feel/time';
 import { useUIStore, type SessionMemberUI } from '@/ui/store';
 import { realtimeUrl, createTransport, type Transport } from '@/net/transport';
 import { netGame } from '@/net/netGame';
@@ -41,6 +44,9 @@ const toMemberUI = (m: SessionMemberInfo): SessionMemberUI => ({
   connected: m.connected,
 });
 
+/** How long a confirmed-hit monster flash lasts (game-time ms). */
+const HIT_FLASH_MS = 120;
+
 /** Full remote state per snapshot: keyframe baseline patched by stateless deltas. */
 interface RemoteEntityState {
   /** Entity kind carried in the baseline so a delta (which omits it) can still be routed. */
@@ -58,6 +64,10 @@ interface ServerEntityView {
   buffer: InterpBuffer;
   hp: number;
   archetype?: MonsterArchetype;
+  /** Hit-flash window (game-time ms) + strength, set from DamageDealt; NetworkedWorld applies
+   * it to the mesh so a confirmed server hit flashes the monster (feel, networked expedition). */
+  flashUntil?: number;
+  flashStrength?: HitStrength;
 }
 
 class NetClient {
@@ -466,7 +476,23 @@ class NetClient {
         this.serverEntities.delete(msg.id);
         this.monsterArchetypes.delete(msg.id);
         return;
-      case 'damageDealt':
+      case 'damageDealt': {
+        // Server confirmed a hit → drive the feel the local sim can't (it lands zero damage in
+        // networked mode): a floating number at the hit point + a monster hit-flash. Floating
+        // numbers are aged out by floatingNumberSystem, run in the networked SystemRunner tick.
+        world.add({
+          transform: { position: [msg.point[0], msg.point[1], msg.point[2]], rotationY: 0 },
+          floatingNumber: { amount: Math.round(msg.amount), spawnedAt: gameNow(), crit: msg.crit },
+        });
+        if (msg.targetKind === 'monster') {
+          const se = this.serverEntities.get(msg.targetId);
+          if (se) {
+            se.flashUntil = gameNow() + HIT_FLASH_MS;
+            se.flashStrength = msg.strength;
+          }
+        }
+        return;
+      }
       case 'parrySuccess':
         return;
 

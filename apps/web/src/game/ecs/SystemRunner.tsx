@@ -7,6 +7,7 @@ import { events, localPlayers, world } from '@/game/ecs/world';
 import { stepSim, type PlayerIntent } from '@sim/step';
 import type { Entity } from '@sim/components';
 import { impactFxSystem } from '@sim/systems/impactFxSystem';
+import { floatingNumberSystem } from '@sim/systems/combatHelpers';
 import { updatePassControl } from '@/game/combat/passControl';
 import { carriedRelicOf } from '@sim/systems/relicSystem';
 import { passAim } from '@/game/combat/passAim';
@@ -182,6 +183,9 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
       });
       // Renderers read gameNow(): keep it on the tick timeline (+ remainder for smoothness).
       syncGameTime(netGame.tickTimeMs + stepper.current.alpha * MS_PER_TICK);
+      // Age out the floating damage numbers spawned from DamageDealt events (the authority
+      // sim that normally does this runs on the server, not in this networked-client tick).
+      floatingNumberSystem(world, gameNow());
       return;
     }
     if (wasNetworked.current) {
