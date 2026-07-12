@@ -113,6 +113,10 @@ export const ANIM_FLAG_SPRINT = 1 << 0;
 export const ANIM_FLAG_AIRBORNE = 1 << 1;
 /** Player: true while downed (0 HP, awaiting revive) — drives the downed pose. */
 export const ANIM_FLAG_DOWNED = 1 << 2;
+/** Player: mid-swing (attackAnimUntil window) — remote avatars play the attack clip. */
+export const ANIM_FLAG_ATTACK = 1 << 3;
+/** Player: mid-dodge/roll (dodgingUntil window) — remote avatars play the roll clip. */
+export const ANIM_FLAG_DODGE = 1 << 4;
 
 // ── Monster snapshot anim flags (Phase 4) ─────────────────────────────────────
 /** aiState packed into the low two bits: 0 idle · 1 chase · 2 attack · 3 cooldown. */

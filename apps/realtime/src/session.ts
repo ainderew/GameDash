@@ -10,6 +10,8 @@ import type { CharacterId } from '@shared/net/character';
 import { generatePlayerId, generateResumeToken, generateSessionCode } from '@shared/net/ids';
 import {
   ANIM_FLAG_AIRBORNE,
+  ANIM_FLAG_ATTACK,
+  ANIM_FLAG_DODGE,
   ANIM_FLAG_DOWNED,
   ANIM_FLAG_SPRINT,
   DEFAULT_IDLE_SESSION_TIMEOUT_MS,
@@ -128,7 +130,7 @@ const spawnPos = (index: number): Vector3Tuple => {
   return [Math.sin(angle) * 3.2, 0, Math.cos(angle) * 3.2];
 };
 
-const animFlagsFor = (e: Entity): number => {
+const animFlagsFor = (e: Entity, now: number): number => {
   if (!e.transform || !e.velocity) return 0;
   const [x, y, z] = e.transform.position;
   const speed = Math.hypot(e.velocity.linear[0], e.velocity.linear[2]);
@@ -136,6 +138,10 @@ const animFlagsFor = (e: Entity): number => {
   if (speed > 4.4) flags |= ANIM_FLAG_SPRINT;
   if (y > heightAt(x, z) + 0.06) flags |= ANIM_FLAG_AIRBORNE;
   if (e.downed) flags |= ANIM_FLAG_DOWNED;
+  // Combat pose windows the server authors from the intent stream — remote clients play the
+  // matching one-shot clip so a teammate's swing/roll is visible (not just locomotion).
+  if (now < (e.attackAnimUntil ?? 0)) flags |= ANIM_FLAG_ATTACK;
+  if (now < (e.dodgingUntil ?? 0)) flags |= ANIM_FLAG_DODGE;
   return flags;
 };
 
@@ -901,7 +907,7 @@ export class Session {
           rotY: e.transform.rotationY,
           hp: e.health?.current ?? 0,
           vel: e.velocity.linear,
-          flags: animFlagsFor(e),
+          flags: animFlagsFor(e, now),
         }),
       );
     }

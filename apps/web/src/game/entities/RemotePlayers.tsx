@@ -1,7 +1,7 @@
 import { useFrame } from '@react-three/fiber';
 import { Billboard, Text, useAnimations } from '@react-three/drei';
 import { useEffect, useMemo, useRef } from 'react';
-import { Box3, Vector3 } from 'three';
+import { Box3, LoopOnce, Vector3 } from 'three';
 import type { Group, Mesh } from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { world } from '@/game/ecs/world';
@@ -9,6 +9,9 @@ import type { Entity } from '@sim/components';
 import { sampleWithUnderrunPolicy } from '@sim/interp';
 import {
   ANIM_FLAG_AIRBORNE,
+  ANIM_FLAG_ATTACK,
+  ANIM_FLAG_DODGE,
+  ANIM_FLAG_DOWNED,
   INTERP_UNDERRUN_DEADRECKON_MS,
   INTERP_UNDERRUN_HOLD_MS,
 } from '@shared/net/constants';
@@ -31,13 +34,18 @@ const IDLE_PATH = '/models/hero/anim-idle.glb';
 const WALK_PATH = '/models/hero/anim-walk.glb';
 const RUN_PATH = '/models/hero/anim-run.glb';
 const JUMP_PATH = '/models/hero/anim-jump.glb';
+const ATTACK_PATH = '/models/hero/anim-attack-l1.glb';
+const DODGE_PATH = '/models/hero/anim-roll.glb';
+const DOWNED_PATH = '/models/hero/anim-death.glb';
 
 /** Same locomotion thresholds as Player.tsx so remote avatars read identically. */
 const WALK_SPEED_THRESHOLD = 0.5;
 const RUN_SPEED_THRESHOLD = 4.4;
 const FADE_S = 0.15;
 
-type RemoteAnim = 'idle' | 'walk' | 'run' | 'jump';
+type RemoteAnim = 'idle' | 'walk' | 'run' | 'jump' | 'attack' | 'dodge' | 'downed';
+/** Combat poses play ONCE and hold the last frame (no looping swing/roll/corpse). */
+const ONE_SHOT: ReadonlySet<RemoteAnim> = new Set(['attack', 'dodge', 'downed']);
 
 const isPlayerCharacterId = (v: string): v is PlayerCharacterId => v in PLAYER_CHARACTERS;
 
@@ -66,6 +74,9 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
   const walk = useGameModel(WALK_PATH);
   const run = useGameModel(RUN_PATH);
   const jump = useGameModel(JUMP_PATH);
+  const attack = useGameModel(ATTACK_PATH);
+  const dodge = useGameModel(DODGE_PATH);
+  const downed = useGameModel(DOWNED_PATH);
 
   const scene = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
   // Measure the ORIGINAL cached scene (cloned skinned rigs report bogus bounds — see
@@ -84,8 +95,11 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
       prepareClip(walk.animations[0]!, 'walk', bones),
       prepareClip(run.animations[0]!, 'run', bones),
       prepareClip(jump.animations[0]!, 'jump', bones),
+      prepareClip(attack.animations[0]!, 'attack', bones),
+      prepareClip(dodge.animations[0]!, 'dodge', bones),
+      prepareClip(downed.animations[0]!, 'downed', bones),
     ];
-  }, [scene, idle, walk, run, jump]);
+  }, [scene, idle, walk, run, jump, attack, dodge, downed]);
   const { actions } = useAnimations(clips, scene);
   const current = useRef<RemoteAnim>('idle');
 
@@ -108,6 +122,14 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
         mesh.frustumCulled = false;
       }
     });
+    // One-shot combat poses: play once and clamp at the last frame (no looping).
+    for (const name of ONE_SHOT) {
+      const a = actions[name];
+      if (a) {
+        a.setLoop(LoopOnce, 1);
+        a.clampWhenFinished = true;
+      }
+    }
     actions.idle?.reset().play();
   }, [scene, actions]);
 
@@ -138,10 +160,14 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
     g.position.set(sample.pos[0], sample.pos[1], sample.pos[2]);
     g.rotation.y = sample.rotY;
 
-    // Locomotion from interpolated velocity + relayed anim flags.
+    // Pose priority mirrors the local avatar (Player.tsx): downed > attack > dodge > jump,
+    // then locomotion from interpolated velocity. Combat poses ride the networked flag byte.
     const speed = Math.hypot(sample.velocity[0], sample.velocity[2]);
     let next: RemoteAnim;
-    if ((sample.flags & ANIM_FLAG_AIRBORNE) !== 0) next = 'jump';
+    if ((sample.flags & ANIM_FLAG_DOWNED) !== 0) next = 'downed';
+    else if ((sample.flags & ANIM_FLAG_ATTACK) !== 0) next = 'attack';
+    else if ((sample.flags & ANIM_FLAG_DODGE) !== 0) next = 'dodge';
+    else if ((sample.flags & ANIM_FLAG_AIRBORNE) !== 0) next = 'jump';
     else if (speed > RUN_SPEED_THRESHOLD) next = 'run';
     else if (speed > WALK_SPEED_THRESHOLD) next = 'walk';
     else next = 'idle';
@@ -151,6 +177,8 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
       const to = actions[next];
       current.current = next;
       if (from && to) {
+        // reset() restarts from frame 0 — a one-shot (attack/dodge/downed) plays fully and
+        // clamps; a loop (locomotion) loops. crossFade blends off the previous pose.
         to.reset().play();
         to.crossFadeFrom(from, FADE_S, false);
       }
