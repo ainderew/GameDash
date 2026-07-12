@@ -10,7 +10,6 @@ import {
   selectPassTarget,
   type Candidate,
 } from '@sim/combat/passTargeting';
-import { carriedRelicOf } from '@sim/systems/relicSystem';
 import {
   RELIC_PASS_CONE_DEG,
   RELIC_PASS_RANGE,
@@ -57,7 +56,9 @@ const buildCandidates = (world: World<Entity>, carrier: Entity, now: number): Ca
   const cp = carrier.transform!.position;
   for (const mate of world.with('transform')) {
     if (mate === carrier) continue;
-    if (!mate.teammate && !mate.playerControlled) continue;
+    // Receivers: AI teammates (solo), other local player-controlled entities, AND networked
+    // remote players (the human co-op case — mirrored avatars carry `remotePlayer`).
+    if (!mate.teammate && !mate.playerControlled && !mate.remotePlayer) continue;
     const mp = mate.transform.position;
     const dist = Math.hypot(mp[0] - cp[0], mp[2] - cp[2]);
     if (dist > RELIC_PASS_RANGE || isDead(mate)) continue;
@@ -81,8 +82,8 @@ const buildCandidates = (world: World<Entity>, carrier: Entity, now: number): Ca
 };
 
 /** Refresh the world-space trajectory preview toward the locked target. */
-const updateCurve = (relic: Entity, target: Entity): void => {
-  const p0 = relic.transform!.position;
+const updateCurve = (relicOrigin: Vector3Tuple, target: Entity): void => {
+  const p0 = relicOrigin;
   const p2 = predictCatchPos(target);
   const p1 = bezierControl(p0, p2);
   passAim.curve.length = CURVE_SAMPLES;
@@ -102,14 +103,18 @@ export const updatePassControl = (
   player: Entity,
   passHeld: boolean,
   now: number,
+  // The carrier's relic anchor when this player holds the relic, else null. Solo passes the
+  // ECS relic's position; networked passes the local avatar's position when relicNet reports
+  // the local player as carrier. Decoupling from the ECS relic lets pass-aim work in a
+  // networked expedition, where the relic is server-authoritative (relicNet), not an entity.
+  relicOrigin: Vector3Tuple | null,
 ): Entity | null => {
-  const relic = carriedRelicOf(world, player);
   dbg.tick++;
   dbg.held = passHeld;
-  dbg.hasRelic = relic !== undefined;
+  dbg.hasRelic = relicOrigin !== null;
   dbg.heldSince = heldSince;
   dbg.canceled = canceled;
-  if (!relic) {
+  if (!relicOrigin) {
     heldSince = null;
     canceled = false;
     if (passAim.aiming || passAim.target) resetPassAim();
@@ -146,7 +151,7 @@ export const updatePassControl = (
     );
     passAim.cycle = 0;
     passAim.valid = passAim.target !== null;
-    if (passAim.target) updateCurve(relic, passAim.target);
+    if (passAim.target) updateCurve(relicOrigin, passAim.target);
     else passAim.curve.length = 0;
     return null;
   }

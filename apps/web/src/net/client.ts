@@ -6,6 +6,7 @@ import {
   INTERP_DELAY_MAX_MS,
   INTERP_DELAY_SHRINK_PER_S,
   PING_EWMA_ALPHA,
+  RELIC_PHASE_OF,
 } from '@shared/net/constants';
 import { decodeSnapshot, ENTITY_KIND, type DecodedEntityRecord, type EntityKind } from '@shared/net/snapshot';
 import { DEFAULT_CHARACTER_ID, isCharacterId, type CharacterId } from '@shared/net/character';
@@ -176,6 +177,11 @@ class NetClient {
     return this.serverEntities;
   }
 
+  /** Our avatar's id in the session world (carrier checks, pass targeting), or null. */
+  localEntityId(): number | null {
+    return this.ownEntityId;
+  }
+
   /** Interp buffer for a remote player (created lazily) — RemotePlayers samples these. */
   remoteBuffer(playerId: string): InterpBuffer {
     let buffer = this.remoteBuffers.get(playerId);
@@ -294,8 +300,8 @@ class NetClient {
         if (!playerId) continue;
         this.remoteBuffer(playerId).push({ t: header.serverTimeMs, pos: [pos[0], pos[1], pos[2]], rotY, flags });
       } else if (baseState.kind === ENTITY_KIND.monster) {
-        // Server-authoritative monster → per-id interp buffer read by NetworkedWorld. (The
-        // relic rides relicNet's reliable events; projectiles/pickups are a later pass.)
+        // Server-authoritative monster → per-id interp buffer read by NetworkedWorld.
+        // (projectiles/pickups are a later pass.)
         let se = this.serverEntities.get(id);
         if (!se) {
           se = { kind: baseState.kind, buffer: new InterpBuffer(), hp, archetype: this.monsterArchetypes.get(id) };
@@ -303,6 +309,11 @@ class NetClient {
         }
         se.hp = hp;
         se.buffer.push({ t: header.serverTimeMs, pos: [pos[0], pos[1], pos[2]], rotY, flags });
+      } else if (baseState.kind === ENTITY_KIND.relic) {
+        // Seed a grounded relic from the snapshot when we have none yet — the countdown-entry
+        // path gets no welcome/relicGrounded event, so this is the only signal it exists.
+        // Reliable relic events own every transition after this initial seed.
+        relicNet.seedFromSnapshot(id, RELIC_PHASE_OF[flags] ?? 'grounded', pos);
       }
     }
   }

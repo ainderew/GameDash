@@ -60,6 +60,21 @@ class RelicNet {
     this.state.flight = null;
   }
 
+  /**
+   * Seed a GROUNDED relic straight from a snapshot record. Entering the expedition via the
+   * gate countdown sends no `welcome` and no `relicGrounded` event, so the snapshot's
+   * kind=relic entity is the ONLY signal the relic exists — without this the relic is invisible
+   * until someone catches it. Only acts while we have no relic (phase 'absent'); once we know
+   * it, the reliable events own every transition (so this never fights a live flight/catch).
+   */
+  seedFromSnapshot(entityId: number, phase: RelicNetState['phase'], pos: Vector3Tuple): void {
+    if (this.state.phase !== 'absent') return;
+    this.state.entityId = entityId;
+    this.state.phase = phase;
+    this.state.carrierId = null;
+    this.state.pos = [pos[0], pos[1], pos[2]];
+  }
+
   /** Seed from the welcome relic block (late join / reconnect reconstructs the live relic). */
   fromWelcome(relic: RelicWelcomeState | undefined): void {
     if (!relic) {

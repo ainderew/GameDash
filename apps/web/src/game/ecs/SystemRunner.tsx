@@ -8,7 +8,9 @@ import { stepSim, type PlayerIntent } from '@sim/step';
 import type { Entity } from '@sim/components';
 import { impactFxSystem } from '@sim/systems/impactFxSystem';
 import { updatePassControl } from '@/game/combat/passControl';
+import { carriedRelicOf } from '@sim/systems/relicSystem';
 import { passAim } from '@/game/combat/passAim';
+import { relicNet } from '@/net/relicNet';
 import { currentWeapon } from '@/game/combat/weaponStore';
 import { clientSimHooks } from '@/game/feel/simHooks';
 import { playPassFail, playRelicPickup, playRelicThrow } from '@/game/feel/audio';
@@ -151,6 +153,22 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
           intent.ranged = i.ranged;
           intent.parry = i.parry;
           intent.drop = i.drop;
+          intent.revive = i.revive;
+          // Relic pass: the relic is server-authoritative (relicNet), so the carrier anchor is
+          // the local avatar's pose IFF the network says WE hold it. Run the same aim/target
+          // state machine; its chosen receiver → the receiver's SERVER entity id for the wire.
+          const localId = netClient.localEntityId();
+          const carries =
+            relicNet.state.phase === 'carried' && localId !== null && relicNet.state.carrierId === localId;
+          const passTo = updatePassControl(
+            world,
+            player,
+            i.pass,
+            gameNow(),
+            carries ? player.transform.position : null,
+          );
+          intent.passTargetId = passTo?.serverEntityId ?? 0;
+          intent.passHold = passAim.aiming;
           intent.viewServerTimeMs = Math.max(0, netClient.serverNow() - netClient.interpDelayMs());
         }
         // Consume one-shot edges AFTER building the intent (they must reach the server once).
@@ -208,10 +226,19 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
       intent.ranged = i.ranged;
       intent.parry = i.parry;
       intent.drop = i.drop;
+      intent.revive = i.revive;
       // Relic pass: E tap = quick pass, hold = soft-lock aim mode, release = throw.
       // The state machine is client UI (camera cone, markers); its OUTPUT — "pass to
-      // this receiver now" — is the intent the sim executes.
-      intent.passTo = updatePassControl(world, player, i.pass, now);
+      // this receiver now" — is the intent the sim executes. Solo carries a real ECS relic,
+      // so the aim origin is that relic's position.
+      const soloRelic = carriedRelicOf(world, player);
+      intent.passTo = updatePassControl(
+        world,
+        player,
+        i.pass,
+        now,
+        soloRelic?.transform?.position ?? null,
+      );
       intent.passAiming = passAim.aiming;
     }
     i.jump = false;

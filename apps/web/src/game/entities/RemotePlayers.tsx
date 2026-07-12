@@ -41,13 +41,15 @@ type RemoteAnim = 'idle' | 'walk' | 'run' | 'jump';
 
 const isPlayerCharacterId = (v: string): v is PlayerCharacterId => v in PLAYER_CHARACTERS;
 
-const makeRemoteEntity = (): Entity => ({
+const makeRemoteEntity = (serverEntityId: number | undefined): Entity => ({
   // Parked out of sight until the first snapshot arrives.
   transform: { position: [0, -1000, 0], rotationY: 0 },
   health: { current: 100, max: 100 },
   faction: 'player',
   radius: 0.45,
   remotePlayer: true,
+  // The server-world id, so pass targeting can resolve THIS avatar to a wire passTargetId.
+  serverEntityId,
   // NOTE: deliberately NO `velocity` — movementSystem must never integrate remotes;
   // their motion is a replay of relayed snapshots, not simulation.
 });
@@ -88,7 +90,7 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
   const current = useRef<RemoteAnim>('idle');
 
   useEffect(() => {
-    const entity = world.add(makeRemoteEntity());
+    const entity = world.add(makeRemoteEntity(member.entityId));
     entityRef.current = entity;
     return () => {
       world.remove(entity);

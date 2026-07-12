@@ -21,6 +21,8 @@ export interface InputState {
   pass: boolean;
   /** One-shot: intentionally drop the Relic as a short lob (G); consumed each tick. */
   drop: boolean;
+  /** HELD: revive a downed teammate (R) while standing near their body (co-op). */
+  revive: boolean;
 }
 
 const KEY_MAP: Record<string, keyof InputState> = {
@@ -43,6 +45,7 @@ const KEY_MAP: Record<string, keyof InputState> = {
   KeyL: 'parry',
   KeyE: 'pass',
   KeyG: 'drop',
+  KeyR: 'revive',
 };
 
 /** One-shot edge-triggered actions — cleared by their consumer, not on keyup. */
@@ -61,6 +64,7 @@ const initial = (): InputState => ({
   parry: false,
   pass: false,
   drop: false,
+  revive: false,
 });
 
 /**

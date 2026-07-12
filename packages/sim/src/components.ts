@@ -111,6 +111,12 @@ export interface Entity {
    * Phase 3: snapshots). Client-side marker — driven by interpolation, never by intents.
    */
   remotePlayer?: true;
+  /**
+   * This entity's id in the SERVER/session world (set on client remote-player mirrors from the
+   * roster). Distinct from `id` (the local client world's stamp) — pass targeting resolves a
+   * chosen receiver to this so the server validates the pass against the right avatar.
+   */
+  serverEntityId?: number;
   /** Reach multiplier of the wielded weapon (loadout data, synced by the client adapter). */
   weaponReachMul?: number;
   /**
@@ -249,4 +255,11 @@ export interface Entity {
     dirX: number;
     dirZ: number;
   };
+  /**
+   * Relic-claim burst marker (client-only, spawned by simHooks.onRelicCaught). One entity
+   * drives the whole orchestrated catch effect — absorption inrush, core flash, sunburst
+   * rays, expanding dome, shockwave ring, sparks. Aged on REAL time so it plays through the
+   * catch hitstop; removed by the RelicCatchFX renderer when it finishes.
+   */
+  catchBurstFx?: { spawnedAtReal: number };
 }
