@@ -23,6 +23,7 @@ import { Teammates } from '@/game/entities/Teammates';
 import { PassAimUI } from '@/game/fx/PassAimUI';
 import { RelicDrainVFX } from '@/game/fx/RelicDrainVFX';
 import { CorruptionMeter } from '@/game/fx/CorruptionMeter';
+import { RelicCarrierPowerVFX } from '@/game/fx/RelicCarrierPowerVFX';
 import { Pickups } from '@/game/entities/Pickups';
 import { DamageNumbers } from '@/game/entities/DamageNumbers';
 import { SystemRunner } from '@/game/ecs/SystemRunner';
@@ -86,6 +87,7 @@ export const GameCanvas = () => {
                 {networked ? <NetworkedRelic /> : <Relic />}
                 <PassAimUI />
                 <RelicDrainVFX />
+                <RelicCarrierPowerVFX />
                 <CorruptionMeter />
                 <BladeTrail />
                 <AttackArcIndicator />
