@@ -10,3 +10,6 @@ export const HUB_LANDMARK_POSITIONS = {
 } as const;
 
 export const HUB_CLEARING_RADIUS = 31;
+
+/** Shared position of the practice target so solo rendering and server authority agree. */
+export const HUB_TRAINING_DUMMY_POSITION = [8, 0, 10] as const;

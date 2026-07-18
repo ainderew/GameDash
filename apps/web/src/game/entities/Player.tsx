@@ -21,10 +21,16 @@ import { netGame } from '@/net/netGame';
 import { feel } from '@/game/feel/config';
 import { playFootstep, playJump, playDoubleJump } from '@/game/feel/audio';
 import { heightAt } from '@sim/terrain/terrainHeight';
-import { DODGE_DURATION_MS, RELIC_CATCH_ROOT_MS, RELIC_CORRUPTION_TUNING } from '@shared/balance';
+import {
+  DODGE_DURATION_MS,
+  PLAYER_RUN_ANIM_THRESHOLD,
+  RELIC_CATCH_ROOT_MS,
+  RELIC_CORRUPTION_TUNING,
+} from '@shared/balance';
 import { relicNet } from '@/net/relicNet';
 import { netClient } from '@/net/client';
 import { CorruptionArmTendrils } from '@/game/fx/CorruptionArmTendrils';
+import { heroRig } from '@/game/entities/heroRig';
 
 interface Props {
   /** GameCanvas passes this so the camera can follow the player group. */
@@ -44,8 +50,8 @@ const makePlayerEntity = (): Entity => ({
 
 /** Moving at all → at least walk. */
 const WALK_SPEED_THRESHOLD = 0.5;
-/** Between walk (2.8) and sprint (6) speeds — above this the run clip plays. */
-const RUN_SPEED_THRESHOLD = 4.4;
+/** Shared midpoint between doubled walk and sprint speeds. */
+const RUN_SPEED_THRESHOLD = PLAYER_RUN_ANIM_THRESHOLD;
 /** Airborne threshold, world units — above this the jump clip plays. */
 const AIRBORNE_Y = 0.06;
 /** How long the hurt clip plays after a hit lands ("Hit To Body" is a self-contained ~0.83s
@@ -73,10 +79,10 @@ const STEP_LENGTH = { walk: 1.35, run: 1.75 } as const;
 const PLAYER_PRIORITY = -50;
 /** Which animation state each combo move's clip plays. */
 const ATTACK_STATE: Record<ComboClip, CharState> = {
-  light1: 'attack-light1',
-  light2: 'attack-light2',
-  spin: 'attack-spin',
-  finisher: 'attack-finisher',
+  horizontal: 'attack-horizontal',
+  reverse: 'attack-reverse',
+  overhead: 'attack-overhead',
+  thrust: 'attack-thrust',
 };
 /**
  * Mixamo right-hand bone the weapon mounts onto. GLTFLoader strips reserved chars (`:`)
@@ -138,6 +144,8 @@ export const Player = ({ playerRef }: Props) => {
     flashMats.current = mats;
     setHandBone(hand);
     setArmBones([leftArm, rightArm]);
+    // Publish the live rig so pose-reading VFX (dash ghost trail) can clone it.
+    heroRig.root = root;
   }, []);
 
   const weapon = getWeapon(weaponId);
@@ -169,6 +177,7 @@ export const Player = ({ playerRef }: Props) => {
     return () => {
       world.remove(entity);
       entityRef.current = null;
+      heroRig.root = null;
     };
   }, []);
 
@@ -193,7 +202,9 @@ export const Player = ({ playerRef }: Props) => {
     // Resolve the animation state by priority.
     const [vx, , vz] = e.velocity.linear;
     const speed = Math.hypot(vx, vz);
-    const dead = (e.health?.current ?? 1) <= 0;
+    // Multiplayer reconciliation sends the authoritative downed bit before the local health
+    // bridge necessarily reaches zero. Either signal must start the death clip immediately.
+    const dead = e.downed === true || (e.health?.current ?? 1) <= 0;
     const du = e.dodgingUntil ?? 0;
     if (du > lastDodgeStamp.current) {
       lastDodgeStamp.current = du;
@@ -203,7 +214,6 @@ export const Player = ({ playerRef }: Props) => {
     // The swing window is authored by the ECS (attackAnimUntil = the clip's real length,
     // zeroed by a dodge-cancel) — so the attack anim always finishes unless canceled.
     const attacking = now < (e.attackAnimUntil ?? 0);
-
     const hurting = e.hitReactionAt != null && now < e.hitReactionAt + HURT_ANIM_MS;
 
     // Relic throw: hold the wind-up while aiming AND planted — while aim-walking the
@@ -327,10 +337,10 @@ export const Player = ({ playerRef }: Props) => {
         dodgePath="/models/hero/anim-roll.glb"
         hurtPath="/models/hero/anim-hurt.glb"
         deathPath="/models/hero/anim-death.glb"
-        spinPath="/models/hero/anim-spin.glb"
-        light1Path="/models/hero/anim-attack-l1.glb"
-        light2Path="/models/hero/anim-attack-l2.glb"
-        finisherPath="/models/hero/anim-finisher.glb"
+        horizontalPath="/models/hero/anim-combo-horizontal.glb"
+        reversePath="/models/hero/anim-combo-reverse.glb"
+        overheadPath="/models/hero/anim-combo-overhead.glb"
+        thrustPath="/models/hero/anim-combo-thrust.glb"
         throwPath="/models/hero/anim-throw.glb"
         catchPath="/models/hero/anim-catch.glb"
         targetHeight={1.8}

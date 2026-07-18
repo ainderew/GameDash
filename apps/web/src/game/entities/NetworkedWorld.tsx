@@ -3,18 +3,15 @@ import { useEffect, useRef } from 'react';
 import { world } from '@/game/ecs/world';
 import type { Entity } from '@sim/components';
 import { sampleWithUnderrunPolicy } from '@sim/interp';
-import {
-  INTERP_UNDERRUN_DEADRECKON_MS,
-  INTERP_UNDERRUN_HOLD_MS,
-} from '@shared/net/constants';
+import { INTERP_UNDERRUN_DEADRECKON_MS, INTERP_UNDERRUN_HOLD_MS } from '@shared/net/constants';
 import { MONSTER_ARCHETYPES, type MonsterArchetype } from '@shared/monsters';
 import { ENTITY_KIND } from '@shared/net/snapshot';
 import { gameNow } from '@/game/feel/time';
 import { netClient } from '@/net/client';
 
 /**
- * Renders the SERVER-AUTHORITATIVE world in a networked expedition. In solo/hub play the
- * client sim owns monsters; in a networked session the server owns them and the client only
+ * Renders the SERVER-AUTHORITATIVE shared world. In a networked session the server owns
+ * expedition monsters/projectiles and the hub training dummy; the client only
  * PREDICTS its own avatar (stepSim authority 'local' spawns nothing), so this component is
  * the sole source of monster entities on the client:
  *
@@ -42,7 +39,7 @@ export const NetworkedWorld = () => {
 
   useFrame(() => {
     const view = netClient.remoteServerEntities();
-    const renderT = netClient.serverNow() - netClient.interpDelayMs();
+    const renderT = netClient.renderServerTime();
     const map = owned.current;
 
     for (const [id, se] of view) {
@@ -92,7 +89,11 @@ const makeNetworkedEntity = (
   if (kind === ENTITY_KIND.projectile) {
     // Projectiles.tsx renders by faction; the wire doesn't carry it, so show them as the
     // common case (monster shots). Player shots reading purple is a minor cosmetic miss.
-    return { transform: { position: [0, -1000, 0], rotationY: 0 }, projectile: true, faction: 'monster' };
+    return {
+      transform: { position: [0, -1000, 0], rotationY: 0 },
+      projectile: true,
+      faction: 'monster',
+    };
   }
   if (kind === ENTITY_KIND.pickup) {
     // Pickups.tsx colors by tableId; the count is authoritative (materialTally), so default
@@ -107,6 +108,7 @@ const makeNetworkedEntity = (
     health: { current: Math.max(1, hp || max), max },
     faction: 'monster',
     monster: mk,
+    trainingDummy: mk === 'trainingDummy' ? true : undefined,
     radius: def?.radius ?? 0.6,
   };
 };

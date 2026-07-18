@@ -1,7 +1,6 @@
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo } from 'react';
 import {
-  BufferGeometry,
   Color,
   DoubleSide,
   Float32BufferAttribute,
@@ -13,7 +12,7 @@ import {
   Vector2,
   Vector3,
 } from 'three';
-import type { Mesh, MeshStandardMaterial, Texture } from 'three';
+import type { BufferGeometry, Mesh, MeshStandardMaterial, Texture } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt, pathMask, hubRoadMask } from '@sim/terrain/terrainHeight';
 import { SUN_POSITION } from '@/game/world/SkyAndLight';
@@ -200,6 +199,7 @@ const FRAG = /* glsl */ `
   uniform vec3 uSunDir;
   uniform vec3 uAmbientLight;
   uniform vec3 uSunLight;
+  uniform float uPurpleMix;
 
   varying float vT;
   varying float vAO;
@@ -226,6 +226,14 @@ const FRAG = /* glsl */ `
     // Melt the lowest part of each tuft into the terrain colour, with a touch more
     // root→tip contrast so individual blades have depth.
     col = mix(uRootColor, col, smoothstep(0.03, 0.60, vT));
+    // Expedition vegetation uses a fully purple root-to-tip family; this happens after
+    // the terrain-root blend so stems and roots cannot retain the original green/grey.
+    vec3 purplePlant = mix(
+      vec3(0.075, 0.012, 0.13),
+      vec3(0.42, 0.12, 0.64),
+      smoothstep(0.02, 0.88, vT * 0.72 + atlasValue * 0.28)
+    );
+    col = mix(col, purplePlant, uPurpleMix);
     // Pack's baked occlusion separates blades without turning clump interiors black.
     col *= mix(0.72, 1.03, vAO);
     vec3 n = normalize(vWorldNormal);
@@ -360,6 +368,8 @@ const buildField = (
   map: Texture,
   clearRadius: number,
   plazaFill: boolean,
+  purplePlants: boolean,
+  avoid?: (x: number, z: number) => boolean,
 ) => {
   const material = new ShaderMaterial({
     vertexShader: VERT,
@@ -377,6 +387,7 @@ const buildField = (
       uSunDir: { value: new Vector3(...SUN_POSITION).normalize() },
       uAmbientLight: { value: new Color('#a9adb7') },
       uSunLight: { value: new Color('#c9cad0') },
+      uPurpleMix: { value: purplePlants ? 1 : 0 },
     },
     side: DoubleSide,
     fog: true,
@@ -411,6 +422,7 @@ const buildField = (
       if (Math.hypot(x, z) < clearRadius) continue;
       if (heightAt(x, z) > MAX_TERRAIN_Y) continue; // stay off the steep peaks
       if (pathMask(x, z) > 0.35) continue; // and off the dirt trail
+      if (avoid?.(x, z)) continue;
 
       // CLUMPED CONCENTRATION: meadow noise gates placement — thick drifts of grass
       // with genuinely thin clearings between them, not one even carpet. The remap
@@ -518,11 +530,17 @@ const buildField = (
 export const GrassField = ({
   clearRadius = 0,
   plazaFill = false,
+  purplePlants = false,
+  avoid,
 }: {
   clearRadius?: number;
   /** Also grow short, patchy tufts across the inner haven plaza dirt (inside the
    * clear radius), dodging the cobbles/buildings/lamps. */
   plazaFill?: boolean;
+  /** Expedition art direction: recolor full grass blades, including their roots. */
+  purplePlants?: boolean;
+  /** Scene-specific exclusions such as authored expedition puddles and landmarks. */
+  avoid?: (x: number, z: number) => boolean;
 }) => {
   const commonShort = useGameModel(VARIANTS[0]!.path);
   const commonTall = useGameModel(VARIANTS[1]!.path);
@@ -542,8 +560,8 @@ export const GrassField = ({
   }, [commonShort.scene]);
 
   const { meshes, material } = useMemo(
-    () => buildField(geometries, map, clearRadius, plazaFill),
-    [geometries, map, clearRadius, plazaFill],
+    () => buildField(geometries, map, clearRadius, plazaFill, purplePlants, avoid),
+    [geometries, map, clearRadius, plazaFill, purplePlants, avoid],
   );
 
   useEffect(

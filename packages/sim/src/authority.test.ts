@@ -55,7 +55,7 @@ describe('sim authority gating', () => {
         (m as Entity & { _startHp: number })._startHp = startHp;
         return {
           player,
-          intentAt: (tick) => ({ moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, melee: tick === 1, aimAt: [0, 2] }),
+          intentAt: (tick) => ({ moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, melee: tick === 1 || tick === 10, aimAt: [0, 2] }),
         };
       },
       30,
@@ -80,7 +80,7 @@ describe('sim authority gating', () => {
         monsterRef.m = m;
         return {
           player,
-          intentAt: (tick) => ({ moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, melee: tick === 1, aimAt: [0, 2] }),
+          intentAt: (tick) => ({ moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, melee: tick === 1 || tick === 10, aimAt: [0, 2] }),
         };
       },
       25,

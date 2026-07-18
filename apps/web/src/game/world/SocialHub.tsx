@@ -28,6 +28,7 @@ import { SpireBackdrop } from '@/game/world/SpireBackdrop';
 import { SummoningShrineRelic } from '@/game/world/SummoningShrineRelic';
 import { ExpeditionPortalVFX } from '@/game/world/ExpeditionPortalVFX';
 import { CampfireVFX } from '@/game/world/CampfireVFX';
+import { HubCrystalClusters } from '@/game/world/CrystalClusters';
 
 interface Props {
   obstacles: React.MutableRefObject<Object3DType[]>;
@@ -84,6 +85,7 @@ const VioletLanternGlow = ({
       opacity: 0.58,
       blending: AdditiveBlending,
       depthWrite: false,
+      fog: false,
       toneMapped: false,
     });
     const coreMaterial = new MeshBasicMaterial({
@@ -664,40 +666,6 @@ const HavenPlaza = () => (
   </group>
 );
 
-/** Temporary modular crystal dressing; replace with authored cluster GLBs when ready. */
-const CrystalCluster = ({
-  position,
-  scale = 1,
-}: {
-  position: [number, number, number];
-  scale?: number;
-}) => (
-  <group position={position} scale={scale}>
-    <mesh castShadow receiveShadow position={[0, 0.12, 0]} scale={[1.45, 0.35, 1.05]}>
-      <dodecahedronGeometry args={[0.62, 0]} />
-      <meshStandardMaterial color="#303343" roughness={0.96} />
-    </mesh>
-    {([
-      [-0.36, 0.72, 0.04, 0.28, 1.25, -0.18],
-      [0.05, 1.0, 0, 0.38, 1.75, 0.08],
-      [0.42, 0.6, 0.12, 0.24, 0.95, 0.22],
-      [0.18, 0.48, -0.32, 0.2, 0.72, -0.1],
-    ] as const).map(([x, y, z, width, height, lean], index) => (
-      <mesh key={index} castShadow position={[x, y, z]} rotation={[lean, 0, lean * 0.45]} scale={[width, height, width]}>
-        <octahedronGeometry args={[0.72, 0]} />
-        <meshStandardMaterial
-          color={index === 1 ? '#8d65c8' : '#67469b'}
-          emissive="#56248c"
-          emissiveIntensity={0.36}
-          roughness={0.32}
-          metalness={0.08}
-        />
-      </mesh>
-    ))}
-    <pointLight position={[0, 0.85, 0]} color="#9a5cff" intensity={1.15} distance={3.4} decay={2} />
-  </group>
-);
-
 /** Purposeful mid-ground dressing based on the concept's gathering-place silhouette. */
 const HavenDressing = () => (
   <group>
@@ -705,10 +673,7 @@ const HavenDressing = () => (
     <HubModel path={MODEL_PATHS.bench} targetSpan={2.15} position={[6.5, 0, 5.8]} rotationY={Math.PI - 0.73} />
     <HubModel path={MODEL_PATHS.banner} targetHeight={3.35} position={[-5.2, 0, -18.1]} rotationY={-Math.PI / 2} wind />
     <HubModel path={MODEL_PATHS.banner} targetHeight={3.35} position={[5.2, 0, -18.1]} rotationY={-Math.PI / 2} wind />
-    <CrystalCluster position={[-19, 0, -13.5]} scale={1.05} />
-    <CrystalCluster position={[19, 0, -13.5]} scale={1.05} />
-    <CrystalCluster position={[-17.5, 0, 12]} scale={0.68} />
-    <CrystalCluster position={[17.5, 0, 12]} scale={0.68} />
+    <HubCrystalClusters />
   </group>
 );
 

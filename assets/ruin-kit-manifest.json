@@ -1,0 +1,702 @@
+{
+  "kit_id": "outside-town-ruins",
+  "purpose": "Modular dark-fantasy ruin kit for the explorable outside-town expedition area",
+  "conventions": {
+    "authoring_up_axis": "Blender Z-up",
+    "runtime_up_axis": "glTF +Y-up",
+    "units": "meters",
+    "pivot": "bottom-center at ground level",
+    "transforms": "rotation and scale applied before export",
+    "module_export": "one static GLB per module",
+    "runtime_exclusions": [
+      "preview cameras",
+      "preview lights",
+      "preview floor",
+      "armatures",
+      "animations"
+    ]
+  },
+  "paths": {
+    "blender_sources": "assets/blender/",
+    "runtime_models": "apps/web/public/models/ruins/",
+    "shared_textures": "apps/web/public/textures/ruins/",
+    "previews": "assets/preview/",
+    "asset_ledger": "assets/asset-ledger.json",
+    "art_direction_guide": "assets/ruin-art-direction.md",
+    "expedition_layout_registry": "packages/sim/src/terrain/expeditionRuins.ts"
+  },
+  "naming": {
+    "asset_id": "kebab-case, for example ruin-wall-tall-a",
+    "blender_and_glb": "snake_case, for example ruin_wall_tall_a",
+    "shared_material": "ruin_stone"
+  },
+  "shared_materials": {
+    "ruin_stone": {
+      "resolution": 1024,
+      "tileable": true,
+      "base_color": "apps/web/public/textures/ruins/ruin_stone_basecolor.png",
+      "normal": "apps/web/public/textures/ruins/ruin_stone_normal.png",
+      "roughness": "apps/web/public/textures/ruins/ruin_stone_roughness.png",
+      "normal_strength": 0.72,
+      "uv_scale_reference": 2.35,
+      "style": "dark slate, irregular mineral grain, broken fissures, restrained moss",
+      "quality_status": "provisional blockout material",
+      "upgrade_required": true,
+      "upgrade_target": "2K physically scaled CC0 photogrammetry material from Poly Haven or ambientCG",
+      "rule": "Reuse the selected final scanned material on the ruin kit instead of creating unique generic noise textures per mesh"
+    },
+    "ruin_granite_scanned": {
+      "resolution": 2048,
+      "tileable": true,
+      "base_color": "apps/web/public/textures/ruins/granite_wall/ruin_granite_basecolor_2k.jpg",
+      "normal": "apps/web/public/textures/ruins/granite_wall/ruin_granite_normal_gl_2k.jpg",
+      "roughness": "apps/web/public/textures/ruins/granite_wall/ruin_granite_roughness_2k.jpg",
+      "ambient_occlusion": "apps/web/public/textures/ruins/granite_wall/ruin_granite_ao_2k.jpg",
+      "displacement": "apps/web/public/textures/ruins/granite_wall/ruin_granite_displacement_2k.jpg",
+      "normal_strength": 0.88,
+      "physical_span_m": 1.9,
+      "style": "cool dark rough-hewn granite with scanned mineral and fracture detail",
+      "quality_status": "production scanned material",
+      "source": "https://polyhaven.com/a/granite_wall",
+      "license": "CC0",
+      "rule": "Preserve the 1.9m physical texture span and reuse this material for the production ruin family"
+    },
+    "ruin_dark_rock": {
+      "resolution": 2048,
+      "tileable": true,
+      "base_color": "apps/web/public/textures/ruins/dark_rock/dark_rock_diff_2k.jpg",
+      "normal": "apps/web/public/textures/ruins/dark_rock/dark_rock_nor_gl_2k.jpg",
+      "roughness": "apps/web/public/textures/ruins/dark_rock/dark_rock_rough_2k.jpg",
+      "ambient_occlusion": "apps/web/public/textures/ruins/dark_rock/dark_rock_ao_2k.jpg",
+      "displacement": "apps/web/public/textures/ruins/dark_rock/dark_rock_disp_2k.jpg",
+      "normal_strength": 1.05,
+      "physical_span_m": 2.4,
+      "style": "charcoal monolithic rock with broad fractures, fine fissures, and no painted masonry joints",
+      "quality_status": "production hero-ruin material",
+      "source": "https://polyhaven.com/a/dark_rock",
+      "license": "CC0",
+      "rule": "Use for individually modeled monoliths and hero ruins; preserve the 2.4m physical span and let geometry define every masonry joint"
+    }
+  },
+  "quality_targets": {
+    "triangle_range_low_wall": [1500, 3000],
+    "triangle_range_tall_wall": [2500, 5000],
+    "triangle_range_hero_landmark": [5000, 12000],
+    "materials_per_module": 1,
+    "baked_lighting": false,
+    "shared_texture_resolution": 2048,
+    "shared_texture_physical_span_m": 2.0,
+    "minimum_unique_stone_shapes_per_family": 5,
+    "final_material_source": "scanned or photogrammetry-based PBR with recorded license and physical scale",
+    "required_attributes": ["POSITION", "NORMAL", "TEXCOORD_0"]
+  },
+  "modules": [
+    {
+      "id": "ruin-wall-tall-a",
+      "status": "authored",
+      "source": "assets/blender/ruin_wall_tall_a.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_wall_tall_a.glb",
+      "preview": "assets/preview/ruin-wall-tall-a.png",
+      "material": "ruin_stone",
+      "dimensions_m": {
+        "width": 4.0,
+        "body_depth": 0.6,
+        "total_depth_with_rubble": 0.792,
+        "height": 3.0
+      },
+      "triangles": 1760,
+      "quality_review": "Blockout-approved; requires final scanned material and a more varied stone/fracture pass before environment final",
+      "design_language": [
+        "asymmetric collapsed silhouette",
+        "staggered chunky masonry",
+        "irregular broken crown",
+        "restrained integrated rubble",
+        "readable from the gameplay camera"
+      ],
+      "runtime_placement": [
+        { "id": "west-wall-tall", "x": -18.8, "z": -14.7, "rotation_y": 0.32 },
+        { "id": "east-wall-tall", "x": 21.57, "z": -16.57, "rotation_y": 2.8415926535897933 }
+      ],
+      "placement_status": "Placed in EXPEDITION_RUIN_PLACEMENTS; overlaps Low B and uses seam rubble to conceal modular ends"
+    },
+    {
+      "id": "ruin-wall-low-b",
+      "status": "production",
+      "source": "assets/blender/ruin_wall_low_b.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_wall_low_b.glb",
+      "preview": "assets/preview/ruin-wall-low-b.png",
+      "neutral_preview": "assets/preview/ruin-wall-low-b-neutral.png",
+      "material": "ruin_granite_scanned",
+      "dimensions_m": {
+        "width": 4.0,
+        "body_depth": 0.64,
+        "total_depth_with_rubble": 1.434,
+        "height": 1.4
+      },
+      "triangles": 1504,
+      "quality_review": "Production irregular-masonry revision complete: 31 individually warped stones, uneven staggered courses, broken seam lines, chipped corners, randomized depth/lean, seven angular rubble chunks, physically scaled 2K CC0 granite PBR, and optimized Draco/WebP delivery",
+      "design_language": [
+        "asymmetric broken saddle silhouette",
+        "surviving left shoulder",
+        "central gameplay sightline dip",
+        "collapsed right end",
+        "six uneven courses with no continuous ruler-straight seam",
+        "31 stones with unique corner warping, depth offsets, and rotations",
+        "seven angular fractured rubble chunks",
+        "grid-compatible with ruin-wall-tall-a"
+      ],
+      "runtime_placement": [
+        { "id": "west-wall-low", "x": -15.45, "z": -15.75, "rotation_y": 0.32 },
+        { "id": "east-wall-low", "x": 18.1, "z": -15.5, "rotation_y": -0.3 }
+      ],
+      "placement_status": "Placed in EXPEDITION_RUIN_PLACEMENTS as overlapping wall runs with broken ends hidden behind rubble"
+    },
+    {
+      "id": "ruin-arch-broken",
+      "status": "production",
+      "source": "assets/blender/ruin_arch_broken.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_arch_broken.glb",
+      "preview": "assets/preview/ruin-arch-broken.png",
+      "neutral_preview": "assets/preview/ruin-arch-broken-neutral.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width": 4.0,
+        "body_depth": 1.18,
+        "total_depth_with_rubble": 2.224,
+        "height": 3.8,
+        "approximate_clear_opening_width": 1.5
+      },
+      "triangles": 8464,
+      "quality_review": "Massive gate-fragment v2 approved against the improved outside-town reference: broad displaced fracture planes, large monolithic stones, thick partially buried supports, a nearly continuous radial arch with one believable crown failure, grounded boulder-scale rubble, sparse moss, homogeneous dark-rock PBR, neutral/night review, and optimized Draco/WebP delivery. Replaces rejected small-brick v1.",
+      "design_language": [
+        "massive ancient gate fragment rather than stacked brick towers",
+        "upper-right crown failure with most of the arch curve still readable",
+        "tall load-bearing left monolith and shorter right survivor",
+        "clear navigable central portal",
+        "large radial voussoirs locked into thick spandrel masses",
+        "faceted geometric surface displacement and broad chipped planes",
+        "six boulder-scale collapsed masses and sparse moss ledges",
+        "no texture-painted masonry courses or doubled seam pattern",
+        "grid-compatible 4m modular footprint"
+      ],
+      "collision_hint": "Use two broad simplified pier colliders, keep the central portal open, and add only low optional rubble boxes",
+      "runtime_placement": [
+        {
+          "id": "west-architectural-arch",
+          "x": -8.25,
+          "z": -18.15,
+          "rotation_y": 0.38,
+          "y_offset": 0.1
+        }
+      ],
+      "placement_status": "Placed off-axis as non-interactive architecture; expedition-gate.glb remains the only functional portal"
+    },
+    {
+      "id": "ruin-column-intact",
+      "status": "production",
+      "source": "assets/blender/ruin_column_intact.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_column_intact.glb",
+      "preview": "assets/preview/ruin-column-intact.png",
+      "neutral_preview": "assets/preview/ruin-column-intact-neutral.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width": 2.0,
+        "depth": 2.0,
+        "height": 4.6
+      },
+      "triangles": 4072,
+      "quality_review": "Production monumental column complete: exact modular footprint, broad stepped plinth, single continuous tapered octagonal shaft, flared capital and oversized abacus, controlled faceted displacement, weathered non-load-bearing edges, restrained base rubble, homogeneous dark-rock PBR, neutral/night review, and optimized Draco/WebP delivery",
+      "design_language": [
+        "structurally intact and vertically stable",
+        "one continuous tapered shaft rather than stacked wall blocks",
+        "broad partially buried stepped plinth",
+        "heavy dark-fantasy capital readable at gameplay distance",
+        "large fracture planes with controlled edge damage",
+        "three restrained base rubble pieces",
+        "vegetation supplied by separate environment scatter assets",
+        "2m square modular placement footprint"
+      ],
+      "collision_hint": "Use one tapered shaft/pedestal collider plus a broad base box; ignore the three small rubble pieces",
+      "runtime_placement": [
+        {
+          "id": "west-column-intact",
+          "x": -11.5,
+          "z": -19.15,
+          "rotation_y": -0.08,
+          "scale": 0.96,
+          "y_offset": -0.03
+        },
+        {
+          "id": "east-column-intact",
+          "x": 12.0,
+          "z": -19.25,
+          "rotation_y": 0.14,
+          "scale": 0.9,
+          "y_offset": 0.08
+        }
+      ],
+      "placement_status": "Placed in the west arch group and east foundation group"
+    },
+    {
+      "id": "ruin-column-broken",
+      "status": "production",
+      "source": "assets/blender/ruin_column_broken.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_column_broken.glb",
+      "preview": "assets/preview/ruin-column-broken.png",
+      "neutral_preview": "assets/preview/ruin-column-broken-neutral.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width": 2.0,
+        "depth": 2.0,
+        "height": 2.9
+      },
+      "triangles": 3248,
+      "quality_review": "Production broken-column companion complete: exact shared footprint, matching four-level plinth, continuous tapered octagonal stump, directional jagged shear crown, side-readable fallen shaft length, two capital fragments, three subordinate rubble chips, homogeneous dark-rock PBR, neutral/night review, and optimized Draco/WebP delivery",
+      "design_language": [
+        "same architectural family and placement grid as ruin-column-intact",
+        "upper mass sheared toward the front-right",
+        "highest jagged shaft rim survives toward the back-left",
+        "recognizable horizontal octagonal shaft fragment",
+        "two fallen capital fragments concentrated with the collapse",
+        "limited subordinate debris rather than a uniform rubble halo",
+        "vegetation supplied by separate environment scatter assets",
+        "2m square modular placement footprint"
+      ],
+      "collision_hint": "Use a broad base box plus a short tapered stump collider; ignore all loose fragments",
+      "runtime_placement": [
+        {
+          "id": "west-column-broken",
+          "x": -5.15,
+          "z": -18.6,
+          "rotation_y": 0.24,
+          "y_offset": -0.05
+        },
+        {
+          "id": "east-column-broken",
+          "x": 14.85,
+          "z": -18.65,
+          "rotation_y": -0.36,
+          "scale": 0.94,
+          "y_offset": -0.02
+        }
+      ],
+      "placement_status": "Placed as asymmetric companions to the intact columns"
+    },
+    {
+      "id": "ruin-rubble-large",
+      "status": "production",
+      "source": "assets/blender/ruin_rubble_large.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_rubble_large.glb",
+      "preview": "assets/preview/ruin-rubble-large.png",
+      "neutral_preview": "assets/preview/ruin-rubble-large-neutral.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width": 4.0,
+        "depth": 3.0,
+        "height": 1.55
+      },
+      "triangles": 5004,
+      "quality_review": "Production large landmark rubble complete: 70/25/5 hierarchy, three dominant interlocked masses, recognizable fallen column/capital/arch fragments, four medium bridge pieces, minimal perimeter chips, broad faceted displacement, all dominant undersides sunk into the terrain plane, homogeneous dark-rock PBR, neutral/night review, and optimized Draco/WebP delivery",
+      "design_language": [
+        "three dominant masses establish one readable silhouette",
+        "recognizable fallen octagonal column length, capital slab, and arch voussoir",
+        "four medium fragments bridge rather than scatter the main forms",
+        "only four subordinate perimeter chips",
+        "dominant masses penetrate the ground plane instead of floating",
+        "1.55m maximum height preserves useful gameplay sightlines",
+        "vegetation and crystals supplied by separate environment scatter assets",
+        "4m by 3m modular placement footprint"
+      ],
+      "collision_hint": "Use three simplified dominant-mass boxes plus an optional fallen-column capsule; ignore medium and small fragments",
+      "runtime_placement": [
+        {
+          "id": "west-rubble-landmark",
+          "x": -6.8,
+          "z": -12.8,
+          "rotation_y": 1.9,
+          "scale": 0.78,
+          "y_offset": -0.08
+        },
+        {
+          "id": "east-rubble-landmark",
+          "x": 7.35,
+          "z": -14.6,
+          "rotation_y": -0.34,
+          "scale": 0.96,
+          "y_offset": -0.08
+        }
+      ],
+      "placement_status": "Placed as paired mid-ground path-framing masses with distinct rotations and scale"
+    },
+    {
+      "id": "ruin-rubble-small",
+      "status": "production",
+      "source": "assets/blender/ruin_rubble_small.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_rubble_small.glb",
+      "preview": "assets/preview/ruin-rubble-small.png",
+      "neutral_preview": "assets/preview/ruin-rubble-small-neutral.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width": 2.0,
+        "depth": 1.6,
+        "height": 0.8
+      },
+      "triangles": 792,
+      "quality_review": "Production small rubble complete: compact 70/25/5 hierarchy, two interlocked dominant masses, recognizable fallen octagonal shaft fragment, three medium bridge fragments, three restrained perimeter chips, exact grounded pivot, homogeneous dark-rock PBR, neutral/night review, and optimized Draco/WebP delivery",
+      "design_language": [
+        "one strong asymmetric fallen-slab silhouette",
+        "secondary fracture mass interlocks rather than forming a separate pile",
+        "recognizable octagonal shaft fragment reads from the gameplay camera",
+        "three medium bridge fragments connect the dominant forms",
+        "only three subordinate perimeter chips",
+        "0.8m maximum height keeps the prop easy to see and walk around",
+        "vegetation and crystals supplied by separate environment scatter assets",
+        "2m by 1.6m modular placement footprint"
+      ],
+      "collision_hint": "Use one low dominant-mass box; ignore the shaft and loose fragments",
+      "runtime_placement": [
+        {
+          "id": "west-wall-seam-rubble",
+          "x": -17.0,
+          "z": -15.22,
+          "rotation_y": -0.42,
+          "y_offset": -0.04
+        },
+        {
+          "id": "west-sanctuary-rubble",
+          "x": -6.05,
+          "z": -17.4,
+          "rotation_y": 0.7,
+          "scale": 0.92,
+          "y_offset": -0.06
+        },
+        {
+          "id": "east-wall-seam-rubble",
+          "x": 19.73,
+          "z": -16.02,
+          "rotation_y": 0.48,
+          "scale": 1.04,
+          "y_offset": -0.05
+        },
+        {
+          "id": "east-column-rubble",
+          "x": 13.7,
+          "z": -18.05,
+          "rotation_y": -0.64,
+          "scale": 0.88,
+          "y_offset": -0.06
+        }
+      ],
+      "placement_status": "Placed at wall overlaps and column transitions to conceal seams and ground architecture"
+    },
+    {
+      "id": "ruin-foundation-slab",
+      "status": "production",
+      "source": "assets/blender/ruin_foundation_slab.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_foundation_slab.glb",
+      "preview": "assets/preview/ruin-foundation-slab.png",
+      "neutral_preview": "assets/preview/ruin-foundation-slab-neutral.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width": 4.0,
+        "depth": 4.0,
+        "height": 0.42
+      },
+      "triangles": 1032,
+      "quality_review": "Production foundation slab complete: buried continuous footing, broad stable center, six fitted cap plates with non-repeating seams and height variation, exposed perimeter construction, one localized collapsed corner, homogeneous dark-rock PBR, neutral/night review, and optimized Draco/WebP delivery",
+      "design_language": [
+        "broad load-bearing center rather than a decorative tiled floor",
+        "large fitted plates create architectural scale",
+        "irregular perimeter and chipped planes prevent a perfect modern rectangle",
+        "localized front-right collapse concentrates damage instead of scattering it uniformly",
+        "approximately 2.3m by 2.1m stable central support zone",
+        "low profile transitions cleanly between terrain and vertical ruins",
+        "vegetation and debris supplied by separate environment scatter assets",
+        "4m square modular placement footprint"
+      ],
+      "collision_hint": "Use one 4m square low box collider and omit the localized corner rubble",
+      "runtime_placement": [
+        {
+          "id": "west-arch-foundation",
+          "x": -8.25,
+          "z": -18.15,
+          "rotation_y": 0.38,
+          "y_offset": -0.28
+        },
+        {
+          "id": "east-column-foundation",
+          "x": 12.5,
+          "z": -19.2,
+          "rotation_y": -0.12,
+          "y_offset": -0.3
+        }
+      ],
+      "placement_status": "Placed partially buried beneath the west arch and east column group"
+    },
+    {
+      "id": "ruin-tower-silhouette-a",
+      "status": "production",
+      "source": "assets/blender/ruin_tower_silhouette_a.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_tower_silhouette_a.glb",
+      "preview": "assets/preview/ruin-tower-silhouette-a.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width_with_rubble": 5.998,
+        "depth_with_rubble": 5.464,
+        "height": 10.0
+      },
+      "triangles": 1424,
+      "quality_review": "Production distant watchtower complete: broad four-spine shell, true lancet opening, asymmetric left-heavy surviving crown, localized upper-right failure, grounded base collapse, physically scaled dark-rock PBR, and optimized Draco/1K WebP delivery",
+      "design_language": [
+        "broad watchtower silhouette readable through expedition fog",
+        "four unequal octagonal corner spines",
+        "real front and rear negative-space openings",
+        "left-heavy crown survival with a localized upper-right collapse",
+        "few large architectural masses instead of foreground brick noise",
+        "restrained grounded rubble concentrated below the failed crown"
+      ],
+      "collision_hint": "Skyline placement should remain outside the playable ring; omit gameplay collision unless reused as an approachable landmark",
+      "runtime_placement": [
+        {
+          "id": "northwest-mid-watchtower",
+          "depth_band": "mid",
+          "x": -24,
+          "z": -45,
+          "rotation_y": 0.55,
+          "scale": 1.05,
+          "y_offset": -0.48
+        },
+        {
+          "id": "east-mid-watchtower",
+          "depth_band": "mid",
+          "x": 47,
+          "z": -20,
+          "rotation_y": -1.1285,
+          "scale": 0.78,
+          "y_offset": -0.42
+        },
+        {
+          "id": "north-far-watchtower",
+          "depth_band": "far",
+          "x": -12,
+          "z": -72,
+          "rotation_y": 0.1251,
+          "scale": 0.82,
+          "y_offset": -0.62
+        },
+        {
+          "id": "northeast-far-watchtower",
+          "depth_band": "far",
+          "x": 59,
+          "z": -55,
+          "rotation_y": -0.8605,
+          "scale": 0.75,
+          "y_offset": -0.62
+        },
+        {
+          "id": "southeast-far-watchtower",
+          "depth_band": "far",
+          "x": 58,
+          "z": 57,
+          "rotation_y": -2.2975,
+          "scale": 0.68,
+          "y_offset": -0.56
+        },
+        {
+          "id": "west-far-watchtower",
+          "depth_band": "far",
+          "x": -76,
+          "z": 14,
+          "rotation_y": 1.703,
+          "scale": 0.7,
+          "y_offset": -0.58
+        }
+      ],
+      "placement_status": "Placed six times across mid/far depth bands in EXPEDITION_SKYLINE_PLACEMENTS and instanced as one draw-call batch"
+    },
+    {
+      "id": "ruin-tower-silhouette-b",
+      "status": "production",
+      "source": "assets/blender/ruin_tower_silhouette_b.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_tower_silhouette_b.glb",
+      "preview": "assets/preview/ruin-tower-silhouette-b.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width_with_rubble": 5.169,
+        "depth_with_rubble": 4.925,
+        "height": 8.433
+      },
+      "triangles": 1108,
+      "quality_review": "Production split-belfry silhouette complete: narrower forked massing, tall open belfry, rear stair-turret counterform, front-right directional collapse, fallen cornice, physically scaled dark-rock PBR, and optimized Draco/1K WebP delivery",
+      "design_language": [
+        "narrower split belfry distinct from Tower A",
+        "forked surviving crown around a true open span",
+        "rear octagonal stair turret creates a secondary silhouette",
+        "front-right collapse direction reinforced by a fallen cornice",
+        "large distant-readable fracture planes",
+        "minimal rubble and no uniform damage halo"
+      ],
+      "collision_hint": "Skyline placement should remain outside the playable ring; omit gameplay collision unless reused as an approachable landmark",
+      "runtime_placement": [
+        {
+          "id": "northeast-mid-belfry",
+          "depth_band": "mid",
+          "x": 27,
+          "z": -46,
+          "rotation_y": -0.5808,
+          "scale": 0.95,
+          "y_offset": -0.42
+        },
+        {
+          "id": "west-mid-belfry",
+          "depth_band": "mid",
+          "x": -43,
+          "z": -30,
+          "rotation_y": 1.0316,
+          "scale": 0.84,
+          "y_offset": -0.4
+        },
+        {
+          "id": "northwest-far-belfry",
+          "depth_band": "far",
+          "x": -54,
+          "z": -54,
+          "rotation_y": 0.8254,
+          "scale": 0.72,
+          "y_offset": -0.58
+        },
+        {
+          "id": "east-far-belfry",
+          "depth_band": "far",
+          "x": 74,
+          "z": 4,
+          "rotation_y": -1.6748,
+          "scale": 0.75,
+          "y_offset": -0.58
+        },
+        {
+          "id": "southwest-far-belfry",
+          "depth_band": "far",
+          "x": -61,
+          "z": 52,
+          "rotation_y": 2.3267,
+          "scale": 0.73,
+          "y_offset": -0.6
+        },
+        {
+          "id": "south-far-belfry",
+          "depth_band": "far",
+          "x": 30,
+          "z": 75,
+          "rotation_y": -2.7211,
+          "scale": 0.7,
+          "y_offset": -0.58
+        }
+      ],
+      "placement_status": "Placed six times across mid/far depth bands in EXPEDITION_SKYLINE_PLACEMENTS and instanced as one draw-call batch"
+    },
+    {
+      "id": "ruin-arch-distant",
+      "status": "production",
+      "source": "assets/blender/ruin_arch_distant.blend",
+      "runtime_model": "apps/web/public/models/ruins/ruin_arch_distant.glb",
+      "preview": "assets/preview/ruin-arch-distant.png",
+      "material": "ruin_dark_rock",
+      "dimensions_m": {
+        "width_with_rubble": 11.672,
+        "depth_with_rubble": 3.279,
+        "height": 7.146,
+        "approximate_clear_opening_width": 4.68
+      },
+      "triangles": 1100,
+      "quality_review": "Grounded compression-arch v2 replaces the rejected floating silhouette: nine mutually bearing voussoirs form a complete load path into oversized imposts, overlapping monolithic piers, independent buried plinths, and deep rear buttresses. Damage is localized to the upper-right outer spandrel and four grounded rubble masses without interrupting the structural arch. The model retains homogeneous dark-rock PBR, no portal treatment, and optimized Draco/1K WebP delivery.",
+      "design_language": [
+        "wide horizontal skyline landmark balancing the two vertical towers",
+        "large open architectural span with no magical portal language",
+        "complete nine-stone compression ring visibly seated into both impost blocks",
+        "broad overlapping piers and separate buried plinths instead of disconnected block stacks or a thin continuous shelf",
+        "localized upper-right spandrel erosion preserves the arch load path",
+        "deep buttresses and side remnants preserve a believable three-dimensional civic ruin",
+        "four restrained grounded rubble masses concentrated below the failed outer wall"
+      ],
+      "collision_hint": "Skyline placement should remain outside the playable ring; if brought forward, use two pier boxes and keep the central opening clear",
+      "runtime_placement": [
+        {
+          "id": "north-mid-arch",
+          "depth_band": "mid",
+          "x": 0,
+          "z": -43,
+          "rotation_y": 0.03,
+          "scale": 1.05,
+          "y_offset": -0.38
+        },
+        {
+          "id": "east-mid-arch",
+          "depth_band": "mid",
+          "x": 42,
+          "z": -34,
+          "rotation_y": -0.9503,
+          "scale": 0.86,
+          "y_offset": -0.36
+        },
+        {
+          "id": "north-far-arch",
+          "depth_band": "far",
+          "x": 20,
+          "z": -76,
+          "rotation_y": -0.2073,
+          "scale": 0.78,
+          "y_offset": -0.58
+        },
+        {
+          "id": "west-far-arch",
+          "depth_band": "far",
+          "x": -72,
+          "z": -13,
+          "rotation_y": 1.4522,
+          "scale": 0.7,
+          "y_offset": -0.56
+        },
+        {
+          "id": "south-far-arch",
+          "depth_band": "far",
+          "x": -8,
+          "z": 76,
+          "rotation_y": 2.9967,
+          "scale": 0.72,
+          "y_offset": -0.58
+        },
+        {
+          "id": "southwest-far-arch",
+          "depth_band": "far",
+          "x": -70,
+          "z": 35,
+          "rotation_y": 1.9844,
+          "scale": 0.68,
+          "y_offset": -0.56
+        }
+      ],
+      "placement_status": "Placed six times across mid/far depth bands in EXPEDITION_SKYLINE_PLACEMENTS and instanced as one draw-call batch"
+    }
+  ],
+  "next_model_checklist": [
+    "Read assets/ruin-art-direction.md before modeling",
+    "Use ruin_wall_low_b revision production-irregular-masonry-v3 as the current quality and scale reference",
+    "Model at real meter scale beside ruin_wall_low_b and preserve the declared modular footprint",
+    "Define an asymmetric silhouette, negative spaces, and collapse direction before building individual stones",
+    "Apply large-, medium-, and small-scale variation; texture noise alone does not count as geometric variation",
+    "Stagger joints and vary stone height, depth, front plane, lean, chipped corners, and fracture planes independently",
+    "Reject ruler-straight seams, repeated joint positions, a shared front plane, and staircase crowns made from intact boxes",
+    "Use angular unique rubble shapes rather than repeated cubes or smooth spheres",
+    "Use geometry for silhouette and medium damage; use the shared PBR material for microdetail",
+    "Choose material by modeling strategy: never project a scan containing masonry courses onto separately modeled stones; use homogeneous ruin_dark_rock at 2.4m for monoliths and hero ruins",
+    "Use a high-to-low bake for hero or close-view modules",
+    "Review untextured and flat-shaded geometry before judging the material",
+    "Review in neutral lighting and the game night lighting",
+    "Keep the bottom-center pivot at ground level",
+    "Apply rotation and scale",
+    "Export only the selected module from the active Blender scene",
+    "Disable animation, camera, and light export",
+    "Add the module and its eventual world transform to this manifest"
+  ]
+}

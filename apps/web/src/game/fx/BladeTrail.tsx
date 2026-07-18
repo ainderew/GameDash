@@ -1,9 +1,15 @@
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
-import { AdditiveBlending, BufferGeometry, Float32BufferAttribute, MeshBasicMaterial, Vector3 } from 'three';
+import {
+  AdditiveBlending,
+  BufferGeometry,
+  Float32BufferAttribute,
+  MeshBasicMaterial,
+  Vector3,
+} from 'three';
 import type { Mesh } from 'three';
 import { world } from '@/game/ecs/world';
-import { comboAt, moveActiveWindow } from '@sim/combat/combo';
+import { moveForAttack, moveTrailWindow } from '@sim/combat/combo';
 import { weaponSockets } from '@/game/combat/weaponSockets';
 import { currentWeapon } from '@/game/combat/weaponStore';
 import { gameNow } from '@/game/feel/time';
@@ -18,7 +24,14 @@ const players = world.with('playerControlled', 'transform');
 export const BladeTrail = () => {
   const mesh = useRef<Mesh>(null);
   const material = useMemo(
-    () => new MeshBasicMaterial({ transparent: true, opacity: 0, vertexColors: true, blending: AdditiveBlending, depthWrite: false }),
+    () =>
+      new MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        vertexColors: true,
+        blending: AdditiveBlending,
+        depthWrite: false,
+      }),
     [],
   );
   const geometry = useMemo(() => {
@@ -54,7 +67,7 @@ export const BladeTrail = () => {
     const player = players.first;
     const baseSocket = weaponSockets.base;
     const tipSocket = weaponSockets.tip;
-    if (!out || !player?.attackState || !baseSocket || !tipSocket) {
+    if (!out || !player?.attackState?.dashSlash || !baseSocket || !tipSocket) {
       if (out) out.visible = false;
       return;
     }
@@ -62,7 +75,7 @@ export const BladeTrail = () => {
     const swing = player.attackState.startedAt;
     const age = now - swing;
     // attackState spans windup + active; only draw the real blade during its delivery.
-    const { start, end } = moveActiveWindow(comboAt(player.attackState.combo ?? 0));
+    const { start, end } = moveTrailWindow(moveForAttack(player.attackState));
     if (age < start || age > end) {
       out.visible = false;
       return;
@@ -75,16 +88,24 @@ export const BladeTrail = () => {
     tipSocket.getWorldPosition(tip);
     const h = history.current;
     h.copyWithin(6, 0, (SAMPLES - 1) * 6);
-    h[0] = base.x; h[1] = base.y; h[2] = base.z;
-    h[3] = tip.x; h[4] = tip.y; h[5] = tip.z;
+    h[0] = base.x;
+    h[1] = base.y;
+    h[2] = base.z;
+    h[3] = tip.x;
+    h[4] = tip.y;
+    h[5] = tip.z;
     count.current = Math.min(SAMPLES, count.current + 1);
     const pos = geometry.getAttribute('position') as Float32BufferAttribute;
     const arr = pos.array as Float32Array;
     for (let i = 0; i < count.current; i++) {
       const src = i * 6;
       const dst = i * 6;
-      arr[dst] = h[src]!; arr[dst + 1] = h[src + 1]!; arr[dst + 2] = h[src + 2]!;
-      arr[dst + 3] = h[src + 3]!; arr[dst + 4] = h[src + 4]!; arr[dst + 5] = h[src + 5]!;
+      arr[dst] = h[src]!;
+      arr[dst + 1] = h[src + 1]!;
+      arr[dst + 2] = h[src + 2]!;
+      arr[dst + 3] = h[src + 3]!;
+      arr[dst + 4] = h[src + 4]!;
+      arr[dst + 5] = h[src + 5]!;
     }
     pos.needsUpdate = true;
     material.color.set(currentWeapon().trailColor);
@@ -92,5 +113,13 @@ export const BladeTrail = () => {
     out.visible = count.current > 1;
   });
 
-  return <mesh ref={mesh} geometry={geometry} material={material} frustumCulled={false} visible={false} />;
+  return (
+    <mesh
+      ref={mesh}
+      geometry={geometry}
+      material={material}
+      frustumCulled={false}
+      visible={false}
+    />
+  );
 };

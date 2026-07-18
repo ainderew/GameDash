@@ -1,7 +1,7 @@
 import { useFrame } from '@react-three/fiber';
 import { useAnimations } from '@react-three/drei';
 import { useEffect, useMemo, useRef } from 'react';
-import { Box3, Vector3 } from 'three';
+import { Box3, LoopOnce, Vector3 } from 'three';
 import type { Group, Mesh } from 'three';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { relics, world } from '@/game/ecs/world';
@@ -24,6 +24,7 @@ import { CorruptionArmTendrils } from '@/game/fx/CorruptionArmTendrils';
 const MODEL_PATH = PLAYER_CHARACTERS.druid.modelPath;
 const IDLE_PATH = '/models/hero/anim-idle.glb';
 const WALK_PATH = '/models/hero/anim-walk.glb';
+const DEATH_PATH = '/models/hero/anim-death.glb';
 
 /** Spawn spots + patrol legs (XZ). Spread around the player spawn at passable range. */
 const TEAMMATE_SPAWNS: { pos: [number, number]; patrolTo: [number, number] }[] = [
@@ -50,6 +51,7 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
   const gltf = useGameModel(MODEL_PATH);
   const idle = useGameModel(IDLE_PATH);
   const walk = useGameModel(WALK_PATH);
+  const death = useGameModel(DEATH_PATH);
 
   const scene = useMemo(() => skeletonClone(gltf.scene), [gltf.scene]);
   const armBones = useMemo(() => {
@@ -79,10 +81,11 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
     return [
       prepareClip(idle.animations[0]!, 'idle', bones),
       prepareClip(walk.animations[0]!, 'walk', bones),
+      prepareClip(death.animations[0]!, 'death', bones),
     ];
-  }, [scene, idle, walk]);
+  }, [scene, idle, walk, death]);
   const { actions } = useAnimations(clips, scene);
-  const current = useRef<'idle' | 'walk'>('idle');
+  const current = useRef<'idle' | 'walk' | 'death'>('idle');
 
   useEffect(() => {
     deMetalize(scene);
@@ -94,6 +97,10 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
         mesh.frustumCulled = false;
       }
     });
+    if (actions.death) {
+      actions.death.setLoop(LoopOnce, 1);
+      actions.death.clampWhenFinished = true;
+    }
     actions.idle?.reset().play();
   }, [scene, actions]);
 
@@ -111,7 +118,12 @@ const TeammateAvatar = ({ entity }: { entity: Entity }) => {
       Math.min(1, (relic?.corruption ?? 0) / RELIC_CORRUPTION_TUNING.max),
     );
 
-    const next = Math.hypot(v.linear[0], v.linear[2]) > WALK_SPEED_THRESHOLD ? 'walk' : 'idle';
+    const dead = entity.downed === true || (entity.health?.current ?? 1) <= 0;
+    const next = dead
+      ? 'death'
+      : Math.hypot(v.linear[0], v.linear[2]) > WALK_SPEED_THRESHOLD
+        ? 'walk'
+        : 'idle';
     if (next !== current.current) {
       const from = actions[current.current];
       const to = actions[next];

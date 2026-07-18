@@ -27,7 +27,13 @@ import { DEFAULT_WEAPON_ID, getWeapon } from '@/game/combat/weapons';
 import { netClient } from '@/net/client';
 import { useUIStore, type SessionMemberUI } from '@/ui/store';
 import { relicNet } from '@/net/relicNet';
-import { RELIC_CORRUPTION_TUNING } from '@shared/balance';
+import {
+  PLAYER_RUN_ANIM_TIMESCALE,
+  PLAYER_RUN_ANIM_THRESHOLD,
+  PLAYER_WALK_ANIM_TIMESCALE,
+  RELIC_CORRUPTION_TUNING,
+} from '@shared/balance';
+import { ATTACK_TIMESCALE } from '@sim/combat/combo';
 import { CorruptionArmTendrils } from '@/game/fx/CorruptionArmTendrils';
 
 /**
@@ -42,7 +48,9 @@ const IDLE_PATH = '/models/hero/anim-idle.glb';
 const WALK_PATH = '/models/hero/anim-walk.glb';
 const RUN_PATH = '/models/hero/anim-run.glb';
 const JUMP_PATH = '/models/hero/anim-jump.glb';
-const ATTACK_PATH = '/models/hero/anim-attack-l1.glb';
+// Remote snapshots currently carry only an attack flag, not the combo index. Use the first
+// damaging stage so another player's swing always reads clearly instead of showing anticipation.
+const ATTACK_PATH = '/models/hero/anim-combo-horizontal.glb';
 const DODGE_PATH = '/models/hero/anim-roll.glb';
 const DOWNED_PATH = '/models/hero/anim-death.glb';
 const HURT_PATH = '/models/hero/anim-hurt.glb';
@@ -51,8 +59,9 @@ const CATCH_PATH = '/models/hero/anim-catch.glb';
 
 /** Same locomotion thresholds as Player.tsx so remote avatars read identically. */
 const WALK_SPEED_THRESHOLD = 0.5;
-const RUN_SPEED_THRESHOLD = 4.4;
+const RUN_SPEED_THRESHOLD = PLAYER_RUN_ANIM_THRESHOLD;
 const FADE_S = 0.15;
+const ATTACK_FADE_S = 0.025;
 
 type RemoteAnim =
   'idle' | 'walk' | 'run' | 'jump' | 'attack' | 'dodge' | 'hurt' | 'throw' | 'catch' | 'downed';
@@ -185,7 +194,7 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
     // Sample the shared SERVER-TICK timeline an (adaptive) interp delay in the past —
     // replayed, never guessed. Underruns hold → dead-reckon briefly → hold (Task 5).
     const buffer = netClient.remoteBuffer(member.id);
-    const renderT = netClient.serverNow() - netClient.interpDelayMs();
+    const renderT = netClient.renderServerTime();
     const sample = sampleWithUnderrunPolicy(buffer, renderT, {
       holdMs: INTERP_UNDERRUN_HOLD_MS,
       deadReckonMs: INTERP_UNDERRUN_DEADRECKON_MS,
@@ -232,8 +241,17 @@ const RemoteAvatar = ({ member }: { member: SessionMemberUI }) => {
       if (from && to) {
         // reset() restarts from frame 0 — a one-shot (attack/dodge/downed) plays fully and
         // clamps; a loop (locomotion) loops. crossFade blends off the previous pose.
-        to.reset().play();
-        to.crossFadeFrom(from, FADE_S, false);
+        to.reset();
+        to.timeScale =
+          next === 'attack'
+            ? ATTACK_TIMESCALE.horizontal
+            : next === 'walk'
+              ? PLAYER_WALK_ANIM_TIMESCALE
+              : next === 'run'
+                ? PLAYER_RUN_ANIM_TIMESCALE
+                : 1;
+        to.play();
+        to.crossFadeFrom(from, next === 'attack' ? ATTACK_FADE_S : FADE_S, false);
       }
     }
   });

@@ -17,9 +17,23 @@ import { MELEE_RANGE } from '@shared/balance';
 const players = world.with('playerControlled', 'transform');
 
 /** How long a slash streak stays on screen, ms. */
-const SLASH_FX_MS = 300;
+const SLASH_FX_MS = 500;
 /** Angular half-width of a directional streak, radians. */
 const STREAK_HALF = 0.34;
+/** Width of the dissolve front as a fraction of the streak, tail → head. */
+const FADE_FEATHER = 0.35;
+/** Angular half-width of the full swept arc for horizontal slashes, radians. */
+const SWEEP_HALF = Math.PI / 2.4;
+/** Fraction of the FX lifetime the head takes to cross the arc; the rest is tail burn-off. */
+const SWEEP_END = 0.45;
+/** Length of the glowing tail behind the head, as a fraction of the arc. */
+const TRAIL = 0.35;
+/** Soft edge ahead of the head, as a fraction of the arc. */
+const HEAD_FEATHER = 0.12;
+/** Overbright multiplier at the head so it visibly outshines the dying tail. */
+const HEAD_GLOW = 1.4;
+
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 
 /** A ring sector in the XZ plane centered on +Z; `thetaHalf` = π builds a full ring. */
 const buildArc = (thetaHalf: number, innerMul: number, outerMul: number): BufferGeometry => {
@@ -42,6 +56,7 @@ const buildArc = (thetaHalf: number, innerMul: number, outerMul: number): Buffer
   }
   const g = new BufferGeometry();
   g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new Float32BufferAttribute(new Float32Array(pos.length).fill(1), 3));
   g.setIndex(idx);
   return g;
 };
@@ -51,19 +66,18 @@ const COOL = new Color('#dff0ff');
 const WARM = new Color('#ffe6a8');
 
 /**
- * The visible slash: a bright additive arc that plays a per-combo-move flourish —
- * horizontal streaks that flip direction (slash / alt slash), a full expanding ring
- * (spin), and a rising arc (uppercut). Reads the player from the ECS; cosmetic only.
+ * The visible slash: a bright additive accent for all four complete authored attacks.
  */
 export const SlashFX = () => {
   const meshRef = useRef<Mesh>(null);
   const streak = useMemo(() => buildArc(STREAK_HALF, 0.5, 1.08), []);
-  const ring = useMemo(() => buildArc(Math.PI, 0.35, 1.05), []);
+  const sweepArc = useMemo(() => buildArc(SWEEP_HALF + STREAK_HALF, 0.5, 1.08), []);
   const material = useMemo(
     () =>
       new MeshBasicMaterial({
         transparent: true,
         opacity: 0,
+        vertexColors: true,
         blending: AdditiveBlending,
         side: DoubleSide,
         depthWrite: false,
@@ -91,8 +105,8 @@ export const SlashFX = () => {
       playingSince.current = start;
       moveIdx.current = p.attackState?.combo ?? 0;
       const key = comboAt(moveIdx.current).key;
-      mesh.geometry = key === 'spin' ? ring : streak;
-      material.color.copy(key === 'uppercut' ? WARM : COOL);
+      mesh.geometry = key === 'overhead' || key === 'thrust' ? streak : sweepArc;
+      material.color.copy(key === 'overhead' || key === 'thrust' ? WARM : COOL);
     }
 
     const at = (now - playingSince.current) / SLASH_FX_MS;
@@ -101,28 +115,59 @@ export const SlashFX = () => {
       return;
     }
     mesh.visible = true;
-    material.opacity = Math.sin(at * Math.PI) * 0.95;
+    material.opacity = Math.min(1, at / 0.12) * 0.95;
 
     const [x, y, z] = p.transform.position;
     const rot = p.transform.rotationY;
     const key = comboAt(moveIdx.current).key;
+    const isSweep = key !== 'overhead' && key !== 'thrust';
 
-    if (key === 'spin') {
-      mesh.position.set(x, y + 0.9, z);
-      mesh.rotation.set(0, rot + smooth(at) * Math.PI * 2, 0);
-      const grow = 0.7 + at * 0.6;
-      mesh.scale.set(grow, 1, grow);
-    } else if (key === 'uppercut') {
-      mesh.position.set(x, y + 0.3 + smooth(at) * 2.0, z); // sweeps upward
+    // The arc stays put; a bright head travels across it and the tail dissolves behind it,
+    // so the streak visibly dies from where the swing started toward where it ended.
+    const colorAttr = mesh.geometry.getAttribute('color') as Float32BufferAttribute;
+    const colors = colorAttr.array as Float32Array;
+    const seg = colors.length / 6 - 1;
+    const head = smooth(Math.min(1, at / SWEEP_END));
+    const tailEdge = at * (1 + TRAIL) - TRAIL;
+    const cut = (1 - at) * (1 + FADE_FEATHER);
+    const direction = key === 'reverse' ? -1 : 1;
+    for (let i = 0; i <= seg; i++) {
+      const t = i / seg;
+      for (let v = 0; v < 2; v++) {
+        let b: number;
+        if (isSweep) {
+          // w = 0 where the swing starts, 1 where it ends.
+          const w = direction === 1 ? 1 - t : t;
+          const tailFade = smooth(clamp01((w - tailEdge) / TRAIL));
+          const headFade = 1 - smooth(clamp01((w - head) / HEAD_FEATHER));
+          const hot = smooth(clamp01(1 - Math.abs(w - head) / 0.15));
+          b = tailFade * headFade * (1 + hot * HEAD_GLOW);
+        } else {
+          // Radial dissolve: inner rim (tail) dies first, outer rim (head) last.
+          const u = v === 1 ? 0 : 1;
+          b = smooth(clamp01((cut - u) / FADE_FEATHER));
+        }
+        const o = (i * 2 + v) * 3;
+        colors[o] = b;
+        colors[o + 1] = b;
+        colors[o + 2] = b;
+      }
+    }
+    colorAttr.needsUpdate = true;
+
+    if (key === 'overhead') {
+      mesh.position.set(x, y + 1.8 - smooth(at) * 1.35, z);
       mesh.rotation.set(0, rot, 0);
       const grow = 1.05 - at * 0.35;
       mesh.scale.set(grow, 1, grow);
+    } else if (key === 'thrust') {
+      mesh.position.set(x, y + 0.95, z);
+      mesh.rotation.set(0, rot, 0);
+      mesh.scale.set(0.5 + at * 0.8, 1, 0.7);
     } else {
-      const dir = key === 'altSlash' ? -1 : 1;
-      const sweep = (smooth(at) - 0.5) * 2 * (Math.PI / 2.4) * dir;
       mesh.position.set(x, y + 1.0, z);
-      mesh.rotation.set(0, rot - sweep, 0);
-      const grow = 0.8 + at * 0.35;
+      mesh.rotation.set(0, rot, 0);
+      const grow = 0.85 + at * 0.25;
       mesh.scale.set(grow, 1, grow);
     }
   });

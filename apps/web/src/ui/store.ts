@@ -60,6 +60,10 @@ interface UIState {
   screen: AppScreen;
   /** Current high-level play space. The hub is the default session entry point. */
   scene: GameScene;
+  /** Which map the Expedition Gate leads to: 'expedition' = the built story zone,
+   * anything else = an editor-authored map rendered via CustomZone. Solo-only for
+   * now — in a networked session the server owns the zone and this is ignored. */
+  expeditionMap: string;
   /** Nearby hub landmark, bridged at render rate only when the id changes. */
   hubStation?: HubStationId;
   /** Player health for the HUD bar. Bridged from the ECS at ~10Hz. */
@@ -130,6 +134,7 @@ interface UIState {
   setScene: (scene: GameScene) => void;
   /** Server-driven zone flip (networked). Always applies, bypassing the local guard. */
   setSceneAuthoritative: (scene: GameScene) => void;
+  setExpeditionMap: (map: string) => void;
   setZoneCountdown: (secondsLeft: number | null) => void;
   setHubStation: (station?: HubStationId) => void;
   addMaterials: (n: number) => void;
@@ -153,6 +158,7 @@ interface UIState {
 export const useUIStore = create<UIState>((set) => ({
   screen: 'menu',
   scene: 'hub',
+  expeditionMap: 'expedition',
   hubStation: undefined,
   health: 100,
   maxHealth: 100,
@@ -216,6 +222,7 @@ export const useUIStore = create<UIState>((set) => ({
   setScene: (scene) =>
     set((s) => (s.session ? {} : { scene, hubStation: undefined })),
   setSceneAuthoritative: (scene) => set({ scene, hubStation: undefined }),
+  setExpeditionMap: (expeditionMap) => set({ expeditionMap }),
   setZoneCountdown: (secondsLeft) => set({ zoneCountdown: secondsLeft }),
   setHubStation: (hubStation) => set({ hubStation }),
   addMaterials: (n) => set((s) => ({ materials: s.materials + n })),

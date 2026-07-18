@@ -1,12 +1,22 @@
 import { HUB_STATIONS } from '@/game/world/hubLayout';
 import { PLAYER_CHARACTERS } from '@/game/entities/characters';
+import { expeditionDestinations } from '@/game/world/maps/registry';
 import { useUIStore } from '@/ui/store';
+
+const DESTINATIONS = expeditionDestinations();
+const destinationLabel = (name: string) =>
+  name === 'expedition' ? 'Corrupted Vale (story)' : name;
 
 export const HubHUD = () => {
   const stationId = useUIStore((s) => s.hubStation);
   const character = useUIStore((s) => s.playerCharacter);
   const countdown = useUIStore((s) => s.zoneCountdown);
+  const expeditionMap = useUIStore((s) => s.expeditionMap);
+  const setExpeditionMap = useUIStore((s) => s.setExpeditionMap);
+  // The server owns the zone in a session — custom destinations are solo-only for now.
+  const networked = useUIStore((s) => s.session !== undefined);
   const station = HUB_STATIONS.find((entry) => entry.id === stationId);
+  const showDestinations = !networked && DESTINATIONS.length > 1;
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none">
@@ -29,6 +39,22 @@ export const HubHUD = () => {
         <div className="text-[0.65rem] font-semibold uppercase tracking-[0.32em] text-amber-200/65">Safe Haven</div>
         <div className="mt-0.5 text-xl font-black tracking-wide text-amber-50">HEARTWOOD HAVEN</div>
         <div className="mt-1 text-xs text-white/55">Prepare together. Choose a route. Bring the Relic home.</div>
+        {showDestinations && (
+          <label className="pointer-events-auto mt-2 flex items-center gap-2 text-xs text-white/70">
+            <span className="uppercase tracking-[0.2em] text-amber-200/65">Gate leads to</span>
+            <select
+              value={expeditionMap}
+              onChange={(e) => setExpeditionMap(e.target.value)}
+              className="rounded border border-white/15 bg-black/60 px-2 py-1 text-amber-100 outline-none"
+            >
+              {DESTINATIONS.map((name) => (
+                <option key={name} value={name}>
+                  {destinationLabel(name)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
 
       <div className="absolute right-5 top-5 rounded-lg border border-white/10 bg-black/45 px-4 py-2 text-right shadow-lg backdrop-blur-sm">

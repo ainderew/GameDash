@@ -4,6 +4,7 @@ import { EventQueue } from './events';
 import { stepSim, type PlayerIntent } from './step';
 import type { Entity } from './components';
 import type { GameEvent } from './events';
+import { createTrainingDummy } from './systems/spawnSystem';
 
 /**
  * HEADLESS SMOKE SIM — the proof the room server can run the game (Phase 1, Task 6).
@@ -135,26 +136,42 @@ describe('headless smoke sim', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('hub mode keeps combat out of the safe space', () => {
+  it('hub mode allows practice combat without enabling expedition systems', () => {
     const world = createGameWorld();
     const events = new EventQueue();
     const p1 = makePlayer(world, 0, 11.5);
+    const dummy = world.add(createTrainingDummy([0, 0, 10]));
+    let hits = 0;
 
     const intents = new Map<Entity, PlayerIntent>([
       [
         p1,
-        { moveX: 0, moveZ: -1, jump: false, dodge: false, sprint: true, melee: true, ranged: true },
+        {
+          moveX: 0,
+          moveZ: 0,
+          jump: false,
+          dodge: false,
+          sprint: false,
+          melee: true,
+          aimAt: [0, 10],
+        },
       ],
     ]);
     let now = 0;
     for (let tick = 0; tick < 5 * HZ; tick++) {
       now += DT * 1000;
-      stepSim(world, events, intents, DT, now, 'hub');
+      stepSim(world, events, intents, DT, now, 'hub', {
+        onHitLanded: ({ target }) => {
+          if (target === dummy) hits += 1;
+        },
+      });
     }
 
-    // No monsters spawned, no swing started, and the hub clearing contained the walk.
-    expect(world.with('monster').entities).toHaveLength(0);
-    expect(p1.attackState).toBeUndefined();
+    expect(hits).toBeGreaterThan(0);
+    expect(dummy.health!.current).toBe(dummy.health!.max);
+    expect(world.with('trainingDummy').entities).toEqual([dummy]);
+    expect(world.with('monster').entities).toHaveLength(1);
+    expect(world.spawn.started).toBe(false);
     const [x, , z] = p1.transform!.position;
     expect(Math.hypot(x, z)).toBeLessThanOrEqual(28.001);
   });

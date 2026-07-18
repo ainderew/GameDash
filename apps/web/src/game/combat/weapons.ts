@@ -131,7 +131,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     reachMul: 1,
     weightBias: 'light',
     hands: 'two',
-    trailColor: '#bfe9ff',
+    trailColor: '#45c7ff',
   },
 };
 

@@ -96,7 +96,7 @@ describe('applyPlayerIntent', () => {
 
   it('locks out input during a swing but strides forward via root motion', () => {
     const e = makePlayer(); // rotationY 0 -> facing +Z
-    e.meleeCombo = 0;
+    e.meleeCombo = 1;
     e.meleeStartedAt = 950;
     e.attackAnimUntil = 1900; // mid-swing, inside the motion window
     applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: true, dodge: false, sprint: false }, 1000);
@@ -108,10 +108,10 @@ describe('applyPlayerIntent', () => {
 
   it('roots through the active window, then WASD move-cancels the recovery tail', () => {
     const e = makePlayer();
-    e.meleeCombo = 0;
+    e.meleeCombo = 1;
     e.meleeStartedAt = 1000;
     e.attackAnimUntil = 2000;
-    const cancelAt = 1000 + moveCancelMs(comboAt(0));
+    const cancelAt = 1000 + moveCancelMs(comboAt(1));
 
     // Just BEFORE the blade passes: still rooted, held in place — a step-out can't erase the hit.
     applyPlayerIntent(e, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: false }, cancelAt - 30);

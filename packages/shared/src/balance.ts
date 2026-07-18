@@ -6,10 +6,19 @@
 import type { ByStrength } from './combat';
 
 /** Horizontal move speed while sprinting (Shift held), world units per second. */
-export const PLAYER_SPEED = 6;
+export const PLAYER_SPEED = 8;
 
 /** Default horizontal move speed (plain WASD = walk), world units per second. */
-export const PLAYER_WALK_SPEED = 2.8;
+export const PLAYER_WALK_SPEED = 5.6;
+
+/** Midpoint separating walk and run presentation for local, remote, and server snapshots. */
+export const PLAYER_RUN_ANIM_THRESHOLD = (PLAYER_WALK_SPEED + PLAYER_SPEED) / 2;
+
+/** Walk playback scales with the doubled walk speed to preserve foot planting. */
+export const PLAYER_WALK_ANIM_TIMESCALE = 2;
+
+/** The Fast Run clip was authored for the original 6-unit sprint. */
+export const PLAYER_RUN_ANIM_TIMESCALE = PLAYER_SPEED / 6;
 
 /** Distance covered by a single dodge dash, world units. */
 export const DODGE_DISTANCE = 4;

@@ -141,7 +141,9 @@ describe('netcode KPI @ 150ms ± 30ms, 1% loss (2 simulated minutes)', () => {
     (h.session as { step: (dt: number) => void }).step = (dt: number) => {
       origStep(dt);
       const p = player.entity.transform!.position;
-      maxStep = Math.max(maxStep, dist3(p, prev));
+      // Horizontal step only: ground-following on uneven terrain adds server-derived Y motion
+      // that says nothing about the input speed being clamped.
+      maxStep = Math.max(maxStep, Math.hypot(p[0]! - prev[0]!, p[2]! - prev[2]!));
       prev = [...p];
     };
 

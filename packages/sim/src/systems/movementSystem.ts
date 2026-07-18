@@ -1,6 +1,6 @@
 import type { World } from 'miniplex';
 import type { Entity } from '../components';
-import { comboAt, lungeSpeed, moveCancelMs } from '../combat/combo';
+import { comboAt, lungeSpeed, moveCancelMs, moveForAttack } from '../combat/combo';
 import {
   DODGE_COOLDOWN_MS,
   DODGE_DISTANCE,
@@ -38,7 +38,12 @@ const isGrounded = (e: Entity): boolean => (e.transform?.position[1] ?? 0) <= gr
  * Translate a player's input intent into velocity + dodge/jump state.
  * Pure and time-injected (`now` in ms) so it can be unit-tested headless.
  */
-export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: number): void => {
+export const applyPlayerIntent = (
+  entity: Entity,
+  intent: InputIntent,
+  now: number,
+  dtSec = 1 / 30,
+): void => {
   const { velocity, transform } = entity;
   if (!velocity || !transform) return;
 
@@ -93,11 +98,17 @@ export const applyPlayerIntent = (entity: Entity, intent: InputIntent, now: numb
     velocity.linear[0] = entity.dodgeDir[0] * dashSpeed;
     velocity.linear[2] = entity.dodgeDir[2] * dashSpeed;
   } else if (rooted) {
-    const move = comboAt(entity.meleeCombo ?? 0);
+    // Resolve through the live attackState so a dash-slash strides its long lunge (not the
+    // thrust clip's short one it borrows for animation); falls back to the chain otherwise.
+    const move = entity.attackState
+      ? moveForAttack(entity.attackState)
+      : comboAt(entity.meleeCombo ?? 0);
     const age = now - (entity.meleeStartedAt ?? now);
     // Longer weapons stride further (greatsword lunges past a dagger's shuffle).
     // Reach lives on the entity (loadout data the client adapter syncs), not in a store.
-    const v = lungeSpeed(move, age, entity.weaponReachMul ?? 1);
+    // Sample the (linear) lunge velocity at the STEP MIDPOINT so discrete Euler integration is
+    // exact — the dash travels precisely lungeDist no matter how short/fast the window is.
+    const v = lungeSpeed(move, age + (dtSec * 1000) / 2, entity.weaponReachMul ?? 1);
     velocity.linear[0] = Math.sin(transform.rotationY) * v;
     velocity.linear[2] = Math.cos(transform.rotationY) * v;
   } else if (catchRooted) {

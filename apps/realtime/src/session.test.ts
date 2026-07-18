@@ -8,7 +8,7 @@ import {
   POSITION_HISTORY_TICKS,
   SESSION_GC_GRACE_MS,
 } from '@shared/net/constants';
-import { decodeSnapshot } from '@shared/net/snapshot';
+import { decodeSnapshot, ENTITY_KIND } from '@shared/net/snapshot';
 import { makeInputCmd } from '@shared/net/input';
 import { createMonster } from '@sim/systems/spawnSystem';
 import { playerAnimFlagsFor, SessionManager, type PeerLink, type PlayerProfile } from './session';
@@ -172,7 +172,9 @@ describe('Session authoritative sim (Phase 3)', () => {
     expect(b.session.world.with('playerControlled').entities).toHaveLength(1);
     // Step one session 50 ticks with movement — the other world must not move at all.
     for (let s = 1; s <= 50; s += 1) {
-      a.player.input.offer(makeInputCmd(s, s, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: true }));
+      a.player.input.offer(
+        makeInputCmd(s, s, { moveX: 1, moveZ: 0, jump: false, dodge: false, sprint: true }),
+      );
     }
     const bBefore = [...b.player.entity.transform!.position];
     for (let t = 0; t < 50; t += 1) a.session.step(dt);
@@ -185,7 +187,9 @@ describe('Session authoritative sim (Phase 3)', () => {
     const { manager } = makeManager();
     const { session, player } = manager.createSession(profile('Ana'), new FakeLink());
     for (let s = 1; s <= 20; s += 1) {
-      player.input.offer(makeInputCmd(s, s, { moveX: 0, moveZ: 1, jump: false, dodge: false, sprint: false }));
+      player.input.offer(
+        makeInputCmd(s, s, { moveX: 0, moveZ: 1, jump: false, dodge: false, sprint: false }),
+      );
     }
     for (let t = 0; t < 20; t += 1) session.step(dt);
     expect(player.input.lastProcessedSeq).toBeGreaterThan(0);
@@ -206,6 +210,7 @@ describe('Session authoritative sim (Phase 3)', () => {
     const first = decodeSnapshot(link.binary[0]!)!;
     expect(first.header.keyframe).toBe(true);
     expect(first.entities.map((e) => e.id)).toContain(player.entity.id);
+    expect(first.entities.some((e) => e.kind === ENTITY_KIND.monster)).toBe(true);
 
     session.step(dt);
     session.broadcastSnapshots();
@@ -217,7 +222,7 @@ describe('Session authoritative sim (Phase 3)', () => {
     session.broadcastSnapshots();
     const third = decodeSnapshot(link.binary[2]!)!;
     expect(third.header.keyframe).toBe(true);
-    expect(third.entities).toHaveLength(2);
+    expect(third.entities).toHaveLength(3);
   });
 
   it('impulse messages carry the replay seq only to the owner', () => {
@@ -241,6 +246,39 @@ describe('Session authoritative sim (Phase 3)', () => {
 
 describe('Session authoritative combat (Phase 4)', () => {
   const dt = MS_PER_TICK / 1000;
+
+  it('keeps a reusable training dummy hittable in the social hub without awarding score', () => {
+    const { manager } = makeManager();
+    const link = new FakeLink();
+    const { session, player } = manager.createSession(profile('Ana'), link);
+    const dummy = [...session.world.with('trainingDummy')][0]!;
+    const [x, y, z] = dummy.transform!.position;
+    player.entity.transform!.position = [x, y, z - 1.2];
+    player.entity.transform!.rotationY = 0;
+
+    for (let s = 1; s <= 60; s += 1) {
+      player.input.offer(
+        makeInputCmd(s, s, {
+          moveX: 0,
+          moveZ: 0,
+          jump: false,
+          dodge: false,
+          sprint: false,
+          melee: true,
+          aimYaw: 0,
+          viewServerTimeMs: s * MS_PER_TICK,
+        }),
+      );
+    }
+    for (let t = 0; t < 60; t += 1) session.step(dt);
+
+    const damage = link.ofType('damageDealt');
+    expect(damage.length).toBeGreaterThan(0);
+    expect(damage.every((msg) => msg.targetId === dummy.id)).toBe(true);
+    expect(dummy.health!.current).toBe(dummy.health!.max);
+    expect(session.world.with('trainingDummy').entities).toEqual([dummy]);
+    expect(link.ofType('scoreUpdated')).toHaveLength(0);
+  });
 
   it('entering the expedition seeds a wave and announces zone + spawns + wave (with serverTick)', () => {
     const { manager } = makeManager();
@@ -337,7 +375,10 @@ describe('Session authoritative combat (Phase 4)', () => {
     // A material lying on Ana's feet — the sim auto-collects it next tick.
     const before = session.materials;
     const p = ana.entity.transform!.position;
-    session.world.add({ transform: { position: [p[0], 0.5, p[2]], rotationY: 0 }, pickup: { tableId: 'common' } });
+    session.world.add({
+      transform: { position: [p[0], 0.5, p[2]], rotationY: 0 },
+      pickup: { tableId: 'common' },
+    });
     for (let t = 0; t < 3; t += 1) session.step(dt);
 
     const tallyA = aLink.ofType('materialTally');

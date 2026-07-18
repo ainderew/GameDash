@@ -1,6 +1,6 @@
 import { useFrame } from '@react-three/fiber';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AnimationMixer, Box3, LoopOnce, Vector3 } from 'three';
+import { AdditiveBlending, AnimationMixer, Box3, Color, LoopOnce, MeshBasicMaterial, Vector3 } from 'three';
 import type { AnimationAction, AnimationClip, Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { monsters } from '@/game/ecs/world';
@@ -11,6 +11,16 @@ import { deMetalize } from '@/lib/materials';
 import { hitSquash } from '@/game/entities/hitSquash';
 import { gameNow } from '@/game/feel/time';
 import { feel } from '@/game/feel/config';
+import { dashHitMarks } from '@/game/feel/onHit';
+import { emitDashGhost } from '@/game/fx/dashGhostQueue';
+
+// ── Dash-slash violet afterimages (flung to the world-level <EnemyDashGhosts>) ─────────
+const GHOST_COUNT = 1; // a single afterimage per struck enemy
+const GHOST_MS = 1100; // long lifetime → a slow, drawn-out (slow-mo) fade
+const GHOST_BACK_DIST = 2.0; // flies FAR back beyond the body
+const GHOST_STAGGER_MS = 70; // (unused at GHOST_COUNT 1) delay between afterimages
+const GHOST_MAX_OPACITY = 0.45; // a clear white ghost
+const GHOST_COLOR = '#ffffff'; // white
 
 /**
  * The MAIN enemy: a skinned, skeletally-animated mutant driving the `chaser`
@@ -159,6 +169,10 @@ const Mutant = ({ entity, scene, clips, norm }: MutantProps) => {
   const group = useRef<Group>(null);
   const rig = useMemo(() => buildRig(scene), [scene]);
 
+  // Edge-detect dash-slash hits on this enemy → fling violet afterimages, owned by the
+  // world-level <EnemyDashGhosts> so they keep flying even if this enemy dies + unmounts.
+  const ghostStamp = useRef(0);
+
   const actions = useMemo(() => {
     const a: Record<MutantState, AnimationAction> = {
       idle: rig.mixer.clipAction(clips.idle),
@@ -257,6 +271,45 @@ const Mutant = ({ entity, scene, clips, norm }: MutantProps) => {
         mat.emissive.setRGB(base[0] + fr * k, base[1] + fg * k, base[2] + fb * k);
       }
       wasFlashing.current = flashing;
+    }
+
+    // Dash-slash: fling violet afterimages of the CURRENT pose. cloneSkeleton captures the
+    // pose (no mixer → frozen); the world-level renderer owns them so they keep flying if e dies.
+    const mark = dashHitMarks.get(e);
+    if (mark && mark.at > ghostStamp.current) {
+      ghostStamp.current = mark.at;
+      dashHitMarks.delete(e);
+      for (let gi = 0; gi < GHOST_COUNT; gi++) {
+        const gRoot = cloneSkeleton(rig.root);
+        const mats: MeshBasicMaterial[] = [];
+        gRoot.traverse((o) => {
+          const mesh = o as Mesh;
+          if (!mesh.isMesh) return;
+          const mat = new MeshBasicMaterial({
+            color: new Color(GHOST_COLOR),
+            transparent: true,
+            opacity: 0,
+            blending: AdditiveBlending,
+            depthWrite: false,
+          });
+          mesh.material = mat;
+          mesh.frustumCulled = false;
+          mats.push(mat);
+        });
+        gRoot.matrixAutoUpdate = true;
+        emitDashGhost({
+          root: gRoot,
+          mats,
+          spawnAt: now + gi * GHOST_STAGGER_MS, // game clock → waits out the hitstop
+          base: g.position.clone(),
+          dir: [mark.dirX, mark.dirZ],
+          rotY: g.rotation.y,
+          scale: g.scale.clone(),
+          lifeMs: GHOST_MS,
+          backDist: GHOST_BACK_DIST * (1 + gi * 0.5), // later afterimage flies further
+          maxOpacity: GHOST_MAX_OPACITY * (1 - gi * 0.28),
+        });
+      }
     }
   });
 

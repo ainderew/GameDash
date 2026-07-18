@@ -28,6 +28,14 @@ export const createMonster = (
   };
 };
 
+/** Build the hub's stationary, non-lethal practice target. */
+export const createTrainingDummy = (position: [number, number, number]): Entity => {
+  const dummy = createMonster('trainingDummy', position);
+  dummy.trainingDummy = true;
+  if (dummy.transform) dummy.transform.rotationY = Math.atan2(-position[0], -position[2]);
+  return dummy;
+};
+
 // Wave composition grows each clear.
 const WAVES: { archetype: MonsterArchetype; count: number }[][] = [
   [{ archetype: 'chaser', count: 3 }],

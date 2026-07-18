@@ -25,6 +25,8 @@ interface Props {
   target: React.RefObject<Object3D | null>;
   /** Static obstacles to de-occlude against. */
   obstacles: React.RefObject<Object3D[]>;
+  /** Expedition starts lower on the orbit so its moon and layered skyline stay in frame. */
+  mode: 'hub' | 'expedition';
 }
 
 const desired = new Vector3();
@@ -43,7 +45,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * the pointer, restoring the visible cursor (and cursor-aimed attacks). WASD is rotated
  * into this camera's yaw in SystemRunner, so "forward" is always away from the camera.
  */
-export const ThirdPersonCamera = ({ target, obstacles }: Props) => {
+export const ThirdPersonCamera = ({ target, obstacles, mode }: Props) => {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const initialized = useRef(false);
@@ -57,7 +59,9 @@ export const ThirdPersonCamera = ({ target, obstacles }: Props) => {
   // previous session's orbit or zoom.
   useLayoutEffect(() => {
     resetCameraRig();
-  }, []);
+    if (mode === 'expedition') cameraRig.pitch = 0.24;
+    initialized.current = false;
+  }, [mode]);
 
   useEffect(() => {
     const canvas = gl.domElement;

@@ -26,6 +26,8 @@ import { netStats } from '@/net/netStats';
 import { relicNet } from '@/net/relicNet';
 import { spawnImpactVfx } from '@/game/feel/onHit';
 import { feel } from '@/game/feel/config';
+import { PlaybackTimeline } from '@/net/playbackTimeline';
+import { playMultiplayerAudio } from '@/net/multiplayerAudio';
 
 /**
  * THE session client: connection state machine (idle → connecting → joined), message
@@ -96,8 +98,10 @@ class NetClient {
   private readonly lastMemberHp = new Map<number, number>();
 
   // ── Clock sync: server TICK time ↔ performance.now() ────────────────────────
-  /** serverTickTimeMs − performance.now() EWMA (fed by snapshot headers). */
+  /** Smoothed least-delayed serverTickTimeMs − performance.now() estimate. */
   private tickTimeOffset: number | null = null;
+  /** Recent one-way clock samples; their maximum is the least-delayed estimate. */
+  private readonly tickOffsetSamples: number[] = [];
   /** Wall-clock fallback offset (heartbeats) — used before the first snapshot. */
   private wallOffset: number | null = null;
 
@@ -106,6 +110,8 @@ class NetClient {
   private lastSnapshotAt: number | null = null;
   private readonly arrivalGaps: number[] = [];
   private lastDelayUpdateAt = 0;
+  /** Shared monotonic timeline for every snapshot-rendered entity. */
+  private readonly playbackTimeline = new PlaybackTimeline();
 
   // ── Snapshot baselines (keyframes), keyed by keyframe tick — keep the last 2 ──
   private readonly baselines = new Map<number, Map<number, RemoteEntityState>>();
@@ -162,7 +168,13 @@ class NetClient {
     this.serverEntities.clear();
     this.monsterArchetypes.clear();
     this.tickTimeOffset = null;
+    this.tickOffsetSamples.length = 0;
     this.wallOffset = null;
+    this.interpDelay = INTERP_DELAY_MS;
+    this.lastSnapshotAt = null;
+    this.arrivalGaps.length = 0;
+    this.lastDelayUpdateAt = 0;
+    this.playbackTimeline.reset();
     relicNet.setOwnEntity(null);
     relicNet.reset();
     const store = useUIStore.getState();
@@ -192,6 +204,12 @@ class NetClient {
   /** Current adaptive interpolation delay, ms (RemotePlayers samples serverNow − this). */
   interpDelayMs(): number {
     return this.interpDelay;
+  }
+
+  /** Monotonic snapshot playback time. Adaptive delay changes are slewed, never snapped. */
+  renderServerTime(): number {
+    const now = performance.now();
+    return this.playbackTimeline.sample(this.serverNow() - this.interpDelay, now);
   }
 
   /** Server-owned world entities (monsters) — NetworkedWorld reconciles the ECS from these. */
@@ -267,15 +285,19 @@ class NetClient {
     const { header, entities } = snap;
     const now = performance.now();
 
-    // Clock sync (tick domain): EWMA with outlier rejection — a late packet only ever
-    // pulls the offset down, so clamp wild samples instead of chasing them.
+    // Clock sync (tick domain): rolling least-delayed estimate with bounded smoothing.
     const sample = header.serverTimeMs - now;
+    this.tickOffsetSamples.push(sample);
+    if (this.tickOffsetSamples.length > 64) this.tickOffsetSamples.shift();
+    const targetOffset = Math.max(...this.tickOffsetSamples);
     if (this.tickTimeOffset === null) {
-      this.tickTimeOffset = sample;
-    } else if (Math.abs(sample - this.tickTimeOffset) > 500) {
-      this.tickTimeOffset = sample; // genuine clock jump (reconnect/resume)
+      this.tickTimeOffset = targetOffset;
     } else {
-      this.tickTimeOffset += 0.1 * (sample - this.tickTimeOffset);
+      // `serverTime - arrivalTime` includes negative one-way latency. Use the rolling
+      // upper envelope so one late packet cannot drag render time backwards. Improve a
+      // low initial estimate promptly; follow genuine long-term drift down very slowly.
+      const alpha = targetOffset >= this.tickTimeOffset ? 0.1 : 0.01;
+      this.tickTimeOffset += alpha * (targetOffset - this.tickTimeOffset);
     }
     netStats.clockOffsetMs = this.tickTimeOffset;
 
@@ -390,6 +412,7 @@ class NetClient {
   // ── JSON dispatch ───────────────────────────────────────────────────────────
   private handle(msg: ServerMessage): void {
     const store = useUIStore.getState();
+    playMultiplayerAudio(msg, this.ownEntityId);
     switch (msg.type) {
       case 'welcome': {
         this.pending = null;

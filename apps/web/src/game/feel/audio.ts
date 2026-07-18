@@ -41,6 +41,18 @@ const SWORD_SWING_URL = '/audio/sword-swing.mp3';
 let swordSwingBuffer: AudioBuffer | null = null;
 let swordSwingLoad: Promise<void> | null = null;
 
+// The dash-slash ("1" skill) has its OWN recorded slash — a bigger, signature one-off, distinct
+// from the normal-attack whoosh. Fetched/decoded once; lightly detuned per cast.
+const DASH_SLASH_URL = '/audio/dash-slash.mp3';
+let dashSlashBuffer: AudioBuffer | null = null;
+let dashSlashLoad: Promise<void> | null = null;
+
+// Player-sword impacts use a compact, mono recording instead of the procedural hit. It is
+// fetched/decoded once and receives a different pitch on every landed enemy hit.
+const SWORD_HIT_URL = '/audio/sword-hit.mp3';
+let swordHitBuffer: AudioBuffer | null = null;
+let swordHitLoad: Promise<void> | null = null;
+
 // The Relic throw/launch is a real recording (replacing the reused sword whoosh that used to
 // play on a pass): mono, 24 kHz, loudness-normalized to -18 LUFS / -1.5 dBTP. Fetched/decoded
 // once; each throw detunes it (see playRelicThrow) so repeated passes never sound canned.
@@ -156,6 +168,32 @@ const loadSwordSwing = (c: Ctx): void => {
   });
 };
 
+/** Fetch/decode the dash-slash sample once. Failure is safely retriable. */
+const loadDashSlash = (c: Ctx): void => {
+  if (dashSlashBuffer || dashSlashLoad) return;
+  dashSlashLoad = (async () => {
+    const response = await fetch(DASH_SLASH_URL);
+    if (!response.ok) throw new Error(`Unable to load dash-slash sample: ${DASH_SLASH_URL}`);
+    dashSlashBuffer = await c.decodeAudioData(await response.arrayBuffer());
+  })().catch(() => {
+    // A missing/undecodable cast sound must never break the skill.
+    dashSlashLoad = null;
+  });
+};
+
+/** Fetch/decode the player-sword impact sample once. Failure is safely retriable. */
+const loadSwordHit = (c: Ctx): void => {
+  if (swordHitBuffer || swordHitLoad) return;
+  swordHitLoad = (async () => {
+    const response = await fetch(SWORD_HIT_URL);
+    if (!response.ok) throw new Error(`Unable to load sword hit sample: ${SWORD_HIT_URL}`);
+    swordHitBuffer = await c.decodeAudioData(await response.arrayBuffer());
+  })().catch(() => {
+    // A missing/undecodable impact must never interfere with combat.
+    swordHitLoad = null;
+  });
+};
+
 /** Fetch/decode the Relic-throw sample once. Failure is safely retriable. */
 const loadRelicThrow = (c: Ctx): void => {
   if (relicThrowBuffer || relicThrowLoad) return;
@@ -239,6 +277,8 @@ export const resumeAudio = (): void => {
   loadFootsteps(c);
   loadRelicPickup(c);
   loadSwordSwing(c);
+  loadDashSlash(c);
+  loadSwordHit(c);
   loadRelicThrow(c);
   loadJump(c);
   loadJumpVoice(c);
@@ -387,7 +427,13 @@ const JUMP_VOICE_PITCH_SEMITONES = 1;
 
 /** Play one buffered one-shot through a fresh gain node at the given level, detuned ±spread
  * semitones. Shared by the two layers of the jump so they fire from the same tick. */
-const playOneShot = (c: Ctx, bus: GainNode, buffer: AudioBuffer, level: number, spread: number): void => {
+const playOneShot = (
+  c: Ctx,
+  bus: GainNode,
+  buffer: AudioBuffer,
+  level: number,
+  spread: number,
+): void => {
   const t = now(c);
   const source = c.createBufferSource();
   const gain = c.createGain();
@@ -449,7 +495,55 @@ const noiseBuffer = (c: Ctx): AudioBuffer => {
 
 const now = (c: Ctx): number => c.currentTime;
 
-/** Play the layered punch for a landed hit. */
+const SWORD_HIT_PITCH_SEMITONES = 2.5;
+const SWORD_HIT_MIN_PITCH_STEP = 0.65;
+let lastSwordHitPitch: number | null = null;
+
+/** Pick a natural pitch variation while preventing two consecutive hits sounding alike. */
+const nextSwordHitPitch = (): number => {
+  if (lastSwordHitPitch === null) {
+    lastSwordHitPitch = (Math.random() * 2 - 1) * SWORD_HIT_PITCH_SEMITONES;
+    return lastSwordHitPitch;
+  }
+
+  // Choose uniformly from the ranges below or above the previous pitch, excluding the
+  // too-similar band around it. This guarantees audible movement without an unbounded retry.
+  const lowerEnd = lastSwordHitPitch - SWORD_HIT_MIN_PITCH_STEP;
+  const upperStart = lastSwordHitPitch + SWORD_HIT_MIN_PITCH_STEP;
+  const lowerWidth = Math.max(0, lowerEnd + SWORD_HIT_PITCH_SEMITONES);
+  const upperWidth = Math.max(0, SWORD_HIT_PITCH_SEMITONES - upperStart);
+  const pick = Math.random() * (lowerWidth + upperWidth);
+  const pitch =
+    pick < lowerWidth ? -SWORD_HIT_PITCH_SEMITONES + pick : upperStart + (pick - lowerWidth);
+  lastSwordHitPitch = pitch;
+  return pitch;
+};
+
+/** Play the recorded impact for a local player's sword landing on an enemy. */
+export const playSwordHit = (strength: HitStrength, crit = false): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  loadSwordHit(c);
+  const buffer = swordHitBuffer;
+  if (!buffer) return;
+
+  master.gain.value = feel.audio.masterVolume;
+  const source = c.createBufferSource();
+  const gain = c.createGain();
+  source.buffer = buffer;
+  source.playbackRate.value = Math.pow(2, nextSwordHitPitch() / 12);
+  gain.gain.value = Math.min(1, (strength === 'heavy' ? 0.3 : 0.25) * (crit ? 1.08 : 1));
+  source.connect(gain);
+  gain.connect(master);
+  source.start(now(c));
+  source.onended = () => {
+    source.disconnect();
+    gain.disconnect();
+  };
+};
+
+/** Play the procedural layered punch for non-player-sword damage. */
 export const playHit = (strength: HitStrength, crit = false): void => {
   if (!feel.audio.enabled) return;
   const c = engine();
@@ -529,6 +623,35 @@ export const playWhoosh = (strength: HitStrength): void => {
   const semitones = Math.random() * maxUp;
   source.playbackRate.value = Math.pow(2, semitones / 12);
   gain.gain.value = heavy ? 0.275 : 0.2;
+  source.connect(gain);
+  gain.connect(master);
+  source.start(t);
+  source.onended = () => {
+    source.disconnect();
+    gain.disconnect();
+  };
+};
+
+/**
+ * Play the dash-slash cast sound — the committed "1" skill. Its own recorded slash, louder than
+ * a normal swing and only lightly detuned (±1 semitone): it's a signature one-off, not a combo
+ * step that needs de-canning. Silently no-ops until the sample has decoded.
+ */
+export const playDashSlash = (): void => {
+  if (!feel.audio.enabled) return;
+  const c = engine();
+  if (!c || !master) return;
+  loadDashSlash(c);
+  const buffer = dashSlashBuffer;
+  if (!buffer) return;
+
+  master.gain.value = feel.audio.masterVolume;
+  const t = now(c);
+  const source = c.createBufferSource();
+  const gain = c.createGain();
+  source.buffer = buffer;
+  source.playbackRate.value = Math.pow(2, (Math.random() * 2 - 1) / 12);
+  gain.gain.value = 0.42;
   source.connect(gain);
   gain.connect(master);
   source.start(t);

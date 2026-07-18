@@ -11,8 +11,12 @@ import { RemotePlayers } from '@/game/entities/RemotePlayers';
 import { NetworkedWorld } from '@/game/entities/NetworkedWorld';
 import { NetGateInteraction } from '@/game/net/NetGateInteraction';
 import { BladeTrail } from '@/game/fx/BladeTrail';
-import { AttackArcIndicator } from '@/game/fx/AttackArcIndicator';
+import { SwordSwingFX } from '@/game/fx/SwordSwingFX';
 import { ImpactFX } from '@/game/fx/ImpactFX';
+import { FlipbookImpactFX } from '@/game/fx/FlipbookImpactFX';
+import { DashSlashVFX } from '@/game/fx/DashSlashVFX';
+import { GhostTrail } from '@/game/fx/GhostTrail';
+import { EnemyDashGhosts } from '@/game/fx/EnemyDashGhosts';
 import { RelicCatchFX } from '@/game/fx/RelicCatchFX';
 import { MonsterModels } from '@/game/entities/MonsterModels';
 import { MonsterHealthBars } from '@/game/entities/MonsterHealthBars';
@@ -26,9 +30,12 @@ import { CorruptionMeter } from '@/game/fx/CorruptionMeter';
 import { RelicCarrierPowerVFX } from '@/game/fx/RelicCarrierPowerVFX';
 import { Pickups } from '@/game/entities/Pickups';
 import { DamageNumbers } from '@/game/entities/DamageNumbers';
+import { TrainingDummy } from '@/game/entities/TrainingDummy';
 import { SystemRunner } from '@/game/ecs/SystemRunner';
 import { ThirdPersonCamera } from '@/game/camera/ThirdPersonCamera';
 import { SocialHub } from '@/game/world/SocialHub';
+import { MapPlacements } from '@/game/world/MapPlacements';
+import { CustomZone } from '@/game/world/CustomZone';
 import { AmbientAudio } from '@/game/feel/AmbientAudio';
 import { useUIStore } from '@/ui/store';
 
@@ -39,6 +46,7 @@ export const GameCanvas = () => {
   const playerRef = useRef<Object3D | null>(null);
   const obstacles = useRef<Object3D[]>([]);
   const scene = useUIStore((state) => state.scene);
+  const expeditionMap = useUIStore((state) => state.expeditionMap);
   // In a session the relic is server-authoritative: render it from the network (NetworkedRelic
   // → relicNet) and DON'T mount the solo <Relic/> (which spawns a local relic entity) — the
   // double-spawn guard, done without touching the art component Relic.tsx. Keyed on session
@@ -52,11 +60,13 @@ export const GameCanvas = () => {
       <Canvas
         shadows="soft"
         flat
-        dpr={[1, 1.5]}
+        // Preserve sharp terrain and character edges on high-DPI displays. The upper
+        // bound still prevents unbounded render-target growth on unusually dense panels.
+        dpr={[1, 2]}
         // far must exceed the Sky dome radius (500) or the sky gets clipped and never draws;
         // fog hides everything past ~300 anyway, so the big far plane costs nothing visually.
         camera={{ fov: 55, near: 0.1, far: 2000, position: [0, 3, 7] }}
-        gl={{ powerPreference: 'high-performance', antialias: false }}
+        gl={{ powerPreference: 'high-performance', antialias: true }}
         // Dev-only scene handle for console/tooling inspection (e.g. measuring placement).
         onCreated={(state) => {
           if (DEV) {
@@ -72,16 +82,37 @@ export const GameCanvas = () => {
         <Suspense fallback={null}>
           <SkyAndLight />
           <Physics>
-            {scene === 'hub' ? <SocialHub obstacles={obstacles} /> : <Zone obstacles={obstacles} />}
+            {scene === 'hub' ? (
+              <SocialHub obstacles={obstacles} />
+            ) : expeditionMap === 'expedition' ? (
+              <Zone obstacles={obstacles} />
+            ) : (
+              <CustomZone obstacles={obstacles} />
+            )}
+            {/* Hand-placed props authored in the map editor (/editor.html in dev). */}
+            <MapPlacements map={scene === 'hub' ? 'hub' : expeditionMap} />
             <Player playerRef={playerRef} />
             {/* Session peers — rendered in BOTH the shared hub and the shared expedition. */}
             {networked && <RemotePlayers />}
+            {networked && <NetworkedWorld />}
             {/* Networked expedition-gate countdown control (self-gates to a live session). */}
             {scene === 'hub' && <NetGateInteraction />}
+            {scene === 'hub' && (
+              <>
+                <TrainingDummy networked={networked} />
+                <BladeTrail />
+                <SwordSwingFX />
+                <ImpactFX />
+                <FlipbookImpactFX />
+                <DashSlashVFX />
+                <GhostTrail />
+                <EnemyDashGhosts />
+                <Projectiles />
+                <DamageNumbers />
+              </>
+            )}
             {scene === 'expedition' && (
               <>
-                {/* Server-authoritative monsters (networked) replace the local sim's spawns. */}
-                {networked && <NetworkedWorld />}
                 {/* AI stand-in teammates only in solo; humans fill those slots in a session. */}
                 {!networked && <Teammates />}
                 {networked ? <NetworkedRelic /> : <Relic />}
@@ -90,8 +121,12 @@ export const GameCanvas = () => {
                 <RelicCarrierPowerVFX />
                 <CorruptionMeter />
                 <BladeTrail />
-                <AttackArcIndicator />
+                <SwordSwingFX />
                 <ImpactFX />
+                <FlipbookImpactFX />
+                <DashSlashVFX />
+                <GhostTrail />
+                <EnemyDashGhosts />
                 <RelicCatchFX />
                 <MonsterModels />
                 <MonsterHealthBars />
@@ -103,7 +138,7 @@ export const GameCanvas = () => {
             {/* Ticks BEFORE all renderer useFrames via negative priority (see SIM_PRIORITY) —
               same-frame input → ECS → animation, no one-frame lag. */}
             <SystemRunner mode={scene} />
-            <ThirdPersonCamera target={playerRef} obstacles={obstacles} />
+            <ThirdPersonCamera target={playerRef} obstacles={obstacles} mode={scene} />
           </Physics>
           <PostFX />
         </Suspense>

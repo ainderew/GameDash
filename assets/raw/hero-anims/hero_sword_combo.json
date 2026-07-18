@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "asset": "hero_sword_combo.fbx",
+  "runtime_files": {
+    "Attack_01_HorizontalSlash": "apps/web/public/models/hero/anim-combo-horizontal.glb",
+    "Attack_02_ReverseSlash": "apps/web/public/models/hero/anim-combo-reverse.glb",
+    "Attack_03_OverheadStrike": "apps/web/public/models/hero/anim-combo-overhead.glb",
+    "Attack_04_ForwardThrust": "apps/web/public/models/hero/anim-combo-thrust.glb"
+  },
+  "source": "assets/blender/sword_swing_vfx.blend",
+  "mocap_sources": [
+    "attack-l1.fbx",
+    "attack-l2.fbx"
+  ],
+  "authoring_method": "approved Mixamo sword body mechanics with opposing cuts, a grounded two-bone IK overhead, and a forward two-bone IK thrust",
+  "fps": 30,
+  "coordinate_contract": {
+    "gameplay_forward": "-Y",
+    "up": "+Z",
+    "default_root_motion": false,
+    "weapon_socket": "weapon_socket_r"
+  },
+  "combo": {
+    "input": "primary_attack",
+    "sequence": [
+      "Attack_01_HorizontalSlash",
+      "Attack_02_ReverseSlash",
+      "Attack_03_OverheadStrike",
+      "Attack_04_ForwardThrust"
+    ],
+    "one_buffered_input_max": true,
+    "advance_only_inside_combo_window": true,
+    "return_to": "Combat_Idle",
+    "reset_on": [
+      "finisher_complete",
+      "combo_timeout",
+      "stagger",
+      "dodge",
+      "interrupt"
+    ]
+  },
+  "clips": {
+    "Combat_Idle": {
+      "start_frame": 1,
+      "end_frame": 40,
+      "frame_count": 40,
+      "duration_seconds": 1.333333,
+      "loop": true,
+      "root_motion": false,
+      "recommended_crossfade_seconds": 0.1,
+      "events": {
+        "action_start": 1,
+        "action_end": 40
+      }
+    },
+    "Attack_01_HorizontalSlash": {
+      "start_frame": 1,
+      "end_frame": 18,
+      "frame_count": 18,
+      "duration_seconds": 0.6,
+      "loop": false,
+      "root_motion": false,
+      "damaging": true,
+      "recommended_crossfade_seconds": 0.05,
+      "events": {
+        "action_start": 1,
+        "anticipation_end": 4,
+        "attack_active_start": 5,
+        "impact": 7,
+        "attack_active_end": 9,
+        "combo_window_open": 10,
+        "recovery_start": 14,
+        "combo_window_close": 15,
+        "action_end": 18
+      }
+    },
+    "Attack_02_ReverseSlash": {
+      "start_frame": 1,
+      "end_frame": 19,
+      "frame_count": 19,
+      "duration_seconds": 0.633333,
+      "loop": false,
+      "root_motion": false,
+      "damaging": true,
+      "recommended_crossfade_seconds": 0.05,
+      "events": {
+        "action_start": 1,
+        "anticipation_end": 3,
+        "attack_active_start": 4,
+        "impact": 7,
+        "attack_active_end": 9,
+        "combo_window_open": 10,
+        "recovery_start": 14,
+        "combo_window_close": 15,
+        "action_end": 19
+      }
+    },
+    "Attack_03_OverheadStrike": {
+      "start_frame": 1,
+      "end_frame": 22,
+      "frame_count": 22,
+      "duration_seconds": 0.733333,
+      "loop": false,
+      "root_motion": false,
+      "damaging": true,
+      "recommended_crossfade_seconds": 0.06,
+      "events": {
+        "action_start": 1,
+        "anticipation_end": 8,
+        "attack_active_start": 9,
+        "impact": 10,
+        "attack_active_end": 12,
+        "combo_window_open": 14,
+        "recovery_start": 17,
+        "combo_window_close": 19,
+        "action_end": 22
+      }
+    },
+    "Attack_04_ForwardThrust": {
+      "start_frame": 1,
+      "end_frame": 20,
+      "frame_count": 20,
+      "duration_seconds": 0.666667,
+      "loop": false,
+      "root_motion": false,
+      "damaging": true,
+      "recommended_crossfade_seconds": 0.08,
+      "events": {
+        "action_start": 1,
+        "anticipation_end": 5,
+        "attack_active_start": 7,
+        "impact": 10,
+        "attack_active_end": 12,
+        "recovery_start": 13,
+        "action_end": 20
+      }
+    }
+  }
+}

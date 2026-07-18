@@ -30,6 +30,8 @@ export interface HitContext {
   dirZ: number;
   /** gameNow() of the hit. */
   now: number;
+  /** True when the hit came from the "1" dash-slash skill — selects the bigger impact VFX. */
+  dashSlash?: boolean;
 }
 
 export interface SimHooks {
@@ -37,8 +39,8 @@ export interface SimHooks {
   onHitLanded?(ctx: HitContext): void;
   /** A player parried the hit (sim already staggered/shoved the attacker). */
   onParry?(ctx: HitContext): void;
-  /** A melee swing started — whoosh etc. Fires for every player, whiff or hit. */
-  onSwing?(player: Entity, strength: HitStrength): void;
+  /** A melee swing started. `leadInMs` aligns its whoosh to the authored blade delivery. */
+  onSwing?(player: Entity, strength: HitStrength, leadInMs: number): void;
   /**
    * A knockback+stagger force is about to hit a PLAYER (no-rubberband contract #3). If this
    * hook is present, dealDamage DEFERS the force to it instead of applying it in-sim — the

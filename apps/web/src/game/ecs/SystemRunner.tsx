@@ -24,7 +24,7 @@ import type { CmdIntent } from '@shared/net/input';
 import { MS_PER_TICK, SIM_HZ } from '@shared/net/constants';
 import { netGame } from '@/net/netGame';
 import { netClient } from '@/net/client';
-import { spawnVolatileDischargeVfx } from '@/game/feel/onHit';
+import { spawnRelicEruptionVfx, spawnVolatileDischargeVfx } from '@/game/feel/onHit';
 
 /** Bridge ECS player HP → store at ~10Hz, not every frame. */
 const HP_BRIDGE_INTERVAL = 0.1;
@@ -121,8 +121,8 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
     // below — same sim, no transport.
     const session = useUIStore.getState().session;
     // Networked in ANY scene now: the server owns the shared world in the hub AND the
-    // expedition. In the hub only movement is sent; in the expedition the full combat intent
-    // (melee/ranged/parry + aim yaw + lag-comp view time) rides the same input pipeline.
+    // expedition. Movement and practice combat share the pipeline in both zones; Relic and
+    // revive verbs remain expedition-only.
     const networked =
       session !== undefined && useUIStore.getState().connectionState === 'connected';
 
@@ -134,7 +134,7 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
       // world: inputs still reach the server (peers see us move), but our new local entity is
       // never predicted and appears frozen. Bind by entity identity, not merely active state.
       if (!netGame.drives(player)) {
-        netGame.start(world, events, player, netClient.sendInput);
+        netGame.start(world, events, player, netClient.sendInput, clientSimHooks);
         stepper.current.reset();
         wasNetworked.current = true;
       }
@@ -145,40 +145,38 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
       const i = input.current;
       stepper.current.advance(Math.min(rawDt, 1 / 20), () => {
         const intent: CmdIntent = buildMoveIntent(i);
-        if (mode === 'expedition') {
-          // Aim as a position-independent YAW (replay-stable; the server rewinds hittables to
-          // this view time for lag-comp). Falls back to current facing when the ray misses.
-          const ground = cursorGroundPoint(state, player.transform.position[1]);
-          if (ground) {
-            intent.aimYaw = Math.atan2(
-              ground[0] - player.transform.position[0],
-              ground[1] - player.transform.position[2],
-            );
-          }
-          intent.melee = i.melee;
-          intent.ranged = i.ranged;
-          intent.parry = i.parry;
-          intent.drop = i.drop;
-          intent.revive = i.revive;
-          // Relic pass: the relic is server-authoritative (relicNet), so the carrier anchor is
-          // the local avatar's pose IFF the network says WE hold it. Run the same aim/target
-          // state machine; its chosen receiver → the receiver's SERVER entity id for the wire.
-          const localId = netClient.localEntityId();
-          const carries =
-            relicNet.state.phase === 'carried' &&
-            localId !== null &&
-            relicNet.state.carrierId === localId;
-          const passTo = updatePassControl(
-            world,
-            player,
-            i.pass,
-            gameNow(),
-            carries ? player.transform.position : null,
+        // Aim as a position-independent YAW (replay-stable; the server rewinds hittables to
+        // this view time for lag-comp). Falls back to current facing when the ray misses.
+        const ground = cursorGroundPoint(state, player.transform.position[1]);
+        if (ground) {
+          intent.aimYaw = Math.atan2(
+            ground[0] - player.transform.position[0],
+            ground[1] - player.transform.position[2],
           );
-          intent.passTargetId = passTo?.serverEntityId ?? 0;
-          intent.passHold = passAim.aiming;
-          intent.viewServerTimeMs = Math.max(0, netClient.serverNow() - netClient.interpDelayMs());
         }
+        intent.melee = i.melee;
+        intent.ranged = i.ranged;
+        intent.parry = i.parry;
+        intent.drop = i.drop;
+        intent.revive = i.revive;
+        // Relic pass: the relic is server-authoritative (relicNet), so the carrier anchor is
+        // the local avatar's pose IFF the network says WE hold it. Run the same aim/target
+        // state machine; its chosen receiver → the receiver's SERVER entity id for the wire.
+        const localId = netClient.localEntityId();
+        const carries =
+          relicNet.state.phase === 'carried' &&
+          localId !== null &&
+          relicNet.state.carrierId === localId;
+        const passTo = updatePassControl(
+          world,
+          player,
+          i.pass,
+          gameNow(),
+          carries ? player.transform.position : null,
+        );
+        intent.passTargetId = passTo?.serverEntityId ?? 0;
+        intent.passHold = passAim.aiming;
+        intent.viewServerTimeMs = Math.max(0, netClient.renderServerTime());
         // Consume one-shot edges AFTER building the intent (they must reach the server once).
         // Pass/revive/sprint remain held until keyup; long-press E needs every fixed tick.
         consumeInputEdges(i);
@@ -224,17 +222,18 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
 
     const intent: PlayerIntent = move;
 
+    // Combat remains live in the social hub for the training target. Relic and revive
+    // interactions below stay expedition-only.
+    intent.aimAt = cursorGroundPoint(state, player.transform.position[1]);
+    intent.melee = i.melee;
+    intent.ranged = i.ranged;
+    intent.parry = i.parry;
+    intent.skill1 = i.skill1;
+
     if (mode === 'hub') {
-      // The hub is the safe social space — combat/relic inputs are swallowed here and
-      // ignored by stepSim's hub branch either way.
+      // The hub has no Relic interaction; clear a held pass edge on entry.
       i.pass = false;
     } else {
-      // Attacks aim at the cursor: the swing/projectile fires toward the ground point
-      // under the mouse, snapping the facing the instant the attack starts.
-      intent.aimAt = cursorGroundPoint(state, player.transform.position[1]);
-      intent.melee = i.melee;
-      intent.ranged = i.ranged;
-      intent.parry = i.parry;
       intent.drop = i.drop;
       intent.revive = i.revive;
       // Relic pass: E tap = quick pass, hold = soft-lock aim mode, release = throw.
@@ -283,6 +282,8 @@ export const SystemRunner = ({ mode = 'expedition' }: { mode?: GameScene }) => {
           playRelicPickup();
         } else if (ev.type === 'RelicVolatileDischarge') {
           spawnVolatileDischargeVfx(world, ev.position, ev.radius, ev.tierIndex === 4);
+        } else if (ev.type === 'RelicErupted') {
+          spawnRelicEruptionVfx(world, ev.position);
         }
       }
       if (gained > 0) store.addMaterials(gained);

@@ -1,0 +1,60 @@
+{
+  "kit": "GameDash environmental crystal clusters",
+  "revision": "faceted-gradient-v2",
+  "created_at": "2026-07-16",
+  "updated_at": "2026-07-17",
+  "material": {
+    "name": "crystal_emissive",
+    "type": "opaque glTF metallic-roughness with KHR_materials_emissive_strength",
+    "base_color": "authored vertex gradient from violet roots through cyan-white tips",
+    "emissive_color": "vertex-driven violet/cyan with view-angle rim response",
+    "emissive_strength": 1,
+    "metallic": 0,
+    "roughness": 0.16,
+    "runtime_note": "The renderer reuses one cloned material across all three geometry batches, preserves authored COLOR_0 gradients, adds restrained striation/pulse/rim response, and uses near-white per-instance temperature variation. Only landmark clusters receive a small ground light."
+  },
+  "performance_contract": {
+    "triangle_limit_per_asset": 1000,
+    "runtime_draw_calls_per_scene": 3,
+    "shadow_casting": false,
+    "collision": "none; scenery keepouts only",
+    "geometry_compression": "Draco"
+  },
+  "placement_registry": "packages/sim/src/terrain/crystalClusters.ts",
+  "renderer": "apps/web/src/game/world/CrystalClusters.tsx",
+  "assets": [
+    {
+      "id": "crystal-cluster-small-a",
+      "source": "assets/blender/crystal_cluster_small_a.blend",
+      "runtime_model": "apps/web/public/models/crystals/crystal_cluster_small_a.glb",
+      "preview": "assets/preview/crystal-cluster-small-a.png",
+      "material": "crystal_emissive",
+      "dimensions_m": { "width": 1.587, "depth": 1.068, "height": 1.9 },
+      "triangles": 368,
+      "optimized_bytes": 8104,
+      "design_language": "compact upright six-shard cluster with a broad dominant crown, overlapping prisms, and loose root chips"
+    },
+    {
+      "id": "crystal-cluster-small-b",
+      "source": "assets/blender/crystal_cluster_small_b.blend",
+      "runtime_model": "apps/web/public/models/crystals/crystal_cluster_small_b.glb",
+      "preview": "assets/preview/crystal-cluster-small-b.png",
+      "material": "crystal_emissive",
+      "dimensions_m": { "width": 2.08, "depth": 0.948, "height": 1.48 },
+      "triangles": 414,
+      "optimized_bytes": 8848,
+      "design_language": "low lateral seven-shard fan with strong outward lean, asymmetrical crown heights, and root chips"
+    },
+    {
+      "id": "crystal-cluster-large",
+      "source": "assets/blender/crystal_cluster_large.blend",
+      "runtime_model": "apps/web/public/models/crystals/crystal_cluster_large.glb",
+      "preview": "assets/preview/crystal-cluster-large.png",
+      "material": "crystal_emissive",
+      "dimensions_m": { "width": 3.661, "depth": 1.813, "height": 3.55 },
+      "triangles": 644,
+      "optimized_bytes": 12532,
+      "design_language": "broad hero crystal surrounded by nine overlapping and outward-fanning prisms plus four broken root chips"
+    }
+  ]
+}

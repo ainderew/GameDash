@@ -11,7 +11,11 @@ import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
  * placement — scattered treeline and the fixed landmark trees — clones this one
  * model. Sizes come from per-instance scaling, not distinct source models.
  */
-const MODEL_PATHS = ['/models/nature/dead_tree.glb'];
+const MODEL_PATHS = [
+  '/models/nature/dead_tree.glb',
+  '/models/nature/dead_tree_2.glb',
+  '/models/nature/DeadTree_2.gltf',
+] as const;
 /** How many MODEL_PATHS entries the scattered treeline cycles through. */
 const TREELINE_VARIANTS = MODEL_PATHS.length;
 
@@ -51,8 +55,8 @@ const SINK_FRACTION = 0.06;
 /** Ancient trees anchoring the arena — normalized then scaled to ~13m. */
 const LANDMARK_TREES = [
   { x: 34, z: -32, variant: 0, scale: 1.7, rotY: 0.8 },
-  { x: -40, z: 16, variant: 0, scale: 1.9, rotY: 2.4 },
-  { x: 8, z: 46, variant: 0, scale: 1.55, rotY: 4.4 },
+  { x: -40, z: 16, variant: 1, scale: 1.9, rotY: 2.4 },
+  { x: 8, z: 46, variant: 2, scale: 1.55, rotY: 4.4 },
 ];
 
 /** Scatter tree placements in an annulus, skipping the steep peaks. */
@@ -104,11 +108,26 @@ const placeTrees = (count: number, clearRadius: number): Placement[] => {
  * lightweight clones (shared geometry/material). Each tree's group pivots at its base
  * and gently sways (rotation only — no vertex work) to keep the world alive.
  */
-export const Trees = ({ clearRadius = 0 }: { clearRadius?: number }) => {
-  const scenes: Group[] = [useGameModel(MODEL_PATHS[0]!).scene];
+export const Trees = ({
+  clearRadius = 0,
+  avoid,
+}: {
+  clearRadius?: number;
+  avoid?: (x: number, z: number) => boolean;
+}) => {
+  const variantA = useGameModel(MODEL_PATHS[0]);
+  const variantB = useGameModel(MODEL_PATHS[1]);
+  const variantC = useGameModel(MODEL_PATHS[2]);
+  const scenes = useMemo<Group[]>(
+    () => [variantA.scene, variantB.scene, variantC.scene],
+    [variantA.scene, variantB.scene, variantC.scene],
+  );
   const swayRefs = useRef<(Group | null)[]>([]);
 
-  const placements = useMemo(() => placeTrees(10, clearRadius), [clearRadius]);
+  const placements = useMemo(
+    () => placeTrees(18, clearRadius).filter((item) => !avoid?.(item.x, item.z)),
+    [clearRadius, avoid],
+  );
 
   // Normalize each source model once: scale to BASE_HEIGHT, feet at the group origin.
   // (yLift is in unscaled model units — the group's scale carries it to world units.)
@@ -119,8 +138,7 @@ export const Trees = ({ clearRadius = 0 }: { clearRadius?: number }) => {
         const size = box.getSize(new Vector3());
         return { baseScale: BASE_HEIGHT / (size.y || 1), yLift: -box.min.y };
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    scenes,
+    [scenes],
   );
 
   // Clone the right variant per instance and flip shadow flags on the clones' meshes.
@@ -138,8 +156,7 @@ export const Trees = ({ clearRadius = 0 }: { clearRadius?: number }) => {
         });
         return { p, object };
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [placements, ...scenes],
+    [placements, scenes],
   );
 
   // Wind: tilt each tree around its base, per-instance phase/speed/amplitude.

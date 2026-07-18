@@ -76,7 +76,7 @@ export const advanceTime = (rawDtSec: number): { scaledDt: number } => {
  * entity timers must be stamped in tick time so prediction replay is deterministic.
  * SystemRunner calls this once per frame with tickTime + alpha remainder so renderers
  * reading gameNow() (animation gates, footsteps) stay smooth and consistent with the
- * ECS timers. Hitstop/slow-mo never run in the hub, so nothing is lost while networked.
+ * ECS timers. Networked hitstop/slow-mo is presentation-only, so it never alters this clock.
  */
 export const syncGameTime = (ms: number): void => {
   gameTimeMs = ms;

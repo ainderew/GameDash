@@ -7,8 +7,11 @@ import {
   COMBO_CONTINUE_MS,
   COMBO_MOVES,
   comboAt,
+  DASH_SLASH_MOVE,
   moveActiveWindow,
   moveAnimMs,
+  moveForAttack,
+  moveTrailWindow,
 } from '../combat/combo';
 import { NOOP_HOOKS, type SimHooks } from '../hooks';
 import { computeDamage } from '@shared/combat';
@@ -20,6 +23,9 @@ import {
   RANGED_COOLDOWN_MS,
   RANGED_DAMAGE,
 } from '@shared/balance';
+
+/** How much harder the "1" dash-slash shoves its targets vs a normal heavy swing. */
+const DASH_SLASH_KNOCKBACK = 2.6;
 
 /** One-shot attack intents produced by input, consumed here. */
 export interface AttackIntent {
@@ -41,7 +47,7 @@ const faceToward = (e: Entity, aimAt: [number, number]): void => {
 
 /**
  * Start the next melee swing if off the (short) per-move lockout. Pressing within the
- * combo window advances the chain (slash → alt → spin → uppercut → loop); otherwise it
+ * combo window advances the chain (horizontal → reverse → overhead → thrust → loop); otherwise it
  * restarts at the first move. The chosen move rides on the attackState for the renderer.
  * `aimAt` (ground point under the cursor, XZ) snaps the facing AT swing start, so the
  * arc, lunge, and animation all fire toward the mouse; facing then stays locked (rooted).
@@ -77,8 +83,54 @@ export const startMelee = (
   player.meleeReadyAt = now + chainReadyMs(move);
   player.meleeComboExpiresAt = now + moveAnimMs(move) + COMBO_CONTINUE_MS;
 
-  // Whoosh on the swing itself so even a whiff feels like effort (client feel hook).
-  hooks.onSwing?.(player, move.weight);
+  if (move.damaging) hooks.onSwing?.(player, move.weight, moveTrailWindow(move).start);
+  return true;
+};
+
+/** Dash-slash cooldown, ms — long enough that it reads as a committed skill, not a spam button. */
+export const DASH_SLASH_COOLDOWN_MS = 2500;
+
+/**
+ * Start the "1" dash-slash skill: a committed heavy lunge whose own root motion carries the
+ * hero forward (DASH_SLASH_MOVE.lungeDist), landing a big cleave at the end. It borrows the
+ * thrust clip (meleeCombo = its index) so the renderer animates it with no new state, while
+ * the sim resolves the real move data via `moveForAttack` (dashSlash flag on the attackState).
+ * Grants i-frames through the dash so it reads as a heroic gap-closer, and cancels any swing
+ * in progress. Gated only by its own cooldown. Returns whether it actually fired.
+ */
+export const startDashSlash = (
+  world: World<Entity>,
+  player: Entity,
+  now: number,
+  aimAt?: [number, number],
+  hooks: SimHooks = NOOP_HOOKS,
+): boolean => {
+  if (now < (player.skill1ReadyAt ?? 0)) return false;
+  if (now < (player.dodgingUntil ?? 0)) return false; // a dodge owns the body; don't stack
+  if (aimAt) faceToward(player, aimAt);
+
+  const move = DASH_SLASH_MOVE;
+  const atk: AttackState = { kind: 'melee', startedAt: now, hitSet: new Set(), dashSlash: true };
+  // addComponent (not a bare write) so miniplex indexes the entity into the 'attackState'
+  // archetype weaponSystem queries; swapping in place if a swing is already live.
+  if (player.attackState) player.attackState = atk;
+  else world.addComponent(player, 'attackState', atk);
+  // Borrow the thrust clip for the renderer (Player.tsx reads comboAt(meleeCombo).clip), but
+  // keep this OUT of the J-combo chain — no continue window, so it never advances the chain.
+  const thrustIndex = COMBO_MOVES.findIndex((m) => m.clip === 'thrust');
+  player.meleeCombo = thrustIndex >= 0 ? thrustIndex : 0;
+  player.meleeStartedAt = now;
+  player.attackAnimUntil = now + moveAnimMs(move);
+  player.meleeReadyAt = now + chainReadyMs(move);
+  player.meleeComboExpiresAt = 0;
+  player.skill1ReadyAt = now + DASH_SLASH_COOLDOWN_MS;
+  // I-frames span the committed dash (through the active window) — you phase in, then strike.
+  player.iframeUntil = now + moveActiveWindow(move).end;
+  // Break out of any hit reaction so the skill fires responsively.
+  player.knockback = undefined;
+  player.staggerUntil = 0;
+
+  hooks.onSwing?.(player, 'heavy', moveTrailWindow(move).start);
   return true;
 };
 
@@ -196,9 +248,15 @@ export const weaponSystem = (
       expired.push(player);
       continue;
     }
-    const move = comboAt(atk.combo ?? 0);
-    const { start, end } = moveActiveWindow(move);
+    const move = moveForAttack(atk);
     const age = now - atk.startedAt;
+    // Click one is a held anticipation pose. Keep its attack state alive for networking and
+    // animation selection, but never open a hitbox or add the target to the hit set.
+    if (!move.damaging) {
+      if (age > moveAnimMs(move)) expired.push(player);
+      continue;
+    }
+    const { start, end } = moveActiveWindow(move);
     if (age > end) {
       expired.push(player);
       continue;
@@ -211,7 +269,7 @@ export const weaponSystem = (
     const cosHalfArc = Math.cos(move.halfArc);
     // The wielded weapon scales reach (greatsword > katana > dagger) — loadout data
     // synced onto the entity by the client adapter (SystemRunner).
-    const range = MELEE_RANGE * (player.weaponReachMul ?? 1);
+    const range = MELEE_RANGE * (player.weaponReachMul ?? 1) * (move.rangeMul ?? 1);
     const pad = opts.pad ?? 0;
 
     for (const m of world.with('transform', 'health', 'faction')) {
@@ -242,7 +300,15 @@ export const weaponSystem = (
         computeDamage(MELEE_DAMAGE * move.damageMul),
         now,
         false,
-        { attacker: player, strength: move.weight, dir: [ux, uz], point },
+        {
+          attacker: player,
+          strength: move.weight,
+          dir: [ux, uz],
+          point,
+          dashSlash: atk.dashSlash,
+          // The "1" dash-slash sends what it hits flying — a much bigger shove than a swing.
+          knockbackScale: atk.dashSlash ? DASH_SLASH_KNOCKBACK : 1,
+        },
         hooks,
       );
       atk.hitSet.add(m);

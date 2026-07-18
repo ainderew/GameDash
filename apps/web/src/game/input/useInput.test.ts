@@ -14,6 +14,7 @@ describe('consumeInputEdges', () => {
       melee: true,
       ranged: true,
       parry: true,
+      skill1: true,
       pass: true,
       drop: true,
       revive: true,
@@ -30,6 +31,7 @@ describe('consumeInputEdges', () => {
       melee: false,
       ranged: false,
       parry: false,
+      skill1: false,
       drop: false,
     });
   });

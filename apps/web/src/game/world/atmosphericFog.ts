@@ -27,18 +27,24 @@ import { Color, ShaderChunk } from 'three';
  * three uploads `fogColor` in linear working space. `new Color(hex)` likewise stores
  * linear-srgb components, so the baked sunset tint lands in the same space as fogColor.
  */
-export const ATMOSPHERE = {
-  /** World-Y where fog is at full strength (the arena floor). */
-  heightBase: 0.0,
+/** World-Y where fog is at full strength (the arena floor). Not per-mood — it's geometry. */
+const HEIGHT_BASE = 0.0;
+
+/**
+ * The subset of a `WorldMood`'s fog rig that gets BAKED into the global fog GLSL. These four
+ * are compile-time constants (see the module header), so they can't vary per-mood at runtime
+ * — density and colour, the runtime-tunable parts, come from the active mood's `<fogExp2>`.
+ */
+export interface BakedFogRig {
   /** How fast fog thins going up, per world unit (bigger = peaks clear faster). */
-  heightFalloff: 0.045,
+  heightFalloff: number;
   /** Minimum fraction of distance-fog retained high up, so far peaks still haze. */
-  heightFloor: 0.6,
+  heightFloor: number;
   /** Tightness of the warm sun-side glow (higher = a tighter halo around the sun). */
-  inscatterPower: 2.5,
+  inscatterPower: number;
   /** How far fog shifts toward the sunset colour looking straight into the sun (0..1). */
-  inscatterStrength: 0.7,
-};
+  inscatterStrength: number;
+}
 
 let installed = false;
 
@@ -47,11 +53,13 @@ let installed = false;
  * (three resolves `<fog_*>` includes from ShaderChunk at program-build time).
  *
  * @param sunPosition world-space sun position (same one the sky/lighting use)
- * @param sunsetHex   the horizon-glow colour to inscatter toward (WORLD_PALETTE.sunset)
+ * @param sunsetHex   the horizon-glow colour to inscatter toward (mood `sky.sunset`)
+ * @param rig         the baked fog scalars from the reference mood's `fog` (see BakedFogRig)
  */
 export function installAtmosphericFog(
   sunPosition: readonly [number, number, number],
   sunsetHex: string,
+  rig: BakedFogRig,
 ): void {
   if (installed) return;
   installed = true;
@@ -63,11 +71,11 @@ export function installAtmosphericFog(
   const sunset = new Color(sunsetHex); // .r/.g/.b are linear-srgb — matches fogColor
   const f = (n: number) => n.toFixed(6);
 
-  const HB = f(ATMOSPHERE.heightBase);
-  const HF = f(ATMOSPHERE.heightFalloff);
-  const HFLOOR = f(ATMOSPHERE.heightFloor);
-  const IPOW = f(ATMOSPHERE.inscatterPower);
-  const ISTR = f(ATMOSPHERE.inscatterStrength);
+  const HB = f(HEIGHT_BASE);
+  const HF = f(rig.heightFalloff);
+  const HFLOOR = f(rig.heightFloor);
+  const IPOW = f(rig.inscatterPower);
+  const ISTR = f(rig.inscatterStrength);
 
   // Carry world position to the fragment. For standard materials we rebuild it from the
   // (skinned/morphed) `transformed` local vertex, honouring instancing; the grass shader

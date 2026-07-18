@@ -2,6 +2,7 @@ import type { Vector3Tuple } from '@shared/types';
 import type { Entity } from './components';
 import type { GameWorld } from './world';
 import type { EventQueue } from './events';
+import type { SimHooks } from './hooks';
 import type { PlayerIntent, SimAuthority, SimMode } from './step';
 import { stepSim } from './step';
 
@@ -89,6 +90,8 @@ export interface PredictionOptions {
    * not. In 'hub' mode this is moot (the hub branch runs the same reduced set either way).
    */
   authority?: SimAuthority;
+  /** Client-only presentation hooks. Fired for fresh prediction, never reconciliation replay. */
+  hooks?: SimHooks;
 }
 
 const v3 = (v: Readonly<Vector3Tuple>): Vector3Tuple => [v[0], v[1], v[2]];
@@ -107,6 +110,7 @@ export class PredictionEngine {
   private readonly ringSize: number;
   private mode: SimMode;
   private readonly authority: SimAuthority;
+  private readonly hooks: SimHooks | undefined;
   private readonly intents = new Map<Entity, PlayerIntent>();
 
   /** Newest predicted seq (0 = nothing predicted yet). */
@@ -128,6 +132,7 @@ export class PredictionEngine {
     this.ringSize = opts.ringSize ?? 128;
     this.mode = opts.mode ?? 'hub';
     this.authority = opts.authority ?? 'local';
+    this.hooks = opts.hooks;
   }
 
   /** Whether this engine is predicting the given locally rendered entity instance. */
@@ -138,7 +143,7 @@ export class PredictionEngine {
   /** Predict one fixed tick: run stepSim with this cmd's intent and capture the result. */
   predict(seq: number, intent: PlayerIntent, tickTimeMs: number): void {
     this.applyImpulsesFor(seq, tickTimeMs);
-    this.stepOnce(intent, tickTimeMs);
+    this.stepOnce(intent, tickTimeMs, true);
     this.capture(seq, intent, tickTimeMs);
     this.headSeq = seq;
     if (this.ring.size > this.ringSize) {
@@ -184,13 +189,20 @@ export class PredictionEngine {
    * An authoritative snapshot ack arrived: `state` is the server's post-cmd state for
    * `ackSeq` (captured server-side at consume time, uncontaminated by starvation coasts).
    */
-  onAuthoritative(state: AuthoritativeState, ackSeq: number, downed?: boolean): ReconcileResult | null {
+  onAuthoritative(
+    state: AuthoritativeState,
+    ackSeq: number,
+    downed?: boolean,
+  ): ReconcileResult | null {
     if (ackSeq <= this.lastAckSeq && this.lastAckSeq !== -1) return null; // stale/duplicate
     // Authoritative downed state: a downed avatar is inert (server freezes it), so predicting
     // it as inert here keeps prediction and authority in agreement — no per-tick rubberband.
     if (downed !== undefined) this.entity.downed = downed;
     this.lastAckSeq = ackSeq;
-    this.lastAuth = { seq: ackSeq, state: { pos: v3(state.pos), vel: v3(state.vel), rotY: state.rotY } };
+    this.lastAuth = {
+      seq: ackSeq,
+      state: { pos: v3(state.pos), vel: v3(state.vel), rotY: state.rotY },
+    };
 
     const entry = this.ring.get(ackSeq);
     if (!entry) {
@@ -246,12 +258,21 @@ export class PredictionEngine {
 
   // ── internals ───────────────────────────────────────────────────────────────
 
-  private stepOnce(intent: PlayerIntent, tickTimeMs: number): void {
+  private stepOnce(intent: PlayerIntent, tickTimeMs: number, emitHooks = false): void {
     this.intents.clear();
     this.intents.set(this.entity, intent);
-    stepSim(this.world, this.events, this.intents, this.fixedDtSec, tickTimeMs, this.mode, undefined, {
-      authority: this.authority,
-    });
+    stepSim(
+      this.world,
+      this.events,
+      this.intents,
+      this.fixedDtSec,
+      tickTimeMs,
+      this.mode,
+      emitHooks ? this.hooks : undefined,
+      {
+        authority: this.authority,
+      },
+    );
   }
 
   private rewindAndReplay(fromSeq: number, auth: AuthoritativeState): void {

@@ -56,7 +56,7 @@ describe('anti-cheat: melee damage requires the server arc test', () => {
     const intents = new Map<Entity, PlayerIntent>();
     for (let k = 1; k <= 20; k += 1) {
       intents.clear();
-      intents.set(player, { moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, melee: k === 1, aimYaw: 0 });
+      intents.set(player, { moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false, melee: k === 1 || k === 10, aimYaw: 0 });
       stepSim(world, events, intents, DT, k * MS, 'expedition', undefined, { authority: 'server' });
     }
     expect(monster.health!.current).toBeLessThan(startHp);

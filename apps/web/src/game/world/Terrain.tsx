@@ -7,6 +7,7 @@ import {
   createWastelandSplatTexture,
   WASTELAND_SPLAT_TILE,
 } from '@/game/world/groundTextures';
+import { EXPEDITION_PUDDLES } from '@/game/world/expeditionEnvironment';
 
 // Re-exported so existing world modules keep importing these from Terrain.
 export { heightAt, PLAY_RADIUS };
@@ -134,6 +135,25 @@ ${HUB_ROADS.map(
   }
 `;
 
+/** Authored elliptical puddles with noisy shorelines; generated from the CPU placement data. */
+const PUDDLES_GLSL = /* glsl */ `
+  float tpuddles(vec2 p) {
+    float wetness = 0.0;
+${EXPEDITION_PUDDLES.map((puddle) => {
+  const c = Math.cos(puddle.rotation);
+  const s = Math.sin(puddle.rotation);
+  return `    {
+      vec2 q = p - vec2(${puddle.position[0].toFixed(3)}, ${puddle.position[1].toFixed(3)});
+      q = mat2(${c.toFixed(6)}, ${-s.toFixed(6)}, ${s.toFixed(6)}, ${c.toFixed(6)}) * q;
+      q /= vec2(${puddle.radius[0].toFixed(3)}, ${puddle.radius[1].toFixed(3)});
+      float shoreNoise = (tfbm(p * 0.62 + ${puddle.seed.toFixed(3)}) - 0.5) * 0.16;
+      wetness = max(wetness, 1.0 - smoothstep(0.74, 1.08, length(q) + shoreNoise));
+    }`;
+}).join('\n')}
+    return clamp(wetness, 0.0, 1.0);
+  }
+`;
+
 const TERRAIN_SPLAT = /* glsl */ `
   {
     vec2 p = vWorldPos.xz;
@@ -194,6 +214,13 @@ const TERRAIN_SPLAT = /* glsl */ `
     float groundLuma = dot(ground, vec3(0.2126, 0.7152, 0.0722));
     ground = mix(vec3(groundLuma), ground, 0.38) * vec3(0.94, 0.97, 1.02);
     terrainGlow += ground * 0.01;
+
+    // Standing water follows authored low spots. It remains dielectric (metalness stays
+    // zero) while the darkened base and low roughness catch the moon/lantern highlights.
+    float wetness = tpuddles(p);
+    float wetEdge = smoothstep(0.08, 0.72, wetness);
+    ground = mix(ground, ground * vec3(0.42, 0.5, 0.62), wetEdge * 0.72);
+    ground += vec3(0.012, 0.018, 0.035) * wetness;
 
     diffuseColor.rgb = ground;
   }
@@ -262,7 +289,7 @@ export const Terrain = () => {
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
-          `#include <common>\nvarying vec3 vWorldNormal;\nvec3 terrainGlow;\n${TERRAIN_GLSL}\n${ROADS_GLSL}`,
+          `#include <common>\nvarying vec3 vWorldNormal;\nvec3 terrainGlow;\n${TERRAIN_GLSL}\n${ROADS_GLSL}\n${PUDDLES_GLSL}`,
         )
         .replace('#include <color_fragment>', TERRAIN_SPLAT)
         .replace(
@@ -285,6 +312,11 @@ export const Terrain = () => {
             float nRoad = max(nTrail, troad(vWorldPos.xz));
             float detailMask = 1.0 - smoothstep(0.12, 0.68, nRoad);
             vec3 worldDetailNormal = normalize(vWorldNormal + vec3(hL - hR, 0.0, hD - hU) * 5.4 * detailMask);
+            float nWetness = tpuddles(vWorldPos.xz);
+            float rippleX = sin(vWorldPos.x * 1.7 + vWorldPos.z * 0.43) * 0.007;
+            float rippleZ = cos(vWorldPos.z * 1.45 - vWorldPos.x * 0.38) * 0.007;
+            vec3 wetNormal = normalize(vWorldNormal + vec3(rippleX, 0.0, rippleZ));
+            worldDetailNormal = normalize(mix(worldDetailNormal, wetNormal, nWetness * 0.94));
             normal = normalize(mat3(viewMatrix) * worldDetailNormal);
           }`,
         )
@@ -308,7 +340,9 @@ export const Terrain = () => {
             float rRoadShoulder = smoothstep(0.08, 0.5, rRoad) * (1.0 - rRoadCore);
             roughnessFactor = mix(roughnessFactor, 0.72, rRoadCore * 0.72);
             roughnessFactor = mix(roughnessFactor, 0.98, rRoadShoulder * 0.65);
-            roughnessFactor = clamp(roughnessFactor, 0.55, 1.0);
+            float rWetness = tpuddles(vWorldPos.xz);
+            roughnessFactor = mix(roughnessFactor, 0.11, smoothstep(0.12, 0.88, rWetness));
+            roughnessFactor = clamp(roughnessFactor, 0.08, 1.0);
           }`,
         )
         .replace(
@@ -316,7 +350,7 @@ export const Terrain = () => {
           '#include <emissivemap_fragment>\ntotalEmissiveRadiance += terrainGlow;',
         );
     };
-    mat.customProgramCacheKey = () => 'violet-wasteland-terrain-v4-relief-path';
+    mat.customProgramCacheKey = () => 'violet-wasteland-terrain-v5-wet-puddles';
     return { material: mat, splatTexture };
   }, [slateTexture, basaltTexture, violetTexture]);
 

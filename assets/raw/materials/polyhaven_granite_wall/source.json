@@ -1,0 +1,23 @@
+{
+  "asset_id": "granite_wall",
+  "asset_name": "Granite Wall",
+  "source_page": "https://polyhaven.com/a/granite_wall",
+  "api_endpoint": "https://api.polyhaven.com/files/granite_wall",
+  "creator": "Poly Haven",
+  "license": "CC0",
+  "license_page": "https://polyhaven.com/license",
+  "downloaded_at": "2026-07-16",
+  "download_variant": "2K JPG",
+  "physical_span_m": 1.9,
+  "raw_directory": "assets/raw/materials/polyhaven_granite_wall/2k/",
+  "runtime_directory": "apps/web/public/textures/ruins/granite_wall/",
+  "maps": [
+    "base color",
+    "OpenGL tangent-space normal",
+    "roughness",
+    "ambient occlusion",
+    "displacement"
+  ],
+  "adaptation": "Base color was graded cooler and darker for the GameDash moonlit ruin palette. Physical texture scale, surface response maps, and original scan detail were preserved.",
+  "usage_rule": "Use a 1.9m UV span. Put silhouette and medium fractures in geometry; reserve the scan maps for surface-scale detail."
+}

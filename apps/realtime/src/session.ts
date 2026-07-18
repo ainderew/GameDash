@@ -36,6 +36,7 @@ import {
 import {
   MATERIAL_PER_PICKUP,
   NET_MELEE_PAD,
+  PLAYER_RUN_ANIM_THRESHOLD,
   RELIC_PASS_RANGE,
   RELIC_RELEASE_CONE_DEG,
   SCORE_PER_ENEMY_KILL,
@@ -56,6 +57,8 @@ import { applyImpulse } from '@sim/prediction';
 import { groundHeldRelic, spawnRelic } from '@sim/systems/relicSystem';
 import { combatFromCmd } from '@shared/net/input';
 import { heightAt } from '@sim/terrain/terrainHeight';
+import { HUB_TRAINING_DUMMY_POSITION } from '@sim/terrain/hubGeometry';
+import { createTrainingDummy } from '@sim/systems/spawnSystem';
 import { rewindPos } from './lagComp';
 import { PlayerInputQueue } from './inputQueue';
 import { makeServerCombatHooks, type CapturedHit } from './combatHooks';
@@ -153,7 +156,7 @@ export const playerAnimFlagsFor = (e: Entity, now: number, relic?: Entity | null
   const [x, y, z] = e.transform.position;
   const speed = Math.hypot(e.velocity.linear[0], e.velocity.linear[2]);
   let flags = 0;
-  if (speed > 4.4) flags |= ANIM_FLAG_SPRINT;
+  if (speed > PLAYER_RUN_ANIM_THRESHOLD) flags |= ANIM_FLAG_SPRINT;
   if (y > heightAt(x, z) + 0.06) flags |= ANIM_FLAG_AIRBORNE;
   if (e.downed) flags |= ANIM_FLAG_DOWNED;
   // Combat pose windows the server authors from the intent stream — remote clients play the
@@ -206,7 +209,7 @@ export class Session {
   private readonly pendingImpulses: PendingImpulse[] = [];
 
   // ── Expedition combat state (Phase 4) ────────────────────────────────────────
-  /** Party-wide zone. Hub = safe social space (movement only); expedition = full combat. */
+  /** Party-wide zone. Hub = movement + practice combat; expedition = full combat. */
   zone: SimMode = 'hub';
   /** Tick the expedition countdown fires on (null = no countdown running). Phase 6 Task 2. */
   private countdownEndsAtTick: number | null = null;
@@ -260,6 +263,20 @@ export class Session {
     readonly createdAt: number,
   ) {
     this.lastActivityAt = createdAt;
+    this.spawnHubTrainingDummy();
+  }
+
+  /** Ensure the shared hub always has exactly one server-authoritative practice target. */
+  private spawnHubTrainingDummy(): Entity {
+    const existing = [...this.world.with('trainingDummy')][0];
+    if (existing) return existing;
+    return this.world.add(
+      createTrainingDummy([
+        HUB_TRAINING_DUMMY_POSITION[0],
+        HUB_TRAINING_DUMMY_POSITION[1],
+        HUB_TRAINING_DUMMY_POSITION[2],
+      ]),
+    );
   }
 
   get simNowMs(): number {
@@ -487,8 +504,25 @@ export class Session {
       };
     }
 
+    const hubDummy = zone === 'hub' ? this.spawnHubTrainingDummy() : null;
+
     this.keyframeRequested = true;
     this.broadcast({ type: 'zoneChanged', zone, serverTick: this.tick });
+    // zoneChanged clears the client's previous entity roster, so announce the fresh dummy
+    // immediately afterwards; late joiners receive the same archetype through `welcome`.
+    if (hubDummy?.id !== undefined) {
+      this.broadcast({
+        type: 'monsterSpawned',
+        serverTick: this.tick,
+        id: hubDummy.id,
+        archetype: 'trainingDummy',
+        pos: [
+          hubDummy.transform!.position[0],
+          hubDummy.transform!.position[1],
+          hubDummy.transform!.position[2],
+        ],
+      });
+    }
     logger.info('zone_changed', { code: this.code, zone, players: this.players.size });
   }
 
@@ -548,21 +582,17 @@ export class Session {
     for (const player of this.players.values()) {
       const result = player.input.consume();
       const intent: PlayerIntent = { ...result.intent };
-      if (this.zone === 'expedition' && result.cmd) {
+      if (result.cmd) {
         const c = combatFromCmd(result.cmd);
         intent.melee = c.melee;
         intent.ranged = c.ranged;
         intent.parry = c.parry;
-        intent.drop = c.drop;
-        intent.revive = c.revive;
-        // Holding pass-aim steadies the carried relic anchor (cosmetic; matches solo feel).
-        intent.passAiming = c.passHold;
         // Position-independent yaw → the sim faces exactly the same on server, client, and
         // every reconciliation replay (an aimAt world point would drift the lunge on rewind).
         intent.aimYaw = c.aimYaw;
         // Record the view tick at each melee PRESS — the whole swing rewinds to what the
         // attacker saw when they pressed (clamped to the ≤200 ms policy window on read).
-        if (c.melee) {
+        if (this.zone === 'expedition' && c.melee) {
           const view = Math.max(
             this.tick - NET_LAGCOMP_MAX_TICKS,
             Math.min(this.tick, viewTickFromMs(c.viewServerTimeMs)),
@@ -574,23 +604,39 @@ export class Session {
         // rewound position / rotation rule) and only then hands the sim a passTo intent; an
         // invalid attempt is rejected back to the thrower (Task 2). The flight itself is
         // computed inside stepSim's passRelic using the SERVER-predicted live catch position.
-        if (c.passTargetId !== 0) {
-          const target = this.validatePass(player, c.passTargetId, c.aimYaw, c.viewServerTimeMs);
-          if (target) intent.passTo = target;
+        if (this.zone === 'expedition') {
+          intent.drop = c.drop;
+          intent.revive = c.revive;
+          intent.passAiming = c.passHold;
+          if (c.passTargetId !== 0) {
+            const target = this.validatePass(player, c.passTargetId, c.aimYaw, c.viewServerTimeMs);
+            if (target) intent.passTo = target;
+          }
+          // Intentional G-drop by the current carrier → tag the lob so syncRelicEvents can
+          // announce it as a RelicDropped (the sim lobs it inside stepSim).
+          if (c.drop && this.carriedRelic(player.entity)) this.pendingLobReason = 'intentional';
         }
-        // Intentional G-drop by the current carrier → tag the lob so syncRelicEvents can
-        // announce it as a RelicDropped (the sim lobs it inside stepSim).
-        if (c.drop && this.carriedRelic(player.entity)) this.pendingLobReason = 'intentional';
       }
       this.intents.set(player.entity, intent);
       consumed.push({ player, seq: result.seq });
     }
 
     if (this.zone === 'hub') {
-      stepSim(this.world, this.events, this.intents as IntentsByPlayer, fixedDtSec, now, 'hub');
+      this.hitSink.length = 0;
+      const drained = stepSim(
+        this.world,
+        this.events,
+        this.intents as IntentsByPlayer,
+        fixedDtSec,
+        now,
+        'hub',
+        this.combatHooks,
+        { authority: 'server' },
+      );
       this.captureAckStatesAndHistory(consumed);
-      this.lastDrainedCount = 0;
-      this.events.reset(); // hub emits no events today; drain defensively
+      this.lastDrainedCount = drained.length;
+      this.emitCombatEvents(drained);
+      this.detectEntityDespawns();
       this.advanceCountdown(); // may enterZone('expedition') when it reaches zero
       return;
     }
@@ -711,7 +757,7 @@ export class Session {
         if (pid) this.broadcast({ type: 'parrySuccess', serverTick: this.tick, playerId: pid });
         continue;
       }
-      if (!ctx.target.playerControlled) {
+      if (!ctx.target.playerControlled && !ctx.target.trainingDummy) {
         const scorerId = playerIdOfAttacker(ctx.attacker);
         if (scorerId) {
           const stats = this.runStats.get(scorerId) ?? { score: 0, kills: 0, damage: 0 };
@@ -1060,69 +1106,66 @@ export class Session {
       );
     }
 
-    // Expedition entities replicate too. Monsters carry aiState/stagger in flags; projectiles
-    // carry velocity so clients dead-reckon fast movers between snapshots; pickups are static.
-    if (this.zone === 'expedition') {
-      for (const m of this.world.with('monster', 'transform')) {
-        states.push(
-          quantizeEntity({
-            id: m.id!,
-            kind: ENTITY_KIND.monster,
-            pos: m.transform.position,
-            rotY: m.transform.rotationY,
-            hp: m.health?.current ?? 0,
-            vel: [0, 0, 0],
-            flags: monsterFlagsFor(m, now),
-          }),
-        );
-      }
-      for (const p of this.world.with('projectile', 'transform', 'velocity')) {
-        states.push(
-          quantizeEntity({
-            id: p.id!,
-            kind: ENTITY_KIND.projectile,
-            pos: p.transform.position,
-            rotY: p.transform.rotationY,
-            hp: 0,
-            vel: p.velocity.linear,
-            flags: 0,
-          }),
-        );
-      }
-      for (const pk of this.world.with('pickup', 'transform')) {
-        states.push(
-          quantizeEntity({
-            id: pk.id!,
-            kind: ENTITY_KIND.pickup,
-            pos: pk.transform.position,
-            rotY: pk.transform.rotationY,
-            hp: 0,
-            vel: [0, 0, 0],
-            flags: 0,
-          }),
-        );
-      }
-      // The relic replicates as COARSE truth: phase in the flags byte + its position (for
-      // grounded drift + late-join reconcile). Its carrier binding + flight arc ride the
-      // reliable relic events, so the snapshot needs neither.
-      const relic = this.relicEntity;
-      if (relic?.transform && relic.relic) {
-        states.push(
-          quantizeEntity({
-            id: relic.id!,
-            kind: ENTITY_KIND.relic,
-            pos: relic.transform.position,
-            rotY: 0,
-            // The generic uint16 HP lane carries Relic corruption at snapshot rate. It is
-            // authoritative scalar state and avoids a noisy reliable JSON event every tick.
-            hp: relic.relic.corruption,
-            vel: [0, 0, 0],
-            flags: RELIC_PHASE_FLAG[relic.relic.phase],
-          }),
-        );
-      }
+    // Shared combat entities replicate in both zones. The hub only contains its practice
+    // dummy and player-fired projectiles; expedition snapshots additionally carry its world.
+    for (const m of this.world.with('monster', 'transform')) {
+      states.push(
+        quantizeEntity({
+          id: m.id!,
+          kind: ENTITY_KIND.monster,
+          pos: m.transform.position,
+          rotY: m.transform.rotationY,
+          hp: m.health?.current ?? 0,
+          vel: [0, 0, 0],
+          flags: monsterFlagsFor(m, now),
+        }),
+      );
     }
-
+    for (const p of this.world.with('projectile', 'transform', 'velocity')) {
+      states.push(
+        quantizeEntity({
+          id: p.id!,
+          kind: ENTITY_KIND.projectile,
+          pos: p.transform.position,
+          rotY: p.transform.rotationY,
+          hp: 0,
+          vel: p.velocity.linear,
+          flags: 0,
+        }),
+      );
+    }
+    for (const pk of this.world.with('pickup', 'transform')) {
+      states.push(
+        quantizeEntity({
+          id: pk.id!,
+          kind: ENTITY_KIND.pickup,
+          pos: pk.transform.position,
+          rotY: pk.transform.rotationY,
+          hp: 0,
+          vel: [0, 0, 0],
+          flags: 0,
+        }),
+      );
+    }
+    // The relic replicates as COARSE truth: phase in the flags byte + its position (for
+    // grounded drift + late-join reconcile). Its carrier binding + flight arc ride the
+    // reliable relic events, so the snapshot needs neither.
+    const relic = this.relicEntity;
+    if (relic?.transform && relic.relic) {
+      states.push(
+        quantizeEntity({
+          id: relic.id!,
+          kind: ENTITY_KIND.relic,
+          pos: relic.transform.position,
+          rotY: 0,
+          // The generic uint16 HP lane carries Relic corruption at snapshot rate. It is
+          // authoritative scalar state and avoids a noisy reliable JSON event every tick.
+          hp: relic.relic.corruption,
+          vel: [0, 0, 0],
+          flags: RELIC_PHASE_FLAG[relic.relic.phase],
+        }),
+      );
+    }
     if (keyframe) {
       this.baseline = new Map(states.map((s) => [s.id, s]));
       this.baselineTick = this.tick;

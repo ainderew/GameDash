@@ -17,6 +17,8 @@ export interface InputState {
   ranged: boolean;
   /** One-shot: opens the parry/block window; consumed each tick. */
   parry: boolean;
+  /** One-shot: dash-slash skill (1); consumed each tick. */
+  skill1: boolean;
   /** HELD: the Relic pass button (E). Tap = quick pass, hold = aim mode, release = throw. */
   pass: boolean;
   /** One-shot: intentionally drop the Relic as a short lob (G); consumed each tick. */
@@ -46,10 +48,17 @@ const KEY_MAP: Record<string, keyof InputState> = {
   KeyE: 'pass',
   KeyG: 'drop',
   KeyR: 'revive',
+  Digit1: 'skill1',
 };
 
 /** One-shot edge-triggered actions — cleared by their consumer, not on keyup. */
-const ONE_SHOT: ReadonlySet<keyof InputState> = new Set(['melee', 'ranged', 'parry', 'drop']);
+const ONE_SHOT: ReadonlySet<keyof InputState> = new Set([
+  'melee',
+  'ranged',
+  'parry',
+  'drop',
+  'skill1',
+]);
 
 const initial = (): InputState => ({
   forward: false,
@@ -62,6 +71,7 @@ const initial = (): InputState => ({
   melee: false,
   ranged: false,
   parry: false,
+  skill1: false,
   pass: false,
   drop: false,
   revive: false,
@@ -73,6 +83,7 @@ export const consumeInputEdges = (input: InputState): void => {
   input.melee = false;
   input.ranged = false;
   input.parry = false;
+  input.skill1 = false;
   input.drop = false;
 };
 

@@ -4,7 +4,7 @@ import { RELIC_CATCH_HITSTOP_MS } from '@shared/balance';
 import { onHitLanded, onParry } from '@/game/feel/onHit';
 import { addTrauma } from '@/game/feel/screenShake';
 import { requestHitstop, gameNow } from '@/game/feel/time';
-import { playWhoosh } from '@/game/feel/audio';
+import { playWhoosh, playDashSlash } from '@/game/feel/audio';
 import { weaponSockets } from '@/game/combat/weaponSockets';
 
 /** Teal emissive the catcher's body glows with while it absorbs the relic's power. */
@@ -27,8 +27,19 @@ export const clientSimHooks: SimHooks = {
   onHitLanded,
   onParry,
 
-  // Whoosh on the swing itself so even a whiff feels like effort.
-  onSwing: (_player, strength) => playWhoosh(strength),
+  // Fire at the authored trail marker instead of on button-down. The identity check keeps a
+  // dodge-cancel or a newer combo step from leaking a stale delayed whoosh.
+  onSwing: (player, strength, leadInMs) => {
+    const swingStamp = player.attackState?.startedAt;
+    if (swingStamp === undefined) return;
+    // The "1" dash-slash gets its own signature cast sound; every normal swing keeps the whoosh.
+    const isDashSlash = player.attackState?.dashSlash === true;
+    globalThis.setTimeout(() => {
+      if (player.attackState?.startedAt !== swingStamp) return;
+      if (isDashSlash) playDashSlash();
+      else playWhoosh(strength);
+    }, leadInMs);
+  },
 
   onRelicCaught: (world, _relic, catcher, point) => {
     // A large teal energy field collapses in and is drawn into the catcher's body — spiral

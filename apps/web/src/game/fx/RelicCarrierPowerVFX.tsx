@@ -20,11 +20,8 @@ import { localPlayers, relics, world } from '@/game/ecs/world';
 import { netClient } from '@/net/client';
 import { relicNet } from '@/net/relicNet';
 
-const AMBER = '#ffb347';
-const GOLD = '#ffe08a';
 const VIOLET = '#a855f7';
 const MAGENTA = '#ff42c8';
-const BLOOD = '#ff456f';
 const WHITE_HOT = '#fff1ff';
 
 const tierAt = (corruption: number): number => {
@@ -406,114 +403,10 @@ export const RelicCarrierPowerVFX = () => {
         <planeGeometry args={[1.65, 1.65, 1, 1]} />
         <primitive object={sigilMaterial} attach="material" />
       </mesh>
-      <mesh position={[0, 1.02, 0]} scale={[0.52, 0.98, 0.4]}>
-        <sphereGeometry args={[1, 24, 16]} />
-        <primitive object={shellMaterial} attach="material" />
-      </mesh>
-      <instancedMesh ref={energyMotes} args={[undefined, undefined, MOTE_COUNT]} frustumCulled={false}>
-        <octahedronGeometry args={[1, 0]} />
-        <meshBasicMaterial
-          ref={moteMaterial}
-          color={VIOLET}
-          transparent
-          opacity={0.55}
-          depthWrite={false}
-          blending={AdditiveBlending}
-          toneMapped={false}
-        />
-      </instancedMesh>
-      <group ref={tierBurst} visible={false} position={[0, 1.05, 0]}>
-        {Array.from({ length: 12 }, (_, index) => {
-          const angle = index * (Math.PI / 6);
-          return (
-            <mesh
-              key={index}
-              position={[Math.cos(angle) * 0.56, Math.sin(index * 2.2) * 0.13, Math.sin(angle) * 0.56]}
-              rotation={[Math.PI / 2, -angle, Math.PI / 4]}
-              scale={[0.34, 1.25, 0.34]}
-            >
-              <octahedronGeometry args={[0.12, 0]} />
-              <primitive object={tierBurstMaterial} attach="material" />
-            </mesh>
-          );
-        })}
-      </group>
-      <group ref={attackLayer} visible={false} position={[0, 1.05, 0]}>
-        <mesh rotation={[Math.PI / 2.8, 0, 0.22]}>
-          <torusGeometry args={[0.58, 0.025, 5, 32, Math.PI * 1.42]} />
-          <meshBasicMaterial color={AMBER} transparent opacity={0.78} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-        </mesh>
-        <mesh rotation={[-Math.PI / 2.5, Math.PI, -0.28]}>
-          <torusGeometry args={[0.48, 0.018, 4, 28, Math.PI * 1.12]} />
-          <meshBasicMaterial color={GOLD} transparent opacity={0.58} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-        </mesh>
-        {[0, 1, 2, 3].map((index) => (
-          <mesh key={index} position={[Math.cos(index * Math.PI / 2) * 0.58, (index % 2) * 0.12 - 0.06, Math.sin(index * Math.PI / 2) * 0.58]} rotation={[0, index * Math.PI / 2, Math.PI / 4]}>
-            <octahedronGeometry args={[0.075, 0]} />
-            <meshBasicMaterial color={index % 2 ? GOLD : AMBER} transparent opacity={0.9} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-          </mesh>
-        ))}
-      </group>
-
-      <group ref={chargedLayer} visible={false}>
-        <group ref={twinWisps}>
-          {[0, 1].map((index) => (
-            <mesh key={index} scale={[0.7, 1.35, 0.7]}>
-              <octahedronGeometry args={[0.13, 0]} />
-              <meshBasicMaterial color={index ? MAGENTA : VIOLET} transparent opacity={0.92} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-            </mesh>
-          ))}
-        </group>
-        <group ref={lifestealMotes}>
-          {Array.from({ length: 7 }, (_, index) => (
-            <mesh key={index}>
-              <sphereGeometry args={[0.035, 5, 4]} />
-              <meshBasicMaterial color={BLOOD} transparent opacity={0.72} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-            </mesh>
-          ))}
-        </group>
-      </group>
-
-      <group ref={volatileLayer} visible={false}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.035, 0]}>
-          <ringGeometry args={[0.62, 0.68, 24, 1, 0.18, Math.PI * 1.72]} />
-          <meshBasicMaterial color={VIOLET} side={DoubleSide} transparent opacity={0.62} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-        </mesh>
-        {[0, 1, 2, 3].map((index) => {
-          const angle = index * Math.PI / 2;
-          return (
-            <mesh key={index} position={[Math.cos(angle) * 0.68, 0.045, Math.sin(angle) * 0.68]} rotation={[0, -angle, Math.PI / 2]}>
-              <coneGeometry args={[0.11, 0.3, 3]} />
-              <meshBasicMaterial color={MAGENTA} side={DoubleSide} transparent opacity={0.78} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-            </mesh>
-          );
-        })}
-        <group ref={pierceLances} position={[0, 0.8, 0.1]}>
-          {[-1, 0, 1].map((index) => (
-            <mesh key={index} position={[index * 0.35, 0, 0]} rotation={[Math.PI / 2, 0, 0]} scale={[0.45, 1.35, 0.45]}>
-              <octahedronGeometry args={[0.115, 0]} />
-              <meshBasicMaterial color={index === 0 ? VIOLET : MAGENTA} transparent opacity={0.66} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-            </mesh>
-          ))}
-        </group>
-      </group>
-
-      <group ref={overloadLayer} visible={false}>
-        <group ref={crown}>
-          {[0, 1, 2].map((index) => {
-            const angle = index * ((Math.PI * 2) / 3);
-            return (
-              <mesh key={index} position={[Math.cos(angle) * 0.43, 0, Math.sin(angle) * 0.43]} rotation={[0, -angle, 0]} scale={[0.65, 1.55, 0.65]}>
-                <octahedronGeometry args={[0.16, 0]} />
-                <meshBasicMaterial color={index === 1 ? WHITE_HOT : MAGENTA} transparent opacity={0.95} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-              </mesh>
-            );
-          })}
-        </group>
-        <lineSegments ref={lightning} geometry={lightningGeometry}>
-          <lineBasicMaterial color={MAGENTA} transparent opacity={0.7} depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
-        </lineSegments>
-      </group>
+      {/* Upper-half power VFX (shell, shards, tier halos, crown, lightning) removed per
+          design — only the ground sigil remains here; the player→relic tether is the
+          separate RelicDrainVFX. The tier layers' useFrame updates are all null-guarded,
+          so dropping the meshes is safe. */}
     </group>
   );
 };

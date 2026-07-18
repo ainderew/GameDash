@@ -1,14 +1,24 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { World } from 'miniplex';
 import type { Entity } from '../components';
-import { startMelee, weaponSystem } from './weaponSystem';
-import { comboAt, moveActiveWindow, moveAnimMs } from '../combat/combo';
+import { DASH_SLASH_COOLDOWN_MS, startDashSlash, startMelee, weaponSystem } from './weaponSystem';
+import { applyPlayerIntent, movementSystem } from './movementSystem';
+import {
+  comboAt,
+  COMBO_MOVES,
+  DASH_SLASH_MOVE,
+  moveActiveWindow,
+  moveAnimMs,
+  moveContactMs,
+  moveTrailWindow,
+} from '../combat/combo';
 import { aiSystem } from './aiSystem';
 import { knockbackSystem } from './knockbackSystem';
 import { healthSystem } from './healthSystem';
 import { applyDamage } from './combatHelpers';
 import { createMonster } from './spawnSystem';
 import { EventQueue } from '../events';
+import { computeDamage } from '@shared/combat';
 import { MELEE_DAMAGE } from '@shared/balance';
 import { MONSTER_ARCHETYPES } from '@shared/monsters';
 
@@ -27,7 +37,34 @@ beforeEach(() => {
 });
 
 describe('weaponSystem melee', () => {
-  it('damages a monster in the arc at most once per swing', () => {
+  it('keeps the Blender-authored combo inside the snappy combat cadence', () => {
+    const [horizontal, , , thrust] = COMBO_MOVES;
+
+    // Every swing plays out inside a snappy character-action cadence (sliced mocap clips run
+    // hot via ATTACK_TIMESCALE). Band, not exact ms, so feel-tuning the speeds doesn't break this.
+    for (const move of COMBO_MOVES) {
+      expect(moveAnimMs(move)).toBeGreaterThan(300);
+      expect(moveAnimMs(move)).toBeLessThan(700);
+    }
+    expect(COMBO_MOVES.every((move) => move.damaging)).toBe(true);
+    // Contact opens fast on both the opener and the heavy finisher (time-to-hitbox from press).
+    expect(moveActiveWindow(horizontal!).start).toBeLessThan(220);
+    expect(moveActiveWindow(thrust!).start).toBeLessThan(250);
+  });
+
+  it('keeps contact inside both the gameplay and presentation delivery windows', () => {
+    for (const move of [...COMBO_MOVES, DASH_SLASH_MOVE].filter((m) => m.damaging)) {
+      const contact = moveContactMs(move);
+      const active = moveActiveWindow(move);
+      const trail = moveTrailWindow(move);
+      expect(contact).toBeGreaterThan(active.start);
+      expect(contact).toBeLessThan(active.end);
+      expect(trail.start).toBeLessThanOrEqual(active.start);
+      expect(trail.end).toBeGreaterThanOrEqual(active.end);
+    }
+  });
+
+  it('uses click one as a complete horizontal attack and damages at most once', () => {
     const world = new World<Entity>();
     const player = addPlayer(world);
     const monster = world.add(createMonster('chaser', [0, 0, 1.5])); // directly in front (+Z)
@@ -37,19 +74,31 @@ describe('weaponSystem melee', () => {
     // runs every frame from boot, so a stale query must still see a later addComponent.
     weaponSystem(world, 999);
 
-    // The hitbox is live only during the active window (derived from the clip via
-    // moveActiveWindow — a light's contact lands ~200ms in, so 30ms is still windup).
     startMelee(world, player, 1000);
-    weaponSystem(world, 1030); // still winding up — no hit yet
-    expect(monster.health!.current).toBe(hpStart);
-
-    weaponSystem(world, 1100); // active frame 1
-    weaponSystem(world, 1130); // active frame 2 (same swing → no double hit)
-
-    const { start } = moveActiveWindow(comboAt(0));
+    const horizontal = comboAt(0);
+    const { start } = moveActiveWindow(horizontal);
     weaponSystem(world, 1000 + start + 1);
     weaponSystem(world, 1000 + start + 30);
     expect(monster.health!.current).toBe(hpStart - MELEE_DAMAGE);
+  });
+
+  it('advances one authored combo stage per successive melee click', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    const expected = ['horizontal', 'reverse', 'overhead', 'thrust'] as const;
+    let now = 1000;
+
+    for (let index = 0; index < expected.length; index += 1) {
+      expect(startMelee(world, player, now)).toBe(true);
+      expect(player.meleeCombo).toBe(index);
+      expect(comboAt(player.meleeCombo!).clip).toBe(expected[index]);
+      now = Math.ceil(player.meleeReadyAt!) + 1;
+    }
+
+    // A fifth click begins the authored pattern again.
+    expect(startMelee(world, player, now)).toBe(true);
+    expect(player.meleeCombo).toBe(0);
+    expect(comboAt(player.meleeCombo!).clip).toBe('horizontal');
   });
 
   it('stamps a swing window equal to the animation length', () => {
@@ -85,7 +134,7 @@ describe('weaponSystem melee', () => {
     weaponSystem(world, 999);
 
     startMelee(world, player, 1000);
-    // The dodge starts during the windup (applyPlayerIntent stamps these on cancel).
+    // The dodge starts during the attack anticipation (applyPlayerIntent stamps these on cancel).
     player.dodgingUntil = 1230;
     player.attackAnimUntil = 0;
 
@@ -109,9 +158,93 @@ describe('weaponSystem melee', () => {
     const hpStart = monster.health!.current;
 
     startMelee(world, player, 1000);
-    weaponSystem(world, 1100); // during the active window
+    weaponSystem(world, 1000 + moveActiveWindow(comboAt(0)).start + 1);
 
     expect(monster.health!.current).toBe(hpStart);
+  });
+});
+
+describe('dash-slash skill (1)', () => {
+  it('starts a dash-slash: borrows the thrust clip, sets i-frames + cooldown', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+
+    expect(startDashSlash(world, player, 1000)).toBe(true);
+    expect(player.attackState?.dashSlash).toBe(true);
+    // Renderer plays the thrust clip → meleeCombo points at the thrust move.
+    const thrustIndex = COMBO_MOVES.findIndex((m) => m.clip === 'thrust');
+    expect(player.meleeCombo).toBe(thrustIndex);
+    expect(player.attackAnimUntil).toBeCloseTo(1000 + moveAnimMs(DASH_SLASH_MOVE));
+    // I-frames cover the committed dash (through the active window).
+    expect(player.iframeUntil).toBeCloseTo(1000 + moveActiveWindow(DASH_SLASH_MOVE).end);
+    expect(player.skill1ReadyAt).toBe(1000 + DASH_SLASH_COOLDOWN_MS);
+    // Not part of the J-combo chain — no continue window.
+    expect(player.meleeComboExpiresAt).toBe(0);
+  });
+
+  it('is gated by its cooldown', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    expect(startDashSlash(world, player, 1000)).toBe(true);
+    expect(startDashSlash(world, player, 1000 + DASH_SLASH_COOLDOWN_MS - 1)).toBe(false);
+    expect(startDashSlash(world, player, 1000 + DASH_SLASH_COOLDOWN_MS)).toBe(true);
+  });
+
+  it('lands its heavy multiplier on a monster in the arc', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world);
+    const monster = world.add(createMonster('chaser', [0, 0, 1.5])); // in front (+Z)
+    // Beefy HP so the exact heavy multiplier is visible (a 2.4× hit one-shots a chaser).
+    monster.health = { current: 500, max: 500 };
+    const hpStart = monster.health.current;
+    weaponSystem(world, 999); // prime the archetype query
+
+    startDashSlash(world, player, 1000);
+    const { start } = moveActiveWindow(DASH_SLASH_MOVE);
+    weaponSystem(world, 1000 + start + 1);
+    weaponSystem(world, 1000 + start + 30); // same swing → no double hit
+
+    expect(monster.health.current).toBe(
+      hpStart - computeDamage(MELEE_DAMAGE * DASH_SLASH_MOVE.damageMul),
+    );
+  });
+
+  it('has a wide, forgiving arc — sweeps a side enemy a light swing would miss', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world); // facing +Z
+    const side = world.add(createMonster('chaser', [1.3, 0, -0.25])); // ~101° off facing
+    side.health = { current: 500, max: 500 };
+    weaponSystem(world, 999);
+
+    // A normal horizontal swing whiffs the side target.
+    startMelee(world, player, 1000);
+    weaponSystem(world, 1000 + moveActiveWindow(comboAt(0)).start + 5);
+    expect(side.health.current).toBe(500);
+    world.removeComponent(player, 'attackState');
+    player.attackAnimUntil = 0;
+    player.meleeReadyAt = 0;
+
+    // The wide dash-slash (±108°, longer reach) sweeps it.
+    startDashSlash(world, player, 5000);
+    weaponSystem(world, 5000 + moveActiveWindow(DASH_SLASH_MOVE).start + 5);
+    expect(side.health.current).toBeLessThan(500);
+  });
+
+  it('carries the hero forward its full dash distance via root motion', () => {
+    const world = new World<Entity>();
+    const player = addPlayer(world); // at origin, facing +Z
+    const zero = { moveX: 0, moveZ: 0, jump: false, dodge: false, sprint: false };
+
+    startDashSlash(world, player, 1000);
+    // Integrate the lunge across the whole motion window in small steps.
+    const end = moveActiveWindow(DASH_SLASH_MOVE).end;
+    const stepMs = 10;
+    for (let t = 0; t < end; t += stepMs) {
+      applyPlayerIntent(player, zero, 1000 + t, stepMs / 1000);
+      movementSystem(world, stepMs / 1000);
+    }
+    // Root motion integrates to lungeDist over the motion window (ease-out, ±integration slop).
+    expect(player.transform!.position[2]).toBeCloseTo(DASH_SLASH_MOVE.lungeDist, 0);
   });
 });
 

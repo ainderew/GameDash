@@ -62,7 +62,7 @@ const buildSector = (halfArc: number): BufferGeometry => {
  */
 export const AttackArcIndicator = () => {
   const meshRef = useRef<Mesh>(null);
-  // One prebuilt sector per combo move (halfArc differs: slash 60°, spin = full circle…).
+  // One prebuilt sector per damaging delivery; wind-up keeps one inert entry for index parity.
   const sectors = useMemo(() => COMBO_MOVES.map((m) => buildSector(m.halfArc)), []);
   const material = useMemo(
     () =>
@@ -89,6 +89,10 @@ export const AttackArcIndicator = () => {
 
     const moveIdx = ((p.meleeCombo ?? 0) % COMBO_MOVES.length + COMBO_MOVES.length) % COMBO_MOVES.length;
     const move = comboAt(moveIdx);
+    if (!move.damaging) {
+      mesh.visible = false;
+      return;
+    }
     const geo = sectors[moveIdx]!;
     if (mesh.geometry !== geo) mesh.geometry = geo;
 

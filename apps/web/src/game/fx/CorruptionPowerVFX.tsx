@@ -3,8 +3,6 @@ import { useMemo, useRef } from 'react';
 import {
   AdditiveBlending,
   Color,
-  DoubleSide,
-  DynamicDrawUsage,
   type BufferAttribute,
   type Group,
   type Mesh,
@@ -42,7 +40,6 @@ export const CorruptionPowerVFX = ({
   const root = useRef<Group>(null);
   const orbit = useRef<Group>(null);
   const burstRing = useRef<Mesh>(null);
-  const auraMaterial = useRef<MeshBasicMaterial>(null);
   const groundMaterial = useRef<MeshBasicMaterial>(null);
   const orbitMaterial = useRef<MeshBasicMaterial>(null);
   const orbitMaterialSecondary = useRef<MeshBasicMaterial>(null);
@@ -96,10 +93,6 @@ export const CorruptionPowerVFX = ({
     const pulse = 0.68 + Math.sin(state.clock.elapsedTime * pulseRate) * 0.32;
     currentColor.copy(cool).lerp(hot, pulse * (0.12 + visual.tierIndex * 0.1));
 
-    if (auraMaterial.current) {
-      auraMaterial.current.color.copy(currentColor);
-      auraMaterial.current.opacity = intensity * (0.045 + visual.tierIndex * 0.018) * pulse;
-    }
     if (groundMaterial.current) {
       groundMaterial.current.color.copy(currentColor);
       groundMaterial.current.opacity = intensity * (0.24 + pulse * 0.16);
@@ -156,19 +149,7 @@ export const CorruptionPowerVFX = ({
 
   return (
     <group ref={root} visible={false}>
-      <mesh position={[0, 1.05, 0]}>
-        <cylinderGeometry args={[0.62, 1.05, 2.1, 24, 1, true]} />
-        <meshBasicMaterial
-          ref={auraMaterial}
-          transparent
-          opacity={0}
-          depthWrite={false}
-          side={DoubleSide}
-          blending={AdditiveBlending}
-          toneMapped={false}
-        />
-      </mesh>
-
+      {/* Cone/column aura removed per design — the ground circle below carries the read. */}
       <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0.035, 0]}>
         <torusGeometry args={[0.92, 0.025, 8, 48]} />
         <meshBasicMaterial
@@ -180,64 +161,8 @@ export const CorruptionPowerVFX = ({
           toneMapped={false}
         />
       </mesh>
-
-      <group ref={orbit} position={[0, 0.9, 0]}>
-        <mesh rotation={[Math.PI / 2.8, 0.2, 0]}>
-          <torusGeometry args={[0.72, 0.012, 6, 40]} />
-          <meshBasicMaterial
-            ref={orbitMaterial}
-            transparent
-            opacity={0}
-            depthWrite={false}
-            blending={AdditiveBlending}
-            toneMapped={false}
-          />
-        </mesh>
-        <mesh rotation={[-Math.PI / 3.3, -0.35, Math.PI / 2]}>
-          <torusGeometry args={[0.82, 0.009, 6, 40]} />
-          <meshBasicMaterial
-            ref={orbitMaterialSecondary}
-            transparent
-            opacity={0}
-            depthWrite={false}
-            blending={AdditiveBlending}
-            color="#d8b4fe"
-            toneMapped={false}
-          />
-        </mesh>
-      </group>
-
-      <points ref={motePoints} frustumCulled={false}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            args={[positions, 3]}
-            usage={DynamicDrawUsage}
-          />
-        </bufferGeometry>
-        <pointsMaterial
-          ref={moteMaterial}
-          transparent
-          opacity={0}
-          size={0.05}
-          sizeAttenuation
-          depthWrite={false}
-          blending={AdditiveBlending}
-          toneMapped={false}
-        />
-      </points>
-
-      <mesh ref={burstRing} rotation={[Math.PI / 2, 0, 0]} position={[0, 0.08, 0]} visible={false}>
-        <torusGeometry args={[0.8, 0.045, 8, 48]} />
-        <meshBasicMaterial
-          ref={burstMaterial}
-          transparent
-          opacity={0}
-          depthWrite={false}
-          blending={AdditiveBlending}
-          toneMapped={false}
-        />
-      </mesh>
+      {/* Orbit rings, rising motes and tier-up burst ring removed per design — only the
+          ground circle remains. Their useFrame updates are ref-guarded, so this is safe. */}
     </group>
   );
 };

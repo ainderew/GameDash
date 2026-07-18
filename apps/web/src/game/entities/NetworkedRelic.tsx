@@ -59,7 +59,7 @@ export const NetworkedRelic = () => {
     const buffer = netClient.remoteBuffer(carrierPlayerId);
     const sample = sampleWithUnderrunPolicy(
       buffer,
-      netClient.serverNow() - netClient.interpDelayMs(),
+      netClient.renderServerTime(),
       {
         holdMs: INTERP_UNDERRUN_HOLD_MS,
         deadReckonMs: INTERP_UNDERRUN_DEADRECKON_MS,

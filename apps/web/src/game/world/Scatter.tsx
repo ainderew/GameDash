@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
-import { Box3, Group, InstancedMesh, Object3D, StaticDrawUsage, Vector3 } from 'three';
-import type { BufferGeometry, Mesh } from 'three';
+import { Box3, Group, InstancedMesh, MeshStandardMaterial, Object3D, StaticDrawUsage, Vector3 } from 'three';
+import type { BufferGeometry, Material, Mesh } from 'three';
 import { useGameModel } from '@/lib/loaders';
 import { heightAt } from '@/game/world/Terrain';
 import { hubRoadMask } from '@sim/terrain/terrainHeight';
@@ -12,7 +12,7 @@ import {
   HUB_PLAZA_ROCK_SEED,
   HUB_PLAZA_ROCK_PASS,
 } from '@sim/terrain/hubObstacles';
-import { enhanceNatureMaterial } from '@/game/world/natureMaterials';
+import { enhanceNatureMaterial, enhanceRockMaterial } from '@/game/world/natureMaterials';
 import { PLAZA_DRESSING, inPlazaKeepout } from '@/game/world/hubLayout';
 
 /**
@@ -34,7 +34,9 @@ const PATHS = {
   ],
   fern: '/models/nature/Fern_1.gltf',
   mushroom: '/models/nature/Mushroom_Common.gltf',
-  bushes: ['/models/nature/Bush_Common.gltf'],
+  clovers: ['/models/nature/Clover_1.gltf', '/models/nature/Clover_2.gltf'],
+  flowers: ['/models/nature/Flower_3_Single.gltf', '/models/nature/Flower_4_Single.gltf'],
+  bushes: ['/models/nature/Bush_Common.gltf', '/models/nature/Bush_Common_Flowers.gltf'],
   deadTree: '/models/nature/DeadTree_2.gltf',
   deadTree2: '/models/nature/dead_tree_2.glb',
 };
@@ -51,13 +53,74 @@ const partition = (items: Item[], n: number) => {
 };
 
 const dummy = new Object3D();
+type MaterialTuner = (source: Material | Material[]) => Material | Material[];
+
+const violetFlowerCaches = [new WeakMap<Material, Material>(), new WeakMap<Material, Material>()];
+const violetWholePlantCaches = [new WeakMap<Material, Material>(), new WeakMap<Material, Material>()];
+const VIOLET_FLOWER_PALETTES = [
+  { shadow: 'vec3(0.12, 0.025, 0.24)', highlight: 'vec3(0.72, 0.48, 1.0)' },
+  { shadow: 'vec3(0.19, 0.035, 0.38)', highlight: 'vec3(0.52, 0.22, 0.88)' },
+] as const;
+
+/** Preserve the petal texture's painted detail and alpha, but remap every petal to violet. */
+const tuneVioletPlantMaterial = (variant: 0 | 1, wholePlant = false): MaterialTuner => {
+  const tuneOne = (source: Material): Material => {
+    const base = enhanceNatureMaterial(source) as Material;
+    if (
+      !(base instanceof MeshStandardMaterial) ||
+      (!wholePlant && !source.name.toLowerCase().includes('flower'))
+    ) {
+      return base;
+    }
+    const cache = (wholePlant ? violetWholePlantCaches : violetFlowerCaches)[variant]!;
+    const cached = cache.get(source);
+    if (cached) return cached;
+
+    const material = base.clone();
+    const palette = VIOLET_FLOWER_PALETTES[variant];
+    const previousCompile = material.onBeforeCompile.bind(material);
+    const previousCacheKey = material.customProgramCacheKey.bind(material);
+    material.name = `${wholePlant ? 'Plant' : 'Flowers'}_Violet_${variant === 0 ? 'Lavender' : 'Deep'}`;
+    material.color.set('#ffffff');
+    material.roughness = 0.78;
+    material.onBeforeCompile = (shader, renderer) => {
+      previousCompile(shader, renderer);
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        float petalValue = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+        diffuseColor.rgb = mix(${palette.shadow}, ${palette.highlight}, smoothstep(0.08, 0.92, petalValue));`,
+      );
+    };
+    material.customProgramCacheKey = () =>
+      `${previousCacheKey()}-violet-${wholePlant ? 'whole-plant' : 'flower'}-${variant}`;
+    cache.set(source, material);
+    return material;
+  };
+  return (source) => (Array.isArray(source) ? source.map(tuneOne) : tuneOne(source));
+};
+
+const violetFlowerTuners = [
+  tuneVioletPlantMaterial(0),
+  tuneVioletPlantMaterial(1),
+] as const;
+const violetWholePlantTuners = [
+  tuneVioletPlantMaterial(0, true),
+  tuneVioletPlantMaterial(1, true),
+] as const;
 
 /**
  * Bake one glTF model + placements into InstancedMeshes — one per source mesh, so
  * multi-material models (e.g. flower stem + petals) become aligned instanced pairs.
  * Geometries are cloned (node transform baked in); materials stay in the loader cache.
  */
-const buildInstanced = (scene: Group, items: Item[], cast: boolean, receive: boolean) => {
+const buildInstanced = (
+  scene: Group,
+  items: Item[],
+  cast: boolean,
+  receive: boolean,
+  tuneMaterial: MaterialTuner = enhanceNatureMaterial,
+) => {
   scene.updateMatrixWorld(true);
   const sources: Mesh[] = [];
   scene.traverse((child) => {
@@ -66,7 +129,7 @@ const buildInstanced = (scene: Group, items: Item[], cast: boolean, receive: boo
   });
   return sources.map((src) => {
     const geo = (src.geometry as BufferGeometry).clone().applyMatrix4(src.matrixWorld);
-    const mesh = new InstancedMesh(geo, enhanceNatureMaterial(src.material), items.length);
+    const mesh = new InstancedMesh(geo, tuneMaterial(src.material), items.length);
     mesh.instanceMatrix.setUsage(StaticDrawUsage);
     items.forEach((it, i) => {
       dummy.position.set(it.x, it.y - 0.02, it.z);
@@ -85,6 +148,8 @@ export const Scatter = ({
   clearRadius = 0,
   groundClearRadius,
   plazaFill = false,
+  purplePlants = false,
+  avoid,
 }: {
   clearRadius?: number;
   /** Tighter clear radius for low ground dressing (rocks, pebbles, clover, flowers,
@@ -94,6 +159,10 @@ export const Scatter = ({
   /** Also dress the inner plaza dirt (inside the clear radius) with small rocks,
    * pebbles, clover, weeds and flowers, dodging the cobbles/buildings/lamps. */
   plazaFill?: boolean;
+  /** Expedition art direction: recolor complete low plants, including leaves and stems. */
+  purplePlants?: boolean;
+  /** Optional scene-specific exclusion, used to reserve authored landmark footprints. */
+  avoid?: (x: number, z: number) => boolean;
 }) => {
   const rock1 = useGameModel(PATHS.rocks[0]!);
   const rock2 = useGameModel(PATHS.rocks[1]!);
@@ -103,7 +172,12 @@ export const Scatter = ({
   const pebble3 = useGameModel(PATHS.pebbles[2]!);
   const fern = useGameModel(PATHS.fern);
   const mushroom = useGameModel(PATHS.mushroom);
+  const clover1 = useGameModel(PATHS.clovers[0]!);
+  const clover2 = useGameModel(PATHS.clovers[1]!);
+  const flower1 = useGameModel(PATHS.flowers[0]!);
+  const flower2 = useGameModel(PATHS.flowers[1]!);
   const bush = useGameModel(PATHS.bushes[0]!);
+  const floweringBush = useGameModel(PATHS.bushes[1]!);
   const deadTree = useGameModel(PATHS.deadTree);
   const deadTree2 = useGameModel(PATHS.deadTree2);
 
@@ -131,16 +205,27 @@ export const Scatter = ({
     const out: InstancedMesh[] = [];
     const groundRadius = groundClearRadius ?? clearRadius;
     const withClearing = (items: Item[], radius: number) =>
-      radius > 0 ? items.filter((item) => Math.hypot(item.x, item.z) >= radius) : items;
+      items.filter(
+        (item) => (radius <= 0 || Math.hypot(item.x, item.z) >= radius) && !avoid?.(item.x, item.z),
+      );
     const add = (
       scenes: Group[],
       items: Item[],
       cast: boolean,
       receive: boolean,
       radius: number = clearRadius,
+      tuneMaterial?: MaterialTuner | readonly MaterialTuner[],
     ) =>
       partition(withClearing(items, radius), scenes.length).forEach((bucket, i) =>
-        out.push(...buildInstanced(scenes[i]!, bucket, cast, receive)),
+        out.push(
+          ...buildInstanced(
+            scenes[i]!,
+            bucket,
+            cast,
+            receive,
+            Array.isArray(tuneMaterial) ? tuneMaterial[i] : tuneMaterial,
+          ),
+        ),
       );
 
     // Mid-size rocks — tilted and sunk into the soil with squashed/stretched heights
@@ -154,12 +239,20 @@ export const Scatter = ({
       true,
       true,
       groundRadius,
+      enhanceRockMaterial,
     );
     // BOULDERS: the same rocks scaled way up, leaning, buried a little — big landmark
     // silhouettes that break the "everything is knee height" flatness. Kept at the
     // wider clearRadius so they don't loom right over the plaza. Collider config: @sim
     // HUB_BOULDER_PASS.
-    add([rock3.scene, rock1.scene], scatterPass(rng, HUB_BOULDER_PASS), true, true);
+    add(
+      [rock3.scene, rock1.scene],
+      scatterPass(rng, HUB_BOULDER_PASS),
+      true,
+      true,
+      clearRadius,
+      enhanceRockMaterial,
+    );
     // Sparse pebble clusters, including the trail. Empty ground between groups is as
     // important as the stones: it keeps the terrain readable from the gameplay camera.
     add(
@@ -175,11 +268,40 @@ export const Scatter = ({
       false,
       true,
       groundRadius,
+      enhanceRockMaterial,
+    );
+    // Clover forms broad, low mats between the terrain texture and taller vegetation.
+    add(
+      [clover1.scene, clover2.scene],
+      scatter(rng, 96, 8, 64, 0.22, 0.58, {
+        maxHeight: 4.5,
+        yStretch: [0.72, 1.22],
+        xzJitter: 0.28,
+        clump: { size: 12, offset: 17.8, bias: 0.12, power: 2.7 },
+      }),
+      false,
+      true,
+      groundRadius,
+      purplePlants ? violetWholePlantTuners : undefined,
+    );
+    // Lavender and deep-violet flowers punctuate clover/fern beds instead of becoming confetti.
+    add(
+      [flower1.scene, flower2.scene],
+      scatter(rng, 42, 9, 58, 0.32, 0.72, {
+        maxHeight: 4.5,
+        tilt: 0.09,
+        yStretch: [0.8, 1.35],
+        clump: { size: 9, offset: 26.4, bias: 0.07, power: 3.2 },
+      }),
+      false,
+      true,
+      groundRadius,
+      purplePlants ? violetWholePlantTuners : violetFlowerTuners,
     );
     // Fern GLADES near the treeline — dense pockets, empty elsewhere.
     add(
       [fern.scene],
-      scatter(rng, 22, 10, 70, 0.2, 0.58, {
+      scatter(rng, 38, 10, 70, 0.2, 0.68, {
         maxHeight: 5,
         clump: { size: 16, offset: 2.9, power: 2.5 },
         yStretch: [0.75, 1.4],
@@ -187,11 +309,12 @@ export const Scatter = ({
       false,
       true,
       groundRadius,
+      purplePlants ? violetWholePlantTuners[1] : undefined,
     );
     // Mushrooms cluster in small families — lumpy caps, not matching domes.
     add(
       [mushroom.scene],
-      scatter(rng, 14, 6, 55, 0.4, 1.1, {
+      scatter(rng, 24, 6, 55, 0.36, 1.05, {
         tilt: 0.22,
         yStretch: [0.7, 1.4],
         xzJitter: 0.25,
@@ -200,13 +323,14 @@ export const Scatter = ({
       false,
       true,
       groundRadius,
+      purplePlants ? violetWholePlantTuners[0] : undefined,
     );
     // BUSH THICKETS: mid-height mass between grass and trees — the layer that was
     // missing entirely. A share of them flowering. Squashed/stretched footprints so
     // the thicket doesn't read as identical spheres.
     add(
-      [bush.scene],
-      scatter(rng, 18, 8, 66, 0.45, 1.1, {
+      [bush.scene, floweringBush.scene],
+      scatter(rng, 28, 8, 66, 0.42, 1.12, {
         maxHeight: 5,
         tilt: 0.1,
         yStretch: [0.7, 1.4],
@@ -215,6 +339,10 @@ export const Scatter = ({
       }),
       true,
       true,
+      clearRadius,
+      purplePlants
+        ? violetWholePlantTuners
+        : [enhanceNatureMaterial, violetFlowerTuners[0]],
     );
     // DEAD TREES (imported variant): the former green pines are now bare dead trees,
     // scattered through the outer bands at strongly varied heights so the treeline reads as
@@ -256,6 +384,7 @@ export const Scatter = ({
         true,
         true,
         0,
+        enhanceRockMaterial,
       );
       // Authored path stones guarantee a few strong accents in every camera-facing road
       // instead of trusting random rejection to land them in these narrow strips.
@@ -287,6 +416,7 @@ export const Scatter = ({
         true,
         true,
         0,
+        enhanceRockMaterial,
       );
       // Smaller embedded pebble clusters worn into the dirt, with deliberate quiet gaps.
       add(
@@ -303,6 +433,7 @@ export const Scatter = ({
         false,
         true,
         0,
+        enhanceRockMaterial,
       );
       add(
         [pebble1.scene, pebble2.scene, pebble3.scene],
@@ -317,11 +448,11 @@ export const Scatter = ({
         false,
         true,
         0,
+        enhanceRockMaterial,
       );
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, fern, mushroom, bush, deadTree2Norm, deadTree, clearRadius, groundClearRadius, plazaFill]);
+  }, [rock1, rock2, rock3, pebble1, pebble2, pebble3, fern, mushroom, clover1, clover2, flower1, flower2, bush, floweringBush, deadTree2Norm, deadTree, clearRadius, groundClearRadius, plazaFill, purplePlants, avoid]);
 
   // Cloned geometries are ours to dispose; materials belong to the loader cache.
   useEffect(
@@ -347,6 +478,8 @@ export const Scatter = ({
   ...PATHS.pebbles,
   PATHS.fern,
   PATHS.mushroom,
+  ...PATHS.clovers,
+  ...PATHS.flowers,
   ...PATHS.bushes,
   PATHS.deadTree,
   PATHS.deadTree2,

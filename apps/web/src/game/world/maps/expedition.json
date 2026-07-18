@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "placements": [
+    {
+      "id": "p-mrpomzco-zhy5",
+      "asset": "/models/grass/Grass_Common_Short.gltf",
+      "position": [
+        12.505728231637725,
+        0.022385215386748314,
+        16.864987451427535
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrpon63v-099b",
+      "asset": "/models/grass/Grass_Common_Short.gltf",
+      "position": [
+        12.511258265836261,
+        0.022385215386748314,
+        16.55342580851642
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrpon6ie-dwwk",
+      "asset": "/models/grass/Grass_Common_Short.gltf",
+      "position": [
+        12.722186223611317,
+        0.022385215386748314,
+        16.30555269411829
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrpon6zr-m3oe",
+      "asset": "/models/grass/Grass_Common_Short.gltf",
+      "position": [
+        12.150014053412331,
+        0.022385215386748314,
+        15.794694690484516
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrpong5b-pd3r",
+      "asset": "/models/grass/Grass_Wispy_Short.gltf",
+      "position": [
+        11.044430072054777,
+        0.08575008809566498,
+        14.174656557433678
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrponiu7-bede",
+      "asset": "/models/grass/Grass_Wispy_Short.gltf",
+      "position": [
+        11.492653998584622,
+        0.08575008809566498,
+        14.228919875315327
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrponok5-k85v",
+      "asset": "/models/grass/Grass_Wispy_Short.gltf",
+      "position": [
+        12.832788780102025,
+        0.08575008809566498,
+        15.031585907346043
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrponpad-jvok",
+      "asset": "/models/grass/Grass_Wispy_Short.gltf",
+      "position": [
+        12.050153113032566,
+        0.08575008809566498,
+        15.863778800502104
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "p-mrpoon4f-1fwr",
+      "asset": "/models/hero/hero.glb",
+      "position": [
+        10.265594814232395,
+        0.450545460765565,
+        13.107093097604476
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  ]
+}

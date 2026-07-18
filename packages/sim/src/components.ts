@@ -45,6 +45,8 @@ export interface AttackState {
   hitSet: Set<Entity>;
   /** Index into the melee combo chain this swing belongs to (melee only). */
   combo?: number;
+  /** True for the "1" dash-slash skill — resolves to DASH_SLASH_MOVE (see moveForAttack). */
+  dashSlash?: boolean;
 }
 
 export type RelicPhase = 'carried' | 'inFlight' | 'grounded';
@@ -161,6 +163,8 @@ export interface Entity {
   meleeCombo?: number;
   /** Timestamp (ms) until which the next melee press continues the combo chain. */
   meleeComboExpiresAt?: number;
+  /** Timestamp (ms) after which the "1" dash-slash skill may be used again (cooldown). */
+  skill1ReadyAt?: number;
   /** Timestamp (ms) after which the player may fire again. */
   rangedReadyAt?: number;
 
@@ -178,6 +182,8 @@ export interface Entity {
 
   // ── Monster ─────────────────────────────────────────────────────────────
   monster?: MonsterArchetype;
+  /** Static, endlessly reusable hub target: takes feedback hits but never dies or moves. */
+  trainingDummy?: true;
   aiBrain?: AiBrain;
   /** Loot table granted on death. */
   lootTableId?: string;
@@ -278,6 +284,22 @@ export interface Entity {
     /** Impact-out direction on XZ. Sparks use this to inherit the sword's momentum. */
     dirX: number;
     dirZ: number;
+  };
+  /**
+   * Blender-authored impact flipbook marker (client-only). Drives ONE camera-facing
+   * billboard that plays a baked sprite-sheet burst; aged on REAL time like impactFx so it
+   * blooms through hitstop. Spawned by onHitLanded when `feel.vfx.blenderFlipbook` is on.
+   */
+  blenderImpactFx?: {
+    spawnedAtReal: number;
+    lifetimeMs: number;
+    /** Billboard world size (diameter). */
+    size: number;
+    /** Blade-out direction on XZ; rotates the billboard so the slash streak aligns. */
+    dirX: number;
+    dirZ: number;
+    /** Which baked Blender sheet to play. The dash-slash hit uses 'dashSlash'. */
+    variant?: 'impact' | 'dashSlash';
   };
   /**
    * Relic-claim burst marker (client-only, spawned by simHooks.onRelicCaught). One entity

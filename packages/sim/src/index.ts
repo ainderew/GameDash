@@ -19,6 +19,10 @@ export * from './terrain/collisionField';
 export * from './terrain/scatterEngine';
 export * from './terrain/hubPlaza';
 export * from './terrain/hubObstacles';
+export * from './terrain/expeditionRuins';
+export * from './terrain/expeditionCollision';
+export * from './terrain/expeditionSkyline';
+export * from './terrain/crystalClusters';
 
 export * from './combat/combo';
 export * from './combat/passTargeting';

@@ -6,6 +6,7 @@ import { applyPlayerIntent, movementSystem, type InputIntent } from './systems/m
 import {
   fireRanged,
   MELEE_BUFFER_MS,
+  startDashSlash,
   startMelee,
   weaponSystem,
   type MeleeResolveOptions,
@@ -22,6 +23,7 @@ import { reviveSystem } from './systems/reviveSystem';
 import { pickupSystem, spawnPickupsFromEvents } from './systems/lootSystem';
 import { spawnSystem } from './systems/spawnSystem';
 import { resolveHubCollisions, resolveObstacleCollisions } from './terrain/hubCollision';
+import { resolveExpeditionRuinCollisions } from './terrain/expeditionCollision';
 import { CollisionLayer } from './terrain/collisionField';
 import { PARRY_TUNING } from '@shared/balance';
 
@@ -55,6 +57,8 @@ export interface PlayerIntent extends InputIntent {
   melee?: boolean;
   /** Ranged fire held/pressed this tick. */
   ranged?: boolean;
+  /** Dash-slash skill press this tick ("1") — a committed heavy lunge on its own cooldown. */
+  skill1?: boolean;
   /** Open the parry window this tick. */
   parry?: boolean;
   /** Intentional relic drop (G) — its own verb, never a failed-pass fallback. */
@@ -85,9 +89,8 @@ export type IntentsByPlayer = ReadonlyMap<Entity, PlayerIntent>;
  * deterministic order; extracted verbatim from SystemRunner.tsx.
  * ANTI-PATTERN: never scatter per-entity stepping across callers — order must stay deterministic.
  *
- * In 'hub' mode player intent + movement + hub collision are the WHOLE simulation: no
- * spawns, combat, Relic, or teammate stand-ins may leak into the safe social space
- * (combat intents are ignored outright).
+ * Hub mode runs player combat against explicit practice targets, but never enables enemy AI,
+ * wave spawning, Relic rules, loot, or teammate stand-ins.
  *
  * Returns the events drained this tick (loot pickups already applied) so the caller can
  * feed feedback (audio/UI) or, later, the wire.
@@ -117,10 +120,10 @@ export const stepSim = (
       }
       continue;
     }
-    applyPlayerIntent(player, intent, now);
-    if (mode === 'hub') continue;
-    player.passAiming = intent.passAiming === true;
-    player.reviving = intent.revive === true;
+    applyPlayerIntent(player, intent, now, dt);
+    const expedition = mode === 'expedition';
+    player.passAiming = expedition && intent.passAiming === true;
+    player.reviving = expedition && intent.revive === true;
     // Facing target: a yaw (networked — position-independent, replay-stable) projected to a
     // far aim point off the player's CURRENT pos, else the raw cursor aimAt (solo).
     let aimAt = intent.aimAt;
@@ -139,14 +142,19 @@ export const stepSim = (
     ) {
       player.meleeBufferedAt = undefined;
     }
+    // Dash-slash skill ("1"): a committed heavy lunge. Predicted locally like a swing (anim +
+    // root motion); its DAMAGE lands only under server authority (weaponSystem), same as melee.
+    if (intent.skill1) startDashSlash(world, player, now, aimAt, hooks);
     // Entity-spawning + world-mutating verbs are the AUTHORITY's alone — a networked
     // client never spawns a projectile, throws, or drops the relic locally; those replicate.
     if (authority === 'server') {
       if (intent.ranged && fireRanged(world, player, now, aimAt)) {
-        onRelicAttackUsed(world, player, now, events);
+        if (expedition) onRelicAttackUsed(world, player, now, events);
       }
-      if (intent.passTo) passRelic(world, player, intent.passTo, now, events);
-      if (intent.drop) dropRelic(world, player, now, events);
+      if (expedition) {
+        if (intent.passTo) passRelic(world, player, intent.passTo, now, events);
+        if (intent.drop) dropRelic(world, player, now, events);
+      }
     }
     // Parry: open a brief block window at will (predicted stance). The negation itself is
     // server-side in dealDamage; predicting the window costs nothing and reads instantly.
@@ -154,6 +162,10 @@ export const stepSim = (
   }
 
   if (mode === 'hub') {
+    // Hub combat is deliberately narrow: attacks and their presentation work against the
+    // practice dummy, while spawning, AI, deaths, loot, and Relic systems stay expedition-only.
+    weaponSystem(world, now, hooks, authority === 'local' ? { rewind: () => null } : opts.melee);
+    if (authority === 'server') projectileSystem(world, dt, now, hooks);
     // Knockback runs in the hub too: nothing HUB-native ever sets it, but server-issued
     // impulses (ServerImpulse events) enter through `entity.knockback`, and the client's
     // prediction replay must decay them through the IDENTICAL system the server ran
@@ -163,11 +175,12 @@ export const stepSim = (
     for (const player of world.with('transform', 'velocity', 'playerControlled')) {
       resolveHubCollisions(player);
     }
-    // Monsters (none HUB-native today, but AI/pets/summons may enter) share the rock field
-    // through the same layer-masked resolver — no bespoke per-body collision code.
+    // The training dummy (and any future hub creature) shares the rock field through the
+    // same layer-masked resolver — no bespoke per-body collision code.
     for (const monster of world.with('transform', 'monster')) {
       resolveObstacleCollisions(monster, CollisionLayer.OBSTACLE);
     }
+    floatingNumberSystem(world, now);
     return events.drain();
   }
 
@@ -181,6 +194,9 @@ export const stepSim = (
     weaponSystem(world, now, hooks, { rewind: () => null });
     knockbackSystem(world, dt, now);
     movementSystem(world, dt);
+    for (const player of world.with('transform', 'velocity', 'playerControlled')) {
+      resolveExpeditionRuinCollisions(player);
+    }
     return events.drain();
   }
 
@@ -196,6 +212,11 @@ export const stepSim = (
   projectileSystem(world, dt, now, hooks);
   movementSystem(world, dt);
   separationSystem(world); // resolve overlaps after integration
+  for (const actor of world.with('transform', 'velocity')) {
+    if (actor.playerControlled || actor.monster || actor.teammate) {
+      resolveExpeditionRuinCollisions(actor);
+    }
+  }
   relicSystem(world, dt, now, events, hooks); // after integration so the carried Relic tracks the final pose
 
   // 8. Death resolution (emits MonsterKilled / LootDropped / PlayerDowned) then co-op revive.

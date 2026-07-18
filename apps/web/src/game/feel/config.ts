@@ -96,6 +96,14 @@ export interface FeelConfig {
     ringLifetimeMs: number;
     colorLight: string;
     colorHeavy: string;
+    /** Play the Blender-authored flipbook billboard instead of procedural sparks+ring. */
+    blenderFlipbook: boolean;
+    /** Flipbook billboard lifetime, ms. */
+    flipbookLifetimeMs: ByStrength<number>;
+    /** Flipbook billboard world size (diameter). */
+    flipbookSize: ByStrength<number>;
+    /** Dash-slash skill billboard size (diameter) — bigger, its own dramatic Blender sheet. */
+    flipbookDashSlashSize: number;
   };
 
   // ── 7. IMPACT AUDIO ──────────────────────────────────────────────────────
@@ -128,7 +136,9 @@ export interface FeelConfig {
  * NEVER destructure at module load — that captures a stale snapshot.
  */
 export const feel: FeelConfig = {
-  hitstopMs: { light: 110, heavy: 240 },
+  // Short contact holds preserve impact without turning a fast combo into visible stutter.
+  // 45/90ms is roughly 3/5 frames at 60fps; the old 110/240ms froze 7/14 frames.
+  hitstopMs: { light: 45, heavy: 90 },
 
   // ALIASED into @shared/balance (same object) — the sim reads it there, leva tunes here.
   knockback: KNOCKBACK_TUNING,
@@ -189,6 +199,11 @@ export const feel: FeelConfig = {
     ringLifetimeMs: 260,
     colorLight: '#fff4c2',
     colorHeavy: '#ffb03a',
+    // Blender-authored flipbook: a baked sprite-sheet burst played on a single billboard.
+    blenderFlipbook: true,
+    flipbookLifetimeMs: { light: 400, heavy: 520 },
+    flipbookSize: { light: 2.7, heavy: 4.0 },
+    flipbookDashSlashSize: 6.0,
   },
 
   audio: {

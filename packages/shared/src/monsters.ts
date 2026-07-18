@@ -1,6 +1,6 @@
 import type { MonsterDef } from './types';
 
-export type MonsterArchetype = 'chaser' | 'spitter' | 'brute' | 'relicBoss';
+export type MonsterArchetype = 'chaser' | 'spitter' | 'brute' | 'relicBoss' | 'trainingDummy';
 
 export interface MonsterArchetypeDef extends MonsterDef {
   archetype: MonsterArchetype;
@@ -90,6 +90,21 @@ export const MONSTER_ARCHETYPES: Record<MonsterArchetype, MonsterArchetypeDef> =
     lootTableId: 'legendary',
     color: '#f00067',
     radius: 1.35,
+  },
+  trainingDummy: {
+    id: 'trainingDummy',
+    name: 'Training Dummy',
+    archetype: 'trainingDummy',
+    maxHealth: 100,
+    speed: 0,
+    attackDamage: 0,
+    attackRange: 0,
+    attackCooldownMs: 60_000,
+    attackWindupMs: 0,
+    ranged: false,
+    lootTableId: 'common',
+    color: '#9a6135',
+    radius: 0.65,
   },
 };
 

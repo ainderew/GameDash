@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Impact Flipbook Preview</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0d12;color:#8a94a6;font:12px system-ui}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px}
+  canvas{background:#000;border-radius:8px;box-shadow:0 0 40px rgba(90,140,255,.15)}
+  .row{display:flex;gap:20px;align-items:center}
+  b{color:#dfe6f2}
+</style>
+<div class="wrap">
+  <div class="row"><b>Blender impact flipbook</b> · additive on black · 25 frames · loops on a timer</div>
+  <canvas id="c" width="384" height="384"></canvas>
+  <div class="row">frame <span id="f">0</span>/24 · <span id="fps">–</span></div>
+</div>
+<script>
+  const COLS = 5, ROWS = 5, FRAMES = 25, CELL = 256;
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const fEl = document.getElementById('f');
+  const img = new Image();
+  img.src = '/fx/impact_flipbook.png?t=' + Date.now();
+  const LIFETIME = 520, GAP = 320; // play then pause, like repeated hits
+  let start = performance.now();
+  img.onload = () => requestAnimationFrame(loop);
+  function fade(age){
+    const i = Math.min(1, age/0.06);
+    const o = age>0.8 ? Math.max(0,1-(age-0.8)/0.2) : 1;
+    return i*o;
+  }
+  function loop(t){
+    const cycle = LIFETIME + GAP;
+    const local = (t - start) % cycle;
+    const age = Math.min(1, local / LIFETIME);
+    const frame = Math.min(FRAMES-1, Math.floor(age * FRAMES));
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0,0,cv.width,cv.height);
+    if (local <= LIFETIME) {
+      const col = frame % COLS, row = Math.floor(frame / COLS);
+      ctx.globalAlpha = fade(age);
+      ctx.globalCompositeOperation = 'lighter'; // additive: black drops out
+      ctx.drawImage(img, col*CELL, row*CELL, CELL, CELL, 0, 0, cv.width, cv.height);
+      ctx.globalAlpha = 1;
+      fEl.textContent = frame;
+    }
+    requestAnimationFrame(loop);
+  }
+</script>

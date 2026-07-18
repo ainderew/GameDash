@@ -1,10 +1,23 @@
 import type { Vector3Tuple } from '@shared/types';
-import { CORRECTION_SMOOTH_MS, MS_PER_TICK, RECONCILE_EPSILON_M, TELEPORT_EPSILON_M, PREDICTION_RING_SIZE } from '@shared/net/constants';
-import { makeInputCmd, intentFromCmd, encodeInputPacket, type CmdIntent, type InputCmd } from '@shared/net/input';
+import {
+  CORRECTION_SMOOTH_MS,
+  MS_PER_TICK,
+  RECONCILE_EPSILON_M,
+  TELEPORT_EPSILON_M,
+  PREDICTION_RING_SIZE,
+} from '@shared/net/constants';
+import {
+  makeInputCmd,
+  intentFromCmd,
+  encodeInputPacket,
+  type CmdIntent,
+  type InputCmd,
+} from '@shared/net/input';
 import { ACK_FLAG_DOWNED, type SnapshotHeader } from '@shared/net/snapshot';
 import type { Entity } from '@sim/components';
 import type { GameWorld } from '@sim/world';
 import type { EventQueue } from '@sim/events';
+import type { SimHooks } from '@sim/hooks';
 import type { SimMode } from '@sim/step';
 import { PredictionEngine } from '@sim/prediction';
 import { netStats } from '@/net/netStats';
@@ -43,12 +56,19 @@ class NetGame {
   }
 
   /** Enter networked driving (SystemRunner, on session play start). */
-  start(world: GameWorld, events: EventQueue, entity: Entity, send: SendBinary): void {
+  start(
+    world: GameWorld,
+    events: EventQueue,
+    entity: Entity,
+    send: SendBinary,
+    hooks?: SimHooks,
+  ): void {
     this.engine = new PredictionEngine(world, events, entity, MS_PER_TICK / 1000, {
       epsilonM: RECONCILE_EPSILON_M,
       teleportEpsilonM: TELEPORT_EPSILON_M,
       ringSize: PREDICTION_RING_SIZE,
       mode: 'hub',
+      hooks,
     });
     this.send = send;
     // NOTE: seq is deliberately NOT reset here. It must stay strictly ahead of the SERVER's
@@ -90,9 +110,8 @@ class NetGame {
    * cmd (identical rounding to what the server will simulate — contract #1), and send
    * the redundant packet (this cmd + the previous two — contract #2).
    *
-   * Accepts the FULL CmdIntent (movement + combat): in the hub only movement is populated;
-   * in a networked expedition the caller adds melee/ranged/parry/aim so the swing animation
-   * is predicted locally (its DAMAGE stays server-authoritative) and lag-comp gets the yaw.
+   * Accepts the FULL CmdIntent (movement + combat). Hub practice swings and expedition
+   * attacks are predicted locally; their DAMAGE stays server-authoritative.
    */
   clientTick(intent: CmdIntent): void {
     const engine = this.engine;

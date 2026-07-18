@@ -1,0 +1,23 @@
+{
+  "asset_id": "dark_rock",
+  "asset_name": "Dark Rock",
+  "source_page": "https://polyhaven.com/a/dark_rock",
+  "api_endpoint": "https://api.polyhaven.com/files/dark_rock",
+  "creator": "Amal Kumar / Poly Haven",
+  "license": "CC0",
+  "license_page": "https://polyhaven.com/license",
+  "downloaded_at": "2026-07-16",
+  "download_variant": "2K JPG",
+  "physical_span_m": 2.4,
+  "raw_directory": "assets/raw/materials/polyhaven_dark_rock/2k/",
+  "runtime_directory": "apps/web/public/textures/ruins/dark_rock/",
+  "maps": [
+    "base color",
+    "OpenGL tangent-space normal",
+    "roughness",
+    "ambient occlusion",
+    "displacement"
+  ],
+  "selection_reason": "Homogeneous charcoal rock with broad fractures and no mortar pattern. Selected for individually modeled monolithic hero ruins after the masonry-band granite material created doubled seams on broken arch v1.",
+  "usage_rule": "Use a 2.4m physical UV span. Geometry defines every block, joint, crown failure, and medium fracture; the scan supplies only rock-scale surface detail."
+}

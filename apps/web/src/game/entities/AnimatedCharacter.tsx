@@ -9,6 +9,7 @@ import { deMetalize } from '@/lib/materials';
 import { CHARACTER_FILL_LAYER } from '@/game/entities/characters';
 import { heroTransform } from '@/game/entities/heroConfig';
 import { ATTACK_CLIP_S, ATTACK_TIMESCALE, type ComboClip } from '@sim/combat/combo';
+import { PLAYER_RUN_ANIM_TIMESCALE, PLAYER_WALK_ANIM_TIMESCALE } from '@shared/balance';
 
 /** Player animation states. Attacks are split by which mocap clip plays. */
 export type CharState =
@@ -23,10 +24,10 @@ export type CharState =
   | 'death'
   | 'throw'
   | 'catch'
-  | 'attack-spin'
-  | 'attack-light1'
-  | 'attack-light2'
-  | 'attack-finisher';
+  | 'attack-horizontal'
+  | 'attack-reverse'
+  | 'attack-overhead'
+  | 'attack-thrust';
 
 interface Props {
   /** Skinned character glb (mesh + skeleton). */
@@ -43,11 +44,11 @@ interface Props {
   dodgePath: string;
   hurtPath: string;
   deathPath: string;
-  // One self-contained single-swing clip per combo move (each starts/ends near guard).
-  spinPath: string;
-  light1Path: string;
-  light2Path: string;
-  finisherPath: string;
+  // One authored clip per click in the four-stage sword sequence.
+  horizontalPath: string;
+  reversePath: string;
+  overheadPath: string;
+  thrustPath: string;
   /** Relic throw clip (wind-up → release → follow-through). */
   throwPath: string;
   /** Relic catch/receive clip — a one-shot reach-and-grab played on acquiring the relic. */
@@ -70,12 +71,12 @@ const FADE = 0.15;
  * Snappy states (attacks, dodge) crossfade near-instantly — a 150ms blend on an attack
  * reads as input lag because the first frames are still mostly the previous pose.
  */
-const FADE_FAST = 0.04;
+const FADE_FAST = 0.025;
 const FAST_STATES: ReadonlySet<CharState> = new Set([
-  'attack-light1',
-  'attack-light2',
-  'attack-spin',
-  'attack-finisher',
+  'attack-horizontal',
+  'attack-reverse',
+  'attack-overhead',
+  'attack-thrust',
   'dodge',
   'throw',
   'catch',
@@ -103,6 +104,8 @@ const START_AT: Partial<Record<CharState, number>> = { dodge: 0.1 };
  * derived from clip length ÷ speed — keeping them together guarantees anim and attack match.
  */
 export const STATE_TIMESCALE: Partial<Record<CharState, number>> = {
+  walk: PLAYER_WALK_ANIM_TIMESCALE,
+  run: PLAYER_RUN_ANIM_TIMESCALE,
   dodge: 2,
   // The Mixamo throw is leisurely mocap (3.8 s) — run it hot so the release snaps.
   throw: 1.6,
@@ -113,12 +116,11 @@ export const STATE_TIMESCALE: Partial<Record<CharState, number>> = {
 
 /** Which combat clip each attack state plays — for duration stamping + speed lookup. */
 const ATTACK_CLIP_FOR_STATE: Partial<Record<CharState, ComboClip>> = {
-  'attack-light1': 'light1',
-  'attack-light2': 'light2',
-  'attack-spin': 'spin',
-  'attack-finisher': 'finisher',
+  'attack-horizontal': 'horizontal',
+  'attack-reverse': 'reverse',
+  'attack-overhead': 'overhead',
+  'attack-thrust': 'thrust',
 };
-
 
 /** Which states loop; everything else is a clamped one-shot. */
 const LOOPS: Record<CharState, boolean> = {
@@ -133,10 +135,10 @@ const LOOPS: Record<CharState, boolean> = {
   death: false,
   throw: false,
   catch: false,
-  'attack-spin': false,
-  'attack-light1': false,
-  'attack-light2': false,
-  'attack-finisher': false,
+  'attack-horizontal': false,
+  'attack-reverse': false,
+  'attack-overhead': false,
+  'attack-thrust': false,
 };
 
 /**
@@ -156,10 +158,10 @@ export const AnimatedCharacter = ({
   dodgePath,
   hurtPath,
   deathPath,
-  spinPath,
-  light1Path,
-  light2Path,
-  finisherPath,
+  horizontalPath,
+  reversePath,
+  overheadPath,
+  thrustPath,
   throwPath,
   catchPath,
   targetHeight = 1.8,
@@ -177,10 +179,10 @@ export const AnimatedCharacter = ({
   const dodge = useGameModel(dodgePath);
   const hurt = useGameModel(hurtPath);
   const death = useGameModel(deathPath);
-  const spin = useGameModel(spinPath);
-  const light1 = useGameModel(light1Path);
-  const light2 = useGameModel(light2Path);
-  const finisher = useGameModel(finisherPath);
+  const horizontal = useGameModel(horizontalPath);
+  const reverse = useGameModel(reversePath);
+  const overhead = useGameModel(overheadPath);
+  const thrust = useGameModel(thrustPath);
   const throwClip = useGameModel(throwPath);
   const catchClip = useGameModel(catchPath);
   const group = useRef<Group>(null);
@@ -230,10 +232,10 @@ export const AnimatedCharacter = ({
       ['dodge', dodge.animations[0]],
       ['hurt', hurt.animations[0]],
       ['death', death.animations[0]],
-      ['attack-spin', spin.animations[0]],
-      ['attack-light1', light1.animations[0]],
-      ['attack-light2', light2.animations[0]],
-      ['attack-finisher', finisher.animations[0]],
+      ['attack-horizontal', horizontal.animations[0]],
+      ['attack-reverse', reverse.animations[0]],
+      ['attack-overhead', overhead.animations[0]],
+      ['attack-thrust', thrust.animations[0]],
       ['throw', throwClip.animations[0]],
       ['catch', catchClip.animations[0]],
     ];
@@ -246,7 +248,11 @@ export const AnimatedCharacter = ({
         // durations here again is BANNED (it would desync sim data from the authority).
         // If a clip's real length drifts from the constant, warn loudly in dev.
         const combatClip = ATTACK_CLIP_FOR_STATE[name];
-        if (import.meta.env.DEV && combatClip && Math.abs(ATTACK_CLIP_S[combatClip] - c.duration) > 0.01) {
+        if (
+          import.meta.env.DEV &&
+          combatClip &&
+          Math.abs(ATTACK_CLIP_S[combatClip] - c.duration) > 0.01
+        ) {
           // eslint-disable-next-line no-console
           console.warn(
             `[combat] ${name} clip is ${c.duration.toFixed(4)}s but ATTACK_CLIP_S.${combatClip} is ` +
@@ -266,10 +272,10 @@ export const AnimatedCharacter = ({
     dodge.animations,
     hurt.animations,
     death.animations,
-    spin.animations,
-    light1.animations,
-    light2.animations,
-    finisher.animations,
+    horizontal.animations,
+    reverse.animations,
+    overhead.animations,
+    thrust.animations,
     throwClip.animations,
     catchClip.animations,
   ]);

@@ -22,6 +22,8 @@ export interface HitOptions {
   knockbackScale?: number;
   /** Environmental/unstable effects that cannot be reflected with a weapon parry. */
   unblockable?: boolean;
+  /** The hit came from the "1" dash-slash skill — forwarded to the feel layer for a bigger VFX. */
+  dashSlash?: boolean;
 }
 
 /** Assemble the rich hit context the feel layer consumes. */
@@ -64,6 +66,7 @@ const buildHitContext = (
     dirX,
     dirZ,
     now,
+    dashSlash: opts.dashSlash ?? false,
   };
 };
 
@@ -128,6 +131,10 @@ export const dealDamage = (
   const landed = applyDamage(target, amount, now);
   if (!landed) return false;
 
+  // Practice targets immediately regenerate. The hit still produces damage/audio/VFX, but
+  // the dummy remains available forever and can never leak kills or loot into hub sessions.
+  if (target.trainingDummy && target.health) target.health.current = target.health.max;
+
   const ctx = buildHitContext(
     world,
     target,
@@ -135,15 +142,16 @@ export const dealDamage = (
     now,
     crit,
     opts,
-    wasAlive && (target.health?.current ?? 0) <= 0,
+    !target.trainingDummy && wasAlive && (target.health?.current ?? 0) <= 0,
   );
 
   // KNOCKBACK + HITSTUN — everyone gets shoved away from the blow. Players take a SCALED
   // shove (playerScale) that plays under the hurt anim: knockbackSystem owns their
   // horizontal velocity until the impulse settles, then control returns. A dodge breaks
   // out of it early (see applyPlayerIntent) so it never feels like a cutscene.
-  const kbScale =
-    (target.playerControlled ? KNOCKBACK_TUNING.playerScale : 1) * (opts.knockbackScale ?? 1);
+  const kbScale = target.trainingDummy
+    ? 0
+    : (target.playerControlled ? KNOCKBACK_TUNING.playerScale : 1) * (opts.knockbackScale ?? 1);
   if (kbScale > 0) {
     const speed = KNOCKBACK_TUNING.speed[ctx.strength] * kbScale;
     const launch = KNOCKBACK_TUNING.launch[ctx.strength] * kbScale;
